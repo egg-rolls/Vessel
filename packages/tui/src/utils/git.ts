@@ -12,6 +12,8 @@ export async function getCurrentGitBranch(): Promise<string | undefined> {
     const proc = Bun.spawn(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], {
       stdout: 'pipe',
       stderr: 'pipe',
+      // Windows：git 探测不弹可见控制台窗。
+      windowsHide: true,
     });
     const output = await new Response(proc.stdout).text();
     const branch = output.trim();

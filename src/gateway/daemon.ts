@@ -258,6 +258,9 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
       stdout: handle.fd,
       stderr: handle.fd,
       detached: true,
+      // Windows：detached 会给子进程建可见控制台窗（抢焦点，daemon 长驻⇒窗口
+      // 持续打断用户）；windowsHide 抑制之。仅影响窗口可见性，不改 detached/stdio 语义。
+      windowsHide: true,
       // 子进程 argv 与前台 start 相同，只靠这个标记让它在 pid record 里记
       // `daemon: true`（`gateway restart` 缺省据此保持后台模式）。
       env: daemonEnv,

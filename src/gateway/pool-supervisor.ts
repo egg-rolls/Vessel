@@ -837,6 +837,8 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
         stdout: handle.fd,
         stderr: handle.fd,
         detached: true,
+        // Windows：抑制 detached engine 的可见控制台窗（不抢焦点）；stdio 仍落日志 fd。
+        windowsHide: true,
         env: buildEngineEnv(id),
       });
     } catch (error) {

@@ -1453,6 +1453,8 @@ export class NodeSupervisor {
         stdout: handle.fd,
         stderr: handle.fd,
         detached: true,
+        // Windows：抑制 detached 子进程的可见控制台窗（不抢焦点）；stdio 仍落日志 fd。
+        windowsHide: true,
         env: {
           ...hubEnv,
           ...(this.options.platformOrigins !== undefined && this.options.platformOrigins.length > 0
@@ -1605,6 +1607,8 @@ export class NodeSupervisor {
         stdout: handle.fd,
         stderr: handle.fd,
         detached: true,
+        // Windows：抑制 detached 子进程的可见控制台窗（不抢焦点）；stdio 仍落日志 fd。
+        windowsHide: true,
         env: {
           ...nodeEnv,
           // 0.56：把该 node 的**生效 token**（显式或派生）注入子进程环境。

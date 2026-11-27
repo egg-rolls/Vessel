@@ -89,6 +89,8 @@ export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): Com
         stdin: 'ignore',
         stdout: 'pipe',
         stderr: 'pipe',
+        // Windows：tasklist/taskkill 等探测命令是控制台程序，抑制其弹窗。
+        windowsHide: true,
         signal: deadline.signal,
       });
       const [stdout, stderr, exitCode] = await Promise.all([

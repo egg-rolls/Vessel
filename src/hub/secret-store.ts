@@ -92,6 +92,8 @@ const defaultRunCommand: RunCommand = async (command, args, options) => {
     stdin: options?.input !== undefined ? new Blob([options.input]) : 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
+    // Windows：secret 命令（控制台程序）不弹可见窗。
+    windowsHide: true,
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),

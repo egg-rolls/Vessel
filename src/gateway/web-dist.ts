@@ -651,7 +651,10 @@ function killBuildTreeByPid(pid: number, signal: NodeJS.Signals): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform === 'win32') {
     try {
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
     } catch {
       // 进程已经不在了。
     }
@@ -876,6 +879,8 @@ async function runBuild(
       stdio: ['ignore', 'pipe', 'pipe'],
       // POSIX：自成进程组，中断时一次带走 tsc / vite；Windows：无进程组，靠 taskkill /T。
       detached: process.platform !== 'win32',
+      // Windows：构建子进程（bun → tsc/vite）不弹可见控制台窗；输出仍走 pipe 落日志。
+      windowsHide: true,
       // 构建输出进文件，不需要也不想要 ANSI：日志行要能直接 grep。
       env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
     });
