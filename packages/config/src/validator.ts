@@ -3404,6 +3404,21 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: agent.inboxMaxMessages,
       });
     }
+    // q-team-limit-config：Team present 成员上限。必须为正整数（≥1；0 / 负数 /
+    // 非整数 / 非安全整数均拒绝）；缺省不传，由 AgentService 使用默认 100。
+    // 值域与 serve config.set NUMBER_KEYS / ui-settings 同界。
+    if (
+      agent.teamMemberLimit !== undefined &&
+      (typeof agent.teamMemberLimit !== 'number' ||
+        !Number.isSafeInteger(agent.teamMemberLimit) ||
+        agent.teamMemberLimit < 1)
+    ) {
+      errors.push({
+        path: 'agent.teamMemberLimit',
+        message: 'agent.teamMemberLimit must be a positive integer (>= 1)',
+        value: agent.teamMemberLimit,
+      });
+    }
 
     // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
     for (const key of ['name', 'temperature', 'maxTokens'] as const) {
@@ -4011,6 +4026,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'ownerId',
     'temporaryTtlHours',
     'inboxMaxMessages',
+    'teamMemberLimit',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
   // 注入节奏框架：scopes 的键是 scope 词（数据不属配置键），未知词拒绝在

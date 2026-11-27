@@ -1571,6 +1571,14 @@ export interface AgentServiceOptions {
    */
   inboxMaxMessages?: number;
   /**
+   * Team 内 present 成员上限（q-team-limit-config）；缺省 100，正整数 ≥1。
+   *
+   * 装配层传 `config.agent.teamMemberLimit`（与 temporaryTtlHours 同口径，构造期
+   * 读取，改后需重启）。计数口径不变：present 含 closed（closed 语义另议）。
+   * 非法注入值防御性回落缺省（config validator 在加载期已拒绝）。
+   */
+  teamMemberLimit?: number;
+  /**
    * 附件**入池**（0.56 决策 2：上传即落 blob）。
    *
    * 调用时机 = 引用到达节点的第一刻（`admit` 里 `normalizeRefs` 之后、任何落盘之前）：

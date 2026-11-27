@@ -321,6 +321,16 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
     group: 'depthColor',
     keywords: ['色度', 'chroma', '饱和度', 'dark', '暗色'],
   },
+  // q-team-limit-config：Team present 成员上限（缺省 100；正整数 ≥1，无人为上限）。
+  // 构造期注入 AgentService，写后需重启生效（desc 注明）。
+  {
+    key: 'agent.teamMemberLimit',
+    type: 'number',
+    min: 1,
+    default: '100',
+    fallback: '100',
+    keywords: ['成员上限', '团队人数', 'team limit', 'team_full'],
+  },
 ];
 
 /** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
@@ -338,6 +348,7 @@ function coreCategory(key: string): string {
   if (key.startsWith(DEPTH_COLOR_SETTING_PREFIX)) return 'visual';
   if (key.startsWith(LOG_SETTING_PREFIX)) return 'logs';
   if (key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX)) return 'runtime';
+  if (key === 'agent.teamMemberLimit') return 'runtime';
   return 'display';
 }
 

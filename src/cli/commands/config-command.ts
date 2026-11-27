@@ -282,6 +282,17 @@ export async function configSetCommand(
       };
     }
     parsed = retries;
+  } else if (key === 'agent.teamMemberLimit') {
+    // q-team-limit-config：与 config validator / serve config.set 同界（正整数 ≥1）。
+    const limit = Number(value);
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidNumber', { key, min: 1, max: Number.MAX_SAFE_INTEGER }),
+      };
+    }
+    parsed = limit;
   } else if (key === 'emptyResponse.nudge') {
     if (value.trim() === '') {
       return { exitCode: 2, stdout: '', stderr: t('config.set.invalidNudge') };

@@ -1676,6 +1676,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(config.agent?.inboxMaxMessages !== undefined
         ? { inboxMaxMessages: config.agent.inboxMaxMessages }
         : {}),
+      ...(config.agent?.teamMemberLimit !== undefined
+        ? { teamMemberLimit: config.agent.teamMemberLimit }
+        : {}),
       // CREATE-0.39 §2.5：seeded create 的失败清理走 core 的 session-data 删除路径
       // （先 detach 再删 event log / SessionState / RunRecord）。
       deleteSessionData: async (sessionId: string) => {
