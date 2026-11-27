@@ -343,7 +343,10 @@ export class InteractionsStore {
       logEvent('warn', 'interactions.store.skipped', { path, reason: 'quarantine_failed' });
       return;
     }
-    const payload = `${JSON.stringify({ version: 1, interactions: records }, null, 2)}\n`;
+    // gw-F1：compact JSON（去 pretty-print）。实测同一份 112 条记录 299,962 B →
+    // 231,751 B（-23%）；这是给人排障时偶尔 cat 的文件，不是排版面，不值得每次
+    // 全量重写多付 29% 字节 + fsync。读侧 JSON.parse 两种排版都认（loadAllSync）。
+    const payload = `${JSON.stringify({ version: 1, interactions: records })}\n`;
     try {
       await atomicWrite(path, payload, { ensureDir: true, mode: 0o600 });
     } catch (error) {
