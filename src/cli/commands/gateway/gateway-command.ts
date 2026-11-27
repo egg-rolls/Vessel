@@ -95,7 +95,11 @@ import {
   readGatewayPidRecord,
   writeGatewayPid,
 } from '../../../gateway/pid';
-import { createPoolSupervisor, type PoolSupervisor } from '../../../gateway/pool-supervisor';
+import {
+  createPoolSupervisor,
+  type PoolSupervisor,
+  sweepDisabledPool,
+} from '../../../gateway/pool-supervisor';
 import {
   gatewayBaseUrl,
   reloadGateway,
@@ -3422,6 +3426,45 @@ export async function runPlatformGatewayForeground(
           ui.err(`engine pool start failed; pool tools are fail-closed: ${errorMessage(error)}`),
         );
       });
+    } else {
+      // tools-engine P1 加固②：pool→child 切换孤儿清扫。size=0 / engine_pool 移除
+      // （回退 = 翻配置 + 重启）原先直接跳过池分支，上一纪元 spawn 的 detached engine
+      // 无 idle timeout、无人 adopt/terminate → 永久孤儿。这里 stop/adopt 同口径清扫：
+      // owned（id ∈ 上一纪元 routing manifest）terminate，external 永不杀，pid 死清状态。
+      // 保守边界：engine_pool 整块移除时 instance 不可知，只扫缺省 engine-pool 目录。
+      const sweepInstance = enginePool?.instance;
+      const sweepPoolDir = path.join(
+        getUserConfigDir(),
+        sweepInstance !== undefined && sweepInstance !== ''
+          ? `engine-pool-${sweepInstance}`
+          : 'engine-pool',
+      );
+      const sweepLogLine = (message: string, fields?: Record<string, unknown>): string =>
+        fields === undefined
+          ? `engine pool sweep: ${message}`
+          : `engine pool sweep: ${message} ${JSON.stringify(fields)}`;
+      const sweep = await sweepDisabledPool({
+        poolDir: sweepPoolDir,
+        logger: {
+          debug: (message, fields) => print(ui.dim(sweepLogLine(message, fields))),
+          info: (message, fields) => print(ui.dim(sweepLogLine(message, fields))),
+          warn: (message, fields) => printErr(ui.warn(sweepLogLine(message, fields))),
+          error: (message, fields) => printErr(ui.err(sweepLogLine(message, fields))),
+        },
+      }).catch((error: unknown) => {
+        printErr(ui.warn(`engine pool sweep failed: ${errorMessage(error)}`));
+        return undefined;
+      });
+      if (
+        sweep !== undefined &&
+        (sweep.terminated > 0 || sweep.cleared > 0 || sweep.external > 0)
+      ) {
+        print(
+          ui.dim(
+            `engine pool: disabled; sweep terminated=${sweep.terminated} cleared=${sweep.cleared} external=${sweep.external}`,
+          ),
+        );
+      }
     }
 
     // 0.52（handoff 的硬前置）：**监听必须晚于 spawn 子进程**。

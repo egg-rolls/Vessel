@@ -1664,6 +1664,215 @@ function validateSuperviseSettings(
   return errors;
 }
 
+// ── tools-engine P1 加固：engine 池双开关校验（形状 + 一致性） ─────────────
+
+/** gateway.engine_pool 已知键（supervise 同口径：负一层嵌套在这里自己收口）。 */
+const KNOWN_ENGINE_POOL_KEYS = ['size', 'maxInflight', 'rssSoftLimitMb', 'instance'] as const;
+
+/** tools_engine 已知键（当前仅 mode；未知键报错，不静默忽略）。 */
+const KNOWN_TOOLS_ENGINE_KEYS = ['mode'] as const;
+
+/** tools_engine.mode 合法枚举（缺省 child = 零回归）。 */
+const TOOLS_ENGINE_MODES = ['child', 'pool'] as const;
+
+/**
+ * 校验 `gateway.engine_pool` 块（engine 池 S1）。
+ *
+ * size 整数 ≥0，开时 ≥2（size=1 原装配期 fail-fast 前移到校验期，启动即报错）；
+ * maxInflight 正整数；rssSoftLimitMb 正数；instance 非空字符串（进目录名，禁路径分隔符）。
+ * 未知键报错（错拼的键不再静默不生效，supervise 先例）。
+ */
+function validateEnginePoolSettings(
+  enginePool: unknown,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (enginePool === undefined) return errors;
+  if (!isPlainObject(enginePool)) {
+    errors.push({ path: 'gateway.enginePool', message: 'gateway.enginePool must be an object' });
+    return errors;
+  }
+  for (const key of Object.keys(enginePool)) {
+    if ((KNOWN_ENGINE_POOL_KEYS as readonly string[]).includes(key)) continue;
+    const suggestion = closestKey(key, [...KNOWN_ENGINE_POOL_KEYS]);
+    errors.push({
+      path: `gateway.enginePool.${key}`,
+      message: suggestion
+        ? `Unknown configuration key "gateway.enginePool.${key}". Did you mean "${suggestion}"?`
+        : `Unknown configuration key "gateway.enginePool.${key}".`,
+      value: key,
+    });
+  }
+  const size = enginePool.size;
+  if (size !== undefined) {
+    if (typeof size !== 'number' || !Number.isInteger(size) || size < 0) {
+      errors.push({
+        path: 'gateway.enginePool.size',
+        message: 'gateway.enginePool.size must be an integer >= 0 (0 = pool disabled)',
+        value: size,
+      });
+    } else if (size === 1) {
+      errors.push({
+        path: 'gateway.enginePool.size',
+        message:
+          'engine_pool_invalid_size: gateway.enginePool.size must be >= 2 when enabled (size=1 is not a pool)',
+        value: size,
+      });
+    }
+  }
+  const maxInflight = enginePool.maxInflight;
+  if (
+    maxInflight !== undefined &&
+    (typeof maxInflight !== 'number' || !Number.isInteger(maxInflight) || maxInflight < 1)
+  ) {
+    errors.push({
+      path: 'gateway.enginePool.maxInflight',
+      message: 'gateway.enginePool.maxInflight must be a positive integer',
+      value: maxInflight,
+    });
+  }
+  const rssSoftLimitMb = enginePool.rssSoftLimitMb;
+  if (
+    rssSoftLimitMb !== undefined &&
+    (typeof rssSoftLimitMb !== 'number' || !Number.isFinite(rssSoftLimitMb) || rssSoftLimitMb <= 0)
+  ) {
+    errors.push({
+      path: 'gateway.enginePool.rssSoftLimitMb',
+      message: 'gateway.enginePool.rssSoftLimitMb must be a positive number (MB)',
+      value: rssSoftLimitMb,
+    });
+  }
+  const instance = enginePool.instance;
+  if (
+    instance !== undefined &&
+    (typeof instance !== 'string' ||
+      instance.trim() === '' ||
+      instance.includes('/') ||
+      instance.includes('\\') ||
+      instance.includes('\0'))
+  ) {
+    errors.push({
+      path: 'gateway.enginePool.instance',
+      message:
+        'gateway.enginePool.instance must be a non-empty string without path separators (used in the pool directory name)',
+      value: instance,
+    });
+  }
+  return errors;
+}
+
+/**
+ * 校验 `tools_engine` 块（engine 池 S1 双开关之二）。
+ *
+ * mode 枚举 child/pool（缺省 child）；非法值 / 未知键启动报错，
+ * 不再静默回落 child（bootstrap 的 `=== 'pool'` 判定对任何错拼都无声走 child）。
+ */
+function validateToolsEngineSettings(
+  toolsEngine: unknown,
+  errors: ConfigValidationError[] = [],
+): ConfigValidationError[] {
+  if (toolsEngine === undefined) return errors;
+  if (!isPlainObject(toolsEngine)) {
+    errors.push({ path: 'toolsEngine', message: 'toolsEngine must be an object' });
+    return errors;
+  }
+  for (const key of Object.keys(toolsEngine)) {
+    if ((KNOWN_TOOLS_ENGINE_KEYS as readonly string[]).includes(key)) continue;
+    const suggestion = closestKey(key, [...KNOWN_TOOLS_ENGINE_KEYS]);
+    errors.push({
+      path: `toolsEngine.${key}`,
+      message: suggestion
+        ? `Unknown configuration key "toolsEngine.${key}". Did you mean "${suggestion}"?`
+        : `Unknown configuration key "toolsEngine.${key}".`,
+      value: key,
+    });
+  }
+  const mode = toolsEngine.mode;
+  if (
+    mode !== undefined &&
+    (typeof mode !== 'string' || !(TOOLS_ENGINE_MODES as readonly string[]).includes(mode))
+  ) {
+    errors.push({
+      path: 'toolsEngine.mode',
+      message: 'toolsEngine.mode must be one of "child", "pool" (default "child")',
+      value: mode,
+    });
+  }
+  return errors;
+}
+
+/**
+ * tools-engine P1 加固：双开关一致性交叉校验（fail-loud，不静默）。
+ *
+ * 双开关：`gateway.engine_pool.size>0`（gateway 建池）+ `tools_engine.mode=pool`（node 直连池）。
+ * 非法组合的危害：
+ * - size>0 + mode=child → M+1 双跑空转（池 M 个 engine + 每 node 一个 child）；
+ * - mode=pool + size=0 → node PoolTransport 无池可连，全工具 fail-closed 静默。
+ *
+ * 作用域声明（诚实边界）：validator 一次只看同一份 config。分离部署（gateway 配置与
+ * node 配置两份文件）下单侧缺省是合法形态，给 warning 提示而非 error；双开关同份可见
+ * 且矛盾时 error。单文件部署（缺省 node / canary）双开关同份，交叉校验全覆盖。
+ */
+function validateToolsEnginePoolConsistency(
+  config: VesselConfig,
+  errors: ConfigValidationError[],
+  warnings: ConfigValidationWarning[],
+): void {
+  const gatewayBlock = isPlainObject(config.gateway) ? config.gateway : undefined;
+  const enginePool =
+    gatewayBlock !== undefined && isPlainObject(gatewayBlock.enginePool)
+      ? gatewayBlock.enginePool
+      : undefined;
+  const toolsEngineBlock = isPlainObject(config.toolsEngine) ? config.toolsEngine : undefined;
+  const rawSize = enginePool?.size;
+  const size = typeof rawSize === 'number' && Number.isInteger(rawSize) ? rawSize : 0;
+  // 有效开池 = size≥2（size=1 由形状校验报 invalid_size，装配期也不建池；
+  // 这里按「真的会建池」判双跑，避免对非法 size 再叠一条误导性 warning）。
+  const poolEnabled = size >= 2;
+  const mode = toolsEngineBlock?.mode;
+
+  // size>0 + 显式 child（或 toolsEngine 块在但 mode 缺省=child）→ M+1 双跑，error。
+  if (poolEnabled && toolsEngineBlock !== undefined && mode !== 'pool') {
+    errors.push({
+      path: 'toolsEngine.mode',
+      message:
+        'toolsEngine.mode must be "pool" when gateway.enginePool.size > 0 ' +
+        '(child + pool runs M+1 engines: the shared pool plus a per-node child)',
+      value: mode,
+    });
+  }
+  // size>0 + 本份无 toolsEngine → 分离部署 gateway 侧合法；单文件部署即双跑，warning 提示。
+  if (poolEnabled && toolsEngineBlock === undefined) {
+    warnings.push({
+      path: 'gateway.enginePool.size',
+      message:
+        'gateway.enginePool.size > 0 but tools_engine.mode is not set in this config; ' +
+        'if this config also drives a node (single-file deployment), the node runs a child engine ' +
+        'alongside the pool (M+1 double run). Set tools_engine.mode: pool on the node side.',
+    });
+  }
+  // mode=pool + 显式 size=0/缺省（enginePool 块在）→ 无池可连全工具 fail-closed，error。
+  if (mode === 'pool' && enginePool !== undefined && !poolEnabled) {
+    errors.push({
+      path: 'gateway.enginePool.size',
+      message:
+        'gateway.enginePool.size must be > 0 (>= 2) when toolsEngine.mode = "pool" ' +
+        '(otherwise the node has no pool to connect to and every tool fails closed)',
+      value: rawSize,
+    });
+  }
+  // mode=pool + 本份有 gateway 段但无 engine_pool → 单文件部署漏配池，warning 提示。
+  // （本份无 gateway 段 = 分离部署 node 侧配置，池在平台侧开，合法，不出声。）
+  if (mode === 'pool' && enginePool === undefined && gatewayBlock !== undefined) {
+    warnings.push({
+      path: 'toolsEngine.mode',
+      message:
+        'toolsEngine.mode = "pool" but gateway.enginePool is not configured in this config; ' +
+        'enable the pool (gateway.enginePool.size >= 2) on the gateway side, ' +
+        'or every tool fails closed.',
+    });
+  }
+}
+
 /**
  * 0.49：校验平台 gateway 块（CONTRACT-0.49 §3.1）。
  * 与 `node:` 分区：不复用字段；origin 规则复用 `allowedOriginError`。
@@ -1744,6 +1953,8 @@ function validateGatewaySettings(
   }
 
   validateSuperviseSettings((gateway as Record<string, unknown>).supervise, errors);
+  // tools-engine P1 加固：engine_pool 形状（size=1 / 错拼键启动即报，不静默）。
+  validateEnginePoolSettings((gateway as Record<string, unknown>).enginePool, errors);
 
   if (allowedOrigins !== undefined) {
     if (!Array.isArray(allowedOrigins)) {
@@ -3839,6 +4050,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       validateGatewaySettings(config.gateway as GatewayConfig, errors);
     }
   }
+
+  // tools-engine P1 加固：tools_engine 块形状（mode 枚举）+ 双开关一致性交叉校验。
+  // 非法组合启动 fail-loud（error），单侧缺省的分离部署形态给 warning，不静默。
+  validateToolsEngineSettings(config.toolsEngine, errors);
+  validateToolsEnginePoolConsistency(config, errors, warnings);
 
   // 校验 auth（0.56；WebUI 登录：多 provider，见 auth-strategies）
   if (config.auth !== undefined) {
