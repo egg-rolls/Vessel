@@ -226,6 +226,37 @@ function parseStateFile(raw: unknown, expectedId: string): EngineStateFile | und
   };
 }
 
+/** S6 状态文件读面（模块级；supervisor 与切换清扫共用同一形状校验）。 */
+async function readEngineState(
+  enginesDir: string,
+  id: string,
+): Promise<EngineStateFile | undefined> {
+  try {
+    const raw = await readFile(path.join(enginesDir, `${id}.json`), 'utf8');
+    return parseStateFile(JSON.parse(raw), id);
+  } catch {
+    return undefined;
+  }
+}
+
+/** 上一纪元 routing = 监督 manifest（模块级；读失败 → 空集合，保守）。 */
+async function readRoutingIds(routingPath: string): Promise<Set<string>> {
+  try {
+    const raw = await readFile(routingPath, 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (!isRecord(parsed) || parsed.v !== 1 || !Array.isArray(parsed.engines)) {
+      return new Set();
+    }
+    const ids = new Set<string>();
+    for (const entry of parsed.engines) {
+      if (isRecord(entry) && typeof entry.id === 'string') ids.add(entry.id);
+    }
+    return ids;
+  } catch {
+    return new Set();
+  }
+}
+
 /**
  * 拨号控制连接：首行 S2 auth 帧（control role），回包 `{ok:true}` 后进入 JSON-RPC 请求面。
  * 帧泵 = S10 codec（attachNdjsonReader / createNdjsonWriter）；pending 关联本消费方自持。
@@ -380,6 +411,143 @@ async function killPid(pid: number, runCommand: CommandRunner, now: () => number
   }
 }
 
+// ── pool→child 切换孤儿清扫（tools-engine P1 加固②） ─────────────────────
+
+export interface PoolSweepOptions {
+  poolDir: string;
+  logger?: Logger;
+  now?: () => number;
+}
+
+export interface PoolSweepResult {
+  /** 终止的 owned engine 数（id ∈ 上一纪元 routing manifest，本 gateway 谱系）。 */
+  terminated: number;
+  /** pid 死 / boot 前复用而清理的状态文件数。 */
+  cleared: number;
+  /** 留置未动的 external engine 数（∉ manifest，永不杀）。 */
+  external: number;
+}
+
+/**
+ * 池禁用（size=0 / engine_pool 移除）后清扫遗留的 detached pool engines。
+ *
+ * 缺口：pool→child 切换（回退 = 翻配置 + 重启）原先 size=0 直接跳过池分支 ——
+ * 上一纪元 spawn 的 M 个 detached engine 无 idle timeout、无人 adopt/terminate，
+ * 成永久孤儿。本函数由 gateway 在池禁用分支调用，stop/adopt 同口径：
+ * - 上一纪元 routing.json = 监督 manifest（谱系归属证明，见模块 doc）；
+ *   id ∈ manifest 且 pid 活 → owned → deactivate → 宽限 → taskkill /T /F 兜底；
+ * - id ∉ manifest → external（手工/外部启动）→ 永不杀，状态文件留置；
+ * - pid 死 / started_at 早于 boot（pid 复用）→ 只清状态文件，不杀；
+ * - 清扫后无 engine 状态残留 → 删遗留 routing.json（gateway 唯一写者）；
+ *   有 external 残留 → routing 留置（保守，不动 external 的发布态）。
+ *
+ * 保守边界：routing 缺失/损坏 → manifest 空 → 全判 external 永不杀
+ * （doStart 首次 start 同口径；判据只收紧不放松）。
+ */
+export async function sweepDisabledPool(options: PoolSweepOptions): Promise<PoolSweepResult> {
+  const logger = options.logger ?? noopLogger;
+  const now = options.now ?? Date.now;
+  const runCommand = createCommandRunner();
+  const enginesDir = path.join(options.poolDir, 'engines');
+  const routingPath = path.join(options.poolDir, 'routing.json');
+  const result: PoolSweepResult = { terminated: 0, cleared: 0, external: 0 };
+
+  const entries = await readdir(enginesDir).catch(() => [] as string[]);
+  const stateNames = entries.filter((name) => name.endsWith('.json'));
+  if (stateNames.length === 0) {
+    // 无 engine 状态：清遗留 routing（池已禁用，routing 不应再发布任何 engine）。
+    await unlink(routingPath).catch(() => undefined);
+    return result;
+  }
+  const manifest = await readRoutingIds(routingPath);
+  await Promise.all(
+    stateNames.map(async (name) => {
+      const id = name.slice(0, -'.json'.length);
+      const state = await readEngineState(enginesDir, id);
+      if (state === undefined) {
+        // 形状不过 → 不删不杀（doStart 同口径，保守）。
+        logger.warn('pool sweep: state file unreadable/invalid; left untouched', { id });
+        return;
+      }
+      if (!isProcessAlive(state.pid) || isBeforeBoot(state.started_at)) {
+        await unlink(path.join(enginesDir, name)).catch(() => undefined);
+        result.cleared += 1;
+        logger.info('pool sweep: engine state cleared (pid dead)', { id, pid: state.pid });
+        return;
+      }
+      if (!manifest.has(id)) {
+        result.external += 1;
+        logger.info('pool sweep: external engine left untouched (never killed)', {
+          id,
+          pid: state.pid,
+        });
+        return;
+      }
+      // owned（本 gateway 谱系上一纪元）→ terminate（terminateMember 同口径）。
+      const dead = await terminateSweptEngine(enginesDir, state, runCommand, now, logger);
+      if (dead) {
+        await unlink(path.join(enginesDir, name)).catch(() => undefined);
+        result.terminated += 1;
+        logger.info('pool sweep: owned engine terminated (pool disabled)', { id, pid: state.pid });
+      } else {
+        logger.warn('pool sweep: owned engine terminate failed; state left', {
+          id,
+          pid: state.pid,
+        });
+      }
+    }),
+  );
+  // 无 engine 状态残留 → 清遗留 routing；有 external 残留 → 留置（保守）。
+  const remaining = await readdir(enginesDir).catch(() => [] as string[]);
+  if (!remaining.some((name) => name.endsWith('.json'))) {
+    await unlink(routingPath).catch(() => undefined);
+  }
+  return result;
+}
+
+/**
+ * 清扫终止单个 owned engine：归属复核（重读状态文件 pid + started_at 一致，防 TOCTOU
+ * pid 复用）→ 控制 deactivate → 宽限等自死 → killPid 兜底。terminateMember 同口径，
+ * 但不依赖 supervisor member 状态（清扫跑在池禁用分支，无 supervisor 实例）。
+ */
+async function terminateSweptEngine(
+  enginesDir: string,
+  state: EngineStateFile,
+  runCommand: CommandRunner,
+  now: () => number,
+  logger: Logger,
+): Promise<boolean> {
+  const current = await readEngineState(enginesDir, state.id);
+  const verified =
+    current !== undefined &&
+    current.pid === state.pid &&
+    current.started_at === state.started_at &&
+    isProcessAlive(state.pid) &&
+    !isBeforeBoot(state.started_at);
+  if (!verified) {
+    logger.warn('pool sweep: terminate skipped (ownership unverified)', {
+      id: state.id,
+      pid: state.pid,
+    });
+    return false;
+  }
+  let link: ControlLink | undefined;
+  try {
+    link = await dialControl(state.port, state.control_token, AUTH_TIMEOUT_MS);
+    await link.request('plugin.deactivate', {}, DEACTIVATE_TIMEOUT_MS).catch(() => undefined);
+  } catch {
+    // 控制不可达 → 直接走宽限 / 强杀（engine 可能已在自死）。
+  }
+  if (await waitUntilDead(state.pid, STOP_GRACE_MS, now)) {
+    link?.close();
+    return true;
+  }
+  await killPid(state.pid, runCommand, now);
+  const dead = await waitUntilDead(state.pid, KILL_CONFIRM_MS, now);
+  link?.close();
+  return dead;
+}
+
 // ── 组件 ─────────────────────────────────────────────────────
 
 export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSupervisor {
@@ -410,12 +578,7 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
   // ── 文件读面 ───────────────────────────────────────────────
 
   async function readStateFile(id: string): Promise<EngineStateFile | undefined> {
-    try {
-      const raw = await readFile(path.join(enginesDir, `${id}.json`), 'utf8');
-      return parseStateFile(JSON.parse(raw), id);
-    } catch {
-      return undefined;
-    }
+    return readEngineState(enginesDir, id);
   }
 
   /** pid 死 / 归属终止后清状态文件（S7）；形状不过的文件不删（保守）。 */
@@ -425,20 +588,7 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
 
   /** 上一纪元 routing = 监督 manifest（见模块 doc）；读失败 → 空集合（全 external，保守）。 */
   async function readPreviousRoutingIds(): Promise<Set<string>> {
-    try {
-      const raw = await readFile(routingPath, 'utf8');
-      const parsed: unknown = JSON.parse(raw);
-      if (!isRecord(parsed) || parsed.v !== 1 || !Array.isArray(parsed.engines)) {
-        return new Set();
-      }
-      const ids = new Set<string>();
-      for (const entry of parsed.engines) {
-        if (isRecord(entry) && typeof entry.id === 'string') ids.add(entry.id);
-      }
-      return ids;
-    } catch {
-      return new Set();
-    }
+    return readRoutingIds(routingPath);
   }
 
   // ── routing 发布（S5；唯一写者） ───────────────────────────
