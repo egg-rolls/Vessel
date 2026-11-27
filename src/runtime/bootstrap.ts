@@ -82,6 +82,7 @@ import { formatConfigErrors } from '../config/config-error-format';
 import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
 import { registerRefsNoticeHook, registerRuntimeNoticeHook } from '../config/hot-apply-assembly';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
+import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
 import { createReplSettings, type ReplSettingsControlLike } from '../config/ui-settings';
 import { visionSurfaceOf } from '../config/vision-settings';
 import { createConfigAttachmentIngest } from '../data/attachment-ingest';
@@ -1433,16 +1434,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...new Set([...(config.permission?.autoApprove ?? []).map(normalizeLegacyToolName), 'ask']),
     ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
-    neverAutoApprove: (
-      config.permission?.neverAutoApprove ?? [
-        'agent.close',
-        // 0.52：PII 真值解锁**永远**要人批。默认放行会让 reveal 因为拿不到审批 id 而永久拒绝，
-        // 反而把「用户明确同意」这条路堵死；显式列入强制审批名单后语义才正确。
-        // 名字必须与注册表一致（0.55 起统一 snake_case `pii_reveal`，见
-        // `packages/core/src/pii/reveal.ts` 的 `PII_REVEAL_TOOL_NAME`）。
-        'pii_reveal',
-      ]
-    ).map(normalizeLegacyToolName),
+    // perm-F1：缺省名单单一真源 `DEFAULT_NEVER_AUTO_APPROVE`（含 pii_reveal）——
+    // 与 resolveRuntimePermission / permission-store 同源，热应用整体替换不会抹掉它。
+    neverAutoApprove: (config.permission?.neverAutoApprove ?? [...DEFAULT_NEVER_AUTO_APPROVE]).map(
+      normalizeLegacyToolName,
+    ),
   };
 
   // ── vessel 元工具（P1，单工具面）：结构化控制面桥 ─────────────────────
