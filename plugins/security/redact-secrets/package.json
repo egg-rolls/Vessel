@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/redact-secrets",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
