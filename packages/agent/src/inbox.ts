@@ -181,6 +181,12 @@ export interface StoredInboxMessage {
    * （人类 / 系统 / 联邦地址）⇒ 渲染侧退化成短 id。
    */
   from_name?: string;
+  /**
+   * q-distress-message：这条是 node 以遇难 agent 身份代发的求救消息（additive）。
+   * 落盘是为了让防循环判定在重投 / 重启恢复后仍然认得它；也用于「最近发送者」
+   * 解析时跳过自身难保的求救者。缺省 = 普通消息 / 老条目。
+   */
+  distress?: true;
 }
 
 export interface AgentInboxEntryInput {
@@ -203,6 +209,8 @@ export interface AgentInboxEntryInput {
    * 没有名字（人类 / 系统 / 联邦地址 / 老调用方），条带渲染时退化成短 id。
    */
   from_name?: string;
+  /** q-distress-message：求救消息标记（可缺省，additive）；随条目落盘。 */
+  distress?: true;
 }
 
 export interface AgentInboxListEntry {
@@ -229,6 +237,8 @@ export interface AgentInboxListEntry {
    * （8 位 + `…`），**绝不把完整 UUID 摆到卡头**。
    */
   from_name?: string;
+  /** q-distress-message：求救消息标记（只读透传，additive）；缺省 = 普通消息。 */
+  distress?: true;
 }
 
 export interface AgentInboxReadSelection {
@@ -444,6 +454,14 @@ export interface AgentInboxPort {
    * 「不要执行」）与空正文条目（不可能成为 run input，`admit` 会按 invalid_input 拒绝）。
    */
   inputHead(agentId: string): StoredInboxMessage | undefined;
+  /**
+   * q-distress-message：只读历史视图（**含 consumed**），按入队序** newest-first**。
+   *
+   * 与 list / read 的区别：不做 status / hold 过滤、不消费、不改状态 —— 用途是
+   * 「最近一个给该 agent 发过消息的 agent」解析（求救收件人 fallback），那条消息
+   * 往往早已 consumed。`limit` 缺省 = 全部；返回克隆，调用方改不动库里状态。
+   */
+  history(agentId: string, limit?: number): StoredInboxMessage[];
   /** 未消费且未被持有的条数（= `counts().unread`）。 */
   unreadCount(agentId: string): number;
   flush(): Promise<void>;
@@ -579,6 +597,8 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
   if (value.summary !== undefined && typeof value.summary !== 'string') return false;
+  // distress 与 quiet 同口径：只有 true 一种写值（缺省 = 普通消息 / 老条目）。
+  if (value.distress !== undefined && value.distress !== true) return false;
   return true;
 }
 
@@ -612,6 +632,7 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       ? { team_message_id: message.team_message_id }
       : {}),
     ...(message.quiet === true ? { quiet: true as const } : {}),
+    ...(message.distress === true ? { distress: true as const } : {}),
     ...(fromName !== undefined ? { from_name: fromName } : {}),
     ...(refs.length > 0 ? { refs } : {}),
   };
@@ -706,6 +727,8 @@ export class AgentInboxStore implements AgentInboxPort {
       // quiet 由**本次投递模式**派生（不另开参数）：它落盘后只有一个含义
       // 「这条永不作为 run input」，idle 直投据此跳过它。
       ...(delivery === 'quiet' ? { quiet: true as const } : {}),
+      // 求救标记随条目落盘：防循环判定在重投 / 重启恢复后仍然认得它。
+      ...(message.distress === true ? { distress: true as const } : {}),
       ...(fromName !== undefined ? { from_name: fromName } : {}),
       ...(refs.length > 0 ? { refs } : {}),
     });
@@ -791,6 +814,8 @@ export class AgentInboxStore implements AgentInboxPort {
       ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
       // 显示名同属只读透传：条带身份行据此显示 `agent:<name>` 而不是一串 UUID。
       ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
+      // 求救标记只读透传：工具 list / Web 条带据此在读取前就能认出求救消息。
+      ...(message.distress === true ? { distress: true as const } : {}),
     }));
     return { ...this.counts(state), messages };
   }
@@ -922,6 +947,16 @@ export class AgentInboxStore implements AgentInboxPort {
       (message) => message.quiet !== true && message.text.trim() !== '',
     );
     return head === undefined ? undefined : cloneMessage(head);
+  }
+
+  history(agentId: string, limit?: number): StoredInboxMessage[] {
+    const state = this.stateFor(agentId);
+    if (!state.available) return [];
+    const all = state.messages;
+    const take =
+      typeof limit === 'number' && Number.isInteger(limit) && limit > 0 ? limit : all.length;
+    // 入队序尾部 = 最近到达；reverse 成 newest-first。克隆交出，调用方改不动库。
+    return all.slice(-take).reverse().map(cloneMessage);
   }
 
   discard(
@@ -1488,6 +1523,8 @@ export function createInboxTool(options: {
               preview,
               more_chars,
               held: message.held,
+              // 求救标记（additive）：读取前就能认出「这是某 agent 的遇难求救」。
+              ...(message.distress === true ? { distress: true } : {}),
             };
           }),
         });
@@ -1616,6 +1653,8 @@ export function createInboxTool(options: {
           ts: message.ts,
           source: message.source,
           text: message.text,
+          // 求救标记（additive）：与正文一并交出，模型据此知道这是遇难求救。
+          ...(message.distress === true ? { distress: true } : {}),
           // 附件引用随正文一并交出（与直接投递同口径）：丢了它，带图消息经 inbox
           // 取走后模型就不知道有附件 —— 存储里有 refs 也等于没有。无附件时字段不出现，
           // 旧结果形状逐字节不变（Web inbox-read 投影只认 id/text/source，additive 安全）。

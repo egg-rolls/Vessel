@@ -289,6 +289,14 @@ export interface AgentMessage {
    */
   origin?: 'ask_answer' | 'bash_job';
   /**
+   * q-distress-message：这条投递是 node 以遇难 agent 身份代发的**求救消息**。
+   *
+   * 内存元数据 + 随 inbox 条目落盘（`StoredInboxMessage.distress`）：防循环判定
+   * 必须在重投 / 重启恢复之后仍然认得它 —— 输入是求救消息的 run 若再失败，
+   * 不再触发新的求救（防级联风暴）。缺省 = 普通消息。
+   */
+  distress?: true;
+  /**
    * 这条投递在会话里应写成的 `Message.name`（内存内元数据，不落 snapshot）。
    *
    * 只给**运行时合成输入**与**交接嘱托**用，两者都不是「谁说的话」而是同一件事的
@@ -914,6 +922,14 @@ export interface AdmitInput {
    * `interrupt` 复用 `message_id` 同族，区别是这里由条目自己的 id 决定。
    */
   reuse_message_id?: string;
+  /**
+   * q-distress-message（仅内部装配，不暴露为 RPC 参数）：标记本次投递为求救消息。
+   *
+   * 只有 `AgentService.maybeSendDistress`（生产）与 inbox 重投路径
+   * （dispatchInbox / recoverPendingInputs / interrupt 重建）会填；`runs.start` /
+   * `agents.send` 的 wire 映射不透传该字段。随消息进 inbox 落盘，防循环判定用。
+   */
+  distress?: boolean;
 }
 
 /**

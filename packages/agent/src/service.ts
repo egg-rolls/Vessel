@@ -57,6 +57,13 @@ import {
 } from '@vessel-agent/core';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
+  classifyDistress,
+  DISTRESS_COOLDOWN_MS,
+  DISTRESS_HISTORY_SCAN,
+  DISTRESS_SPAWN_FAILED,
+  renderDistressContent,
+} from './distress.js';
+import {
   type AgentInboxChange,
   type AgentInboxDelivery,
   type AgentInboxListEntry,
@@ -991,6 +998,13 @@ export class AgentServiceImpl implements AgentService {
    * 直投成功时**保持点亮**，这样下一轮收口会继续抽队头（多条消息一条一条变成 run）。
    */
   private readonly noticeDirty = new Set<string>();
+  /**
+   * q-distress-message：每 agent 最近一次**成功送达**的求救时刻（内存，非持久）。
+   *
+   * 冷却窗口内再遇致命错误只留诊断日志不重发（去重 / 防风暴）。重启清零 =
+   * 新进程第一次致命错误仍可求救（进程重启本身就是一次新事故）。
+   */
+  private readonly distressSentAt = new Map<string, number>();
   /** 成员停下通知端口（装配层注入；缺省不报）。 */
   private readonly peerStops: AgentServiceOptions['peerStops'];
   /** 显式 model pin 的注册 ref 校验口（第 6 修；装配层注入，缺省不校验）。 */
@@ -3156,6 +3170,9 @@ export class AgentServiceImpl implements AgentService {
       // 名字随消息带上：执行内核不持有 registry，渲染时无处可查。
       ...(senderName !== undefined ? { from_name: senderName } : {}),
       ...(input.origin !== undefined ? { origin: input.origin } : {}),
+      // 求救标记（q-distress-message）：生产侧 maybeSendDistress / 重投路径声明，
+      // 随消息进 inbox 落盘；防循环判定在 executeExecutionUnitTurn 的失败出口读它。
+      ...(input.distress === true ? { distress: true as const } : {}),
       // 会话身份（`Message.name`）：rotate 交接嘱托（`ROTATE_HANDOFF_INPUT_NAME`）与
       // 跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）声明。缺省不写 —— 人类正文的载荷
       // 与今天逐字节一致。
@@ -3190,6 +3207,9 @@ export class AgentServiceImpl implements AgentService {
             // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
             // 缺了它卡头一样只剩 UUID（本来就知道的名字，没有理由丢掉）。
             ...(senderName !== undefined ? { from_name: senderName } : {}),
+            // 求救标记同样带进 quiet 条目（q-distress-message）：rotate 窗口收到的
+            // 求救之后由新 body read / 重投，防循环标记不能在落盘这一层丢。
+            ...(message.distress === true ? { distress: true as const } : {}),
             // 附件引用同样随 quiet 条目落盘：rotate 窗口收到的带图消息之后由新 body
             // `inbox read` 取走 —— 这里不带 refs，附件就在落盘这一层丢了（与 trackInbox
             // 同口径：存储保留，取走时随正文一并交出）。
@@ -3429,6 +3449,8 @@ export class AgentServiceImpl implements AgentService {
         // 显示名随条目落盘（只给条带身份行）：入队这一刻 registry 里还有发送方，
         // 之后渲染时已经无处可查 —— 不存下来，卡头就只能摆一串 UUID。
         ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
+        // 求救标记随条目落盘（q-distress-message）：重投 / 重启恢复后防循环仍认得它。
+        ...(message.distress === true ? { distress: true as const } : {}),
       },
       { delivery: 'input' },
     );
@@ -3558,6 +3580,16 @@ export class AgentServiceImpl implements AgentService {
       this.inbox?.unhold(record.id, [message.id]);
       const failed = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
       failed.fail(failure);
+      // q-distress-message：body 起不来 = 投递终态故障（消息会反复重投反复失败），
+      // 以遇难 agent 身份求救；forceCode 声明服务层触发码（错误对象未必有稳定 code）。
+      void this.maybeSendDistress(record, entry, error, message, DISTRESS_SPAWN_FAILED).catch(
+        (distressError) => {
+          this.logger.warn('agent.distress.error', {
+            member_id: record.id,
+            error: errorText(distressError),
+          });
+        },
+      );
       return failed;
     }
     entry.state = 'running';
@@ -3610,7 +3642,17 @@ export class AgentServiceImpl implements AgentService {
         });
         // 0.55 硬错误闸：不可重试的 provider 失败之后，这具 body 停止自动接单。
         // 租约丢失的那一类不算（body 马上被 dispose 重起，闸挂在旧 entry 上没有意义）。
-        if (!leaseLostFailure) this.markBlocked(entry, error);
+        if (!leaseLostFailure) {
+          this.markBlocked(entry, error);
+          // q-distress-message：致命错误的通信兜底（与硬错误闸互补）。best-effort，
+          // 不影响终态收口；防循环 / 限流 / 收件人解析都在方法内。
+          void this.maybeSendDistress(record, entry, error, message).catch((distressError) => {
+            this.logger.warn('agent.distress.error', {
+              member_id: record.id,
+              error: errorText(distressError),
+            });
+          });
+        }
       }
     }
     handle.setUsage(result?.usage);
@@ -3796,6 +3838,145 @@ export class AgentServiceImpl implements AgentService {
     return (
       message === 'shutdown' && this.runtime.sessionLeaseToken?.(entry.bindingId) === undefined
     );
+  }
+
+  // ─── 遇难求救（q-distress-message） ─────────────────────────────────
+
+  /**
+   * 致命 run 错误之后，以遇难 agent 自身身份（from=record.id）发一条普通求救消息。
+   *
+   * 与 0.55 硬错误闸互补：闸让 body 停止自动接单（不再重发必然失败的请求），
+   * 本方法让停摆**可见可救援** —— parent/创建者（fallback 最近发送者）收到一条
+   * 可回复的 inbox 消息，知道谁遇难、在哪、为什么、怎么救。
+   *
+   * 防循环三道闸：
+   * 1. 本轮输入本身是求救消息（`trigger.distress`）⇒ 不发（防级联风暴）；
+   * 2. 每 agent 冷却窗口（DISTRESS_COOLDOWN_MS）内至多一条（去重 / 限流）；
+   * 3. 收件人解析跳过自身难保的求救者（inbox 历史里 distress 条目不算「最近发送者」）。
+   *
+   * 投递走既有 `admitInternal`（新 conversation，不带 origin 血缘 ⇒ 不占旧会话的
+   * hop/cycle 预算）；失败只留日志、不覆盖原始错误。best-effort：任何异常都不允许
+   * 影响 run 终态收口（调用方 `void ... .catch`）。
+   *
+   * @param forceCode 服务层触发码（spawn_failed）：错误对象没有稳定 code 时由调用方声明。
+   */
+  private async maybeSendDistress(
+    record: MemberRecord,
+    entry: ExecutionUnitEntry,
+    error: unknown,
+    trigger?: AgentMessage,
+    forceCode?: string,
+  ): Promise<void> {
+    // 退役 / 关闭中的 body：rotate 交棒 / close 的迟到轮不是遇难，不发。
+    if (entry.retired || entry.closing) return;
+    if (trigger?.distress === true) {
+      this.logger.info('agent.distress.skipped', {
+        member_id: record.id,
+        session_id: entry.bindingId,
+        reason: 'distress_input',
+      });
+      return;
+    }
+    const classified =
+      forceCode !== undefined
+        ? { code: forceCode, message: errorText(error) }
+        : classifyDistress(error);
+    if (classified === undefined) return;
+    const now = this.now();
+    const last = this.distressSentAt.get(record.id);
+    if (last !== undefined && now - last < DISTRESS_COOLDOWN_MS) {
+      this.logger.info('agent.distress.skipped', {
+        member_id: record.id,
+        session_id: entry.bindingId,
+        reason: 'cooldown',
+        code: classified.code,
+      });
+      return;
+    }
+    const recipients = this.distressRecipients(record, trigger);
+    if (recipients.length === 0) {
+      // 两者皆无（main 无父级且从未有 agent 给它发过消息）：不发，留诊断日志。
+      this.logger.warn('agent.distress.no_recipient', {
+        member_id: record.id,
+        session_id: entry.bindingId,
+        code: classified.code,
+        error: singleLineReason(classified.message),
+      });
+      return;
+    }
+    const content = renderDistressContent({
+      memberId: record.id,
+      ...(record.name !== undefined ? { memberName: record.name } : {}),
+      sessionId: entry.bindingId,
+      ...(record.teamId !== undefined ? { teamId: record.teamId } : {}),
+      code: classified.code,
+      message: classified.message,
+    });
+    for (const recipient of recipients) {
+      try {
+        await this.admitInternal({
+          content,
+          agent_id: recipient.id,
+          from: record.id,
+          channel: 'direct',
+          distress: true,
+        });
+        this.distressSentAt.set(record.id, now);
+        this.logger.info('agent.distress.sent', {
+          member_id: record.id,
+          session_id: entry.bindingId,
+          to: recipient.id,
+          code: classified.code,
+        });
+        return;
+      } catch (deliveryError) {
+        // 单个收件人投不进（可见性 / 预算 / 已关闭）：试下一个候选，不中断求救。
+        this.logger.warn('agent.distress.delivery_failed', {
+          member_id: record.id,
+          to: recipient.id,
+          code: classified.code,
+          error: errorText(deliveryError),
+        });
+      }
+    }
+  }
+
+  /**
+   * 求救收件人解析（按优先级，去重，至多 3 个候选）：
+   *
+   * 1. **parent/创建者**：contractor 的落盘 `parentId`、peer 的进程内创建者链接
+   *    （`peerParentIdFor`），再加持久化的 `sourceAgentId`（重启后 peer 链接丢了它还在）；
+   * 2. **fallback 最近发送者**：本轮输入若来自 agent 就是它；否则扫 inbox 历史
+   *    （newest-first，含 consumed）找最近一个本机 agent 来源。跳过 distress 条目
+   *    （自身难保的求救者不是救援对象）与人类 / 系统 / 联邦来源。
+   *
+   * 候选必须是在册且未 left/closed 的成员（presence gone 可以 —— admit 会重建 body，
+   * 这正是「唤醒救援者」的语义）。全部不满足 ⇒ 空数组，调用方留日志不发。
+   */
+  private distressRecipients(record: MemberRecord, trigger?: AgentMessage): MemberRecord[] {
+    const out: MemberRecord[] = [];
+    const seen = new Set<string>([record.id]);
+    const push = (id: string | undefined): void => {
+      if (!nonEmpty(id) || seen.has(id)) return;
+      const candidate = this.registry.get(id) ?? this.registry.getBySession(id);
+      if (candidate === undefined) return;
+      if (candidate.id === record.id) return;
+      if (candidate.membership === 'left' || candidate.state === 'closed') return;
+      seen.add(candidate.id);
+      out.push(candidate);
+    };
+    push(this.peerParentIdFor(record));
+    push(record.sourceAgentId);
+    if (trigger !== undefined && trigger.source === 'agent') push(trigger.from);
+    const inbox = this.inbox;
+    if (inbox !== undefined) {
+      for (const stored of inbox.history(record.id, DISTRESS_HISTORY_SCAN)) {
+        if (out.length >= 3) break;
+        if (stored.distress === true) continue;
+        push(stored.source);
+      }
+    }
+    return out;
   }
 
   /**
@@ -4263,6 +4444,8 @@ export class AgentServiceImpl implements AgentService {
               ...(body.team_message_id !== undefined
                 ? { team_message_id: body.team_message_id }
                 : {}),
+              // 求救标记原样带回（q-distress-message）：重启恢复的求救 run 再失败不级联。
+              ...(body.distress === true ? { distress: true } : {}),
               reuse_message_id: body.id,
             },
             { recovery: true },
@@ -4577,6 +4760,14 @@ export class AgentServiceImpl implements AgentService {
           session_id: entry.bindingId,
           run_id: handle.id,
           error: failure,
+        });
+        // q-distress-message：resume 路径的致命错误同样求救（无触发消息可判防循环，
+        // 靠冷却限流兜底）。
+        void this.maybeSendDistress(record, entry, error).catch((distressError) => {
+          this.logger.warn('agent.distress.error', {
+            member_id: record.id,
+            error: errorText(distressError),
+          });
         });
       }
     }
@@ -5205,6 +5396,8 @@ export class AgentServiceImpl implements AgentService {
             ...(stored.team_message_id !== undefined
               ? { team_message_id: stored.team_message_id }
               : {}),
+            // 求救标记同理带回（q-distress-message）：interrupt 重投的求救不丢防循环位。
+            ...(stored.distress === true ? { distress: true as const } : {}),
           } satisfies AgentMessage);
       } else {
         conversationId = this.resolveConversationForDelivery(
@@ -5675,6 +5868,8 @@ export class AgentServiceImpl implements AgentService {
           ...(head.conversation_id !== undefined ? { conversation_id: head.conversation_id } : {}),
           // team 关联原样带回（append 同 id 幂等，防裁掉重落时丢关联）。
           ...(head.team_message_id !== undefined ? { team_message_id: head.team_message_id } : {}),
+          // 求救标记原样带回（q-distress-message）：直投的求救 run 再失败不级联。
+          ...(head.distress === true ? { distress: true } : {}),
           // 复用条目自己的 id：append 幂等、markConsumed 天然指向同一条，
           // 这条消息不会因为「先落盘、后被直投」而在磁盘上变成两条。
           reuse_message_id: head.id,
