@@ -41,7 +41,7 @@ import {
   StaleNotice,
 } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, CountBadge, Select } from '../../components/ui';
+import { Button, CountBadge, Select, useEnteringItemKeys } from '../../components/ui';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type {
   AgentClaimResponse,
@@ -128,6 +128,13 @@ export function InboxView({
   const entries = useMemo(
     () => orderPendingEntries(data?.entries ?? []) as AgentInboxEntry[],
     [data],
+  );
+  // 入场判定（motion.css 契约 ①，条带同款语义）：首屏整批 = 历史不播，live 追加
+  // 的新 message_id 才挂 `.motion-appear`；换 agent / 重连（epoch）重认首屏。
+  const isEntering = useEnteringItemKeys(
+    entries,
+    (entry) => entry.message_id,
+    `${agentId}:${epoch}`,
   );
 
   // ── SWR：live 触发（agent 级）→ 去抖重读；数据永远来自 RPC ──
@@ -384,6 +391,7 @@ export function InboxView({
                     identity={identityOf(entry)}
                     busy={busyIds.has(entry.message_id)}
                     expanded={expandedIds.has(entry.message_id)}
+                    entering={isEntering(entry.message_id)}
                     text={textById.get(entry.message_id)}
                     peeking={peekingIds.has(entry.message_id)}
                     peekError={peekErrorById.get(entry.message_id)}

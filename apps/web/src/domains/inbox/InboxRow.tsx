@@ -27,6 +27,7 @@ export function InboxRow({
   identity,
   busy,
   expanded,
+  entering = false,
   text,
   peeking,
   peekError,
@@ -42,6 +43,9 @@ export function InboxRow({
   /** 这一条有写操作在途：全部动作键禁用（同一条同时只允许一次）。 */
   busy: boolean;
   expanded: boolean;
+  /** 入场动画（motion.css 契约 ①）：调用方按 useEnteringItemKeys 判定，
+   *  首屏历史不播，live 追加才挂 `.motion-appear`。 */
+  entering?: boolean;
   /** peek 到的全文（视图缓存；正文不可变，缓存安全）。 */
   text?: string;
   peeking: boolean;
@@ -55,7 +59,11 @@ export function InboxRow({
   const human = entry.from === HUMAN_SOURCE;
   const sessionId = entry.session_id;
   return (
-    <article className="flex flex-col gap-2 rounded-md bg-raised px-4 py-3.5 shadow-elev-1 forced-colors:border">
+    <article
+      className={`flex flex-col gap-2 rounded-md bg-raised px-4 py-3.5 shadow-elev-1 forced-colors:border${
+        entering ? ' motion-appear' : ''
+      }`}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={entry.status === 'held' ? 'warn' : 'neutral'}>
           {entry.status === 'held' ? t('inbox.status.held') : t('inbox.status.unread')}
