@@ -26,6 +26,7 @@ import {
   getUserConfigPath,
   loadConfig,
   resolveEffectiveApiKey,
+  resolveEnvCadence,
   type VesselConfig,
 } from '../../packages/config/src/index';
 import {
@@ -1637,6 +1638,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 注意入参是**上报变更的成员（子）id**（`PeerStopChange.agent_id`），不是父 id。
       // 晚绑定：router 建在 wiring 之前，闭包在 flush 时才读。
       resolveParentSession: (memberId) => noticeAgentService?.peerParentSessionOf(memberId),
+      // q-peer-notice-cadence：发射 gating 的唯一真相源 = envGranularity 的 peer cadence。
+      // live resolver：report / schedule / flush 实时求值 ⇒ 热改即时生效。
+      // request（内置缺省）= mid-run 可发；run = hold 到父 run 收口 + 一轮一条；off = 静默。
+      cadence: () => resolveEnvCadence('peer', liveConfigRef.current.envInjection),
     });
     const wiring = await createAgentServiceWiring({
       // 来源行的 node 段与 federation 端口共用 nodeIdentity：federation 关掉时
