@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Bun](https://img.shields.io/badge/Bun-%3E%3D1.3.9-black?logo=bun)](https://bun.sh)
 
-核心是 agent 之间的组织与通信：节点、Team、成员生命周期、定向消息与跨节点地址。单个 agent 的执行面保持最小——一个 tool-calling loop、一个工具注册表、四个能力工具（`bash` / `read` / `edit` / `write`），其余能力由模型组合或插件提供。与组织面并列的另一半是 **AX（Agent Experience）**：agent 在运行时里自观测、自诊断、自发现、自服务。`@vessel-agent/core` 可单独引入；TUI / CLI / Web / Gateway 是自带的参考外壳。适合需要多 agent 协作、可自托管的团队与开发者。
+核心是 agent 之间的组织与通信：节点、Team、成员生命周期、定向消息与跨节点地址。单个 agent 的执行面保持最小——一个 tool-calling loop、一个工具注册表、四个能力工具（`bash` / `read` / `edit` / `write`），其余能力由模型组合或插件提供；默认装载的插件工具面还包含 `agent` / `inbox` / `ask` / `skills` / `subscribe` / `recall` / `web_search` / `web_fetch` / `media` 等组织与高频能力（见[默认插件工具面](#默认插件工具面)）。与组织面并列的另一半是 **AX（Agent Experience）**：agent 在运行时里自观测、自诊断、自发现、自服务。`@vessel-agent/core` 可单独引入；TUI / CLI / Web / Gateway 是自带的参考外壳。适合需要多 agent 协作、可自托管的团队与开发者。
 
 ## 目录
 
@@ -66,23 +66,6 @@ vessel --version    # 读根 package.json
 
 不想全局链接时，在仓库根用 `bun run src/cli.ts`，参数完全相同。
 
-### 30 秒冒烟（不需要 API Key）
-
-```bash
-vessel demo
-```
-
-`vessel demo` 用隔离的数据目录启动一次演示会话：不调真实模型，助手会调用一次无害的 `bash` 命令，能看到工具调用、权限确认与最终回复。演示数据写在 `<dataDir>/demo`，不会读取已有会话；需要交互式终端（非 TTY 直接退出，exit 1）。
-
-调试 / CI 用 `VESSEL_MOCK=1`：
-
-```bash
-VESSEL_MOCK=1 vessel               # 模拟 REPL（默认 echo 场景）
-VESSEL_MOCK=1 vessel --run "hello" # headless 冒烟，输出 Echo: hello
-```
-
-可选 `VESSEL_MOCK_SCENARIO=echo|tools|permissions|error|multi-turn`（默认 `echo`）。
-
 ### 接入真实模型
 
 ```bash
@@ -135,17 +118,42 @@ vessel restart --self --prompt "重启后继续：先核对金丝雀验收报告
 ## 特性
 
 - **极简核心** — 核心契约 + 1 个循环 + 1 个注册表（`PluginHost`）。`@vessel-agent/core` 不出现业务概念，`dependencies` 保持为空。
-- **四个能力工具** — `bash` / `read` / `edit` / `write`（`write` 逐字节落盘、不经 shell）。能被它们组合出来的能力不再单开工具；MCP 工具经插件注册进同一个 `PluginHost`。
+- **四个能力工具** — `bash` / `read` / `edit` / `write`（`write` 逐字节落盘、不经 shell）。能被它们组合出来的能力不再单开工具；MCP 工具经插件注册进同一个 `PluginHost`。这是核心执行面的设计叙事，默认装载的完整工具面见[默认插件工具面](#默认插件工具面)。
 - **成员生命周期** — `create` / `hire` / `close` / `send` / `rotate` / `list` / `read`；peer 与 contractor 两条派生路径；成员关 peer 需人类审批。Team 日志走 CLI `vessel team post`。
 - **AX 自服务** — 自观测（`session status` / `permission show`）、自诊断（`config explain` / `doctor`）、自发现（`rpc list` / `fleet status`）、优雅自重启续作（`restart --self`）。见 [AX](#axagent-experience)。
 - **优雅生命周期** — stop / restart 缺省不限时优雅 drain，等活跃 run 自然跑完；`--force` 是唯一的非优雅退出且留审计。平台代码更新走 handoff，run 不断。
 - **上下文即消息** — skills 就是 Markdown 文件，`@路径` 在发送前展开为注入消息；`subscribe` 对具体文件做显式订阅（edit/write/read 默认自动订阅所改/所读范围，可 opt-out），变更只发短通知，`inspect` 时取 diff。
+- **Web 搜索与抓取** — `web_search`（多后端：deepseek / tavily / serper / bocha）+ `web_fetch`（本地抓取带 SSRF 守卫、尊重 robots.txt；限流 / 熔断 / 计费上限可配）。
+- **多模态解析** — `media` 工具：`view` 把图片直接交给主模型（零外部后端），`read` 解析 PDF / 文本，`ocr` / `describe` 走可选后端。
+- **压缩历史读回** — 上下文压缩（compaction）时写索引并留 `[compacted]` 占位；`recall` 工具按索引读回被压缩的原始消息，压缩不会不可逆地丢信息。
 - **Durable run** — run 在开始、每轮 tool-call 后、结束时写 checkpoint；中断后 `--resume-run` 恢复。
 - **可观测** — 事件流（`<domain>.<action>.<event>`）、trace、metrics、Web 控制台时间线；`/v1/events?since=` 支持 `seq` 续订与 `gap` 标记。
+- **用量与日志** — Usage / Logs 页与模型排行榜：token 用量、请求日志、可配价格（USD/1M tokens）。
 - **单一真相源** — 服务端是唯一权威；前端 SWR（stale-while-revalidate）：事件触发 + 兜底轮询，数据永远来自 RPC。刷新保留旧数据、原子替换，只有首次加载才显示 loading。
-- **可扩展** — 插件、MCP、evals、飞书渠道；manifest 契约 fail-closed，per-capability 生命周期声明（`hot` / `restart`）：工具类插件热启停，不能热更的诚实标注「重启后生效」。装的插件默认开启（`plugins:` 只做覆盖）。
+- **可扩展** — 插件（10 类 20 包，见[包结构](#包结构)）、MCP、evals、飞书渠道；manifest 契约 fail-closed，per-capability 生命周期声明（`hot` / `restart`）：工具类插件热启停，不能热更的诚实标注「重启后生效」。装的插件默认开启（`plugins:` 只做覆盖）。
+- **插件市场** — Web 控制台 Plugins 页从 GitHub registry 浏览 / 安装 / 更新 / 启停插件。
+- **模型与凭证管理** — Credentials / Models 页：加密凭证库、模型注册表、连通性测试；写路径只落盘，热应用由装配层完成。
+- **思考强度控制** — per-provider 思考 effort / budget 热配置，composer toolbar 档位菜单；`auto` = 不注入。
+- **安全守卫** — 三个 Guardrail 插件：`guardrail-pii`（PII 脱敏，只发生在 append 侧）、`redact-secrets`（密钥 / Token / 密码脱敏）、`tool-policy`（工具 allowlist / denylist）。
 - **多机** — 独立 Hub 服务、节点间 federation、远程 gateway（显式 opt-in，非回环必须 token + TLS）。
 - **单公司数据根** — 一个 data dir 一个公司；成员 / Team 是使用范围，不再有 tenant 选择、隔离存储或 quota。
+
+### 默认插件工具面
+
+「四个能力工具」是核心执行面的设计叙事；实际默认装载的工具面由默认插件集提供，开箱不止四个：
+
+| 工具 | 来源 | 用途 |
+| --- | --- | --- |
+| `bash` / `read` / `edit` / `write` | `@vessel-agent/basic-tools` | 四个能力工具（唯一的基础工具包） |
+| `agent` / `inbox` | `@vessel-agent/agent` | 成员派发与定向通信 / agent 级收件箱 |
+| `ask` | 运行时外壳层 | 向人类提问（headless 挂起，exit 3） |
+| `skills` | `@vessel-agent/plugin-skills` | 技能库 list / search / load |
+| `subscribe` | `@vessel-agent/doc-subscription` | 文件订阅与变更通知 |
+| `recall` | `@vessel-agent/recall` | 压缩历史读回 |
+| `web_search` / `web_fetch` | `@vessel-agent/web-tools` | Web 搜索与抓取 |
+| `media` | `@vessel-agent/media` | 多模态 read / view / ocr / describe |
+
+装的插件默认开启（`plugins:` 只做覆盖）；MCP server 的工具经 `mcp-client` 注册进同一个 `PluginHost`。
 
 ## 使用示例
 
@@ -167,7 +175,7 @@ vessel --session <id> --run "..."    # 续接指定会话
 
 ### Web 控制台
 
-> **源码 checkout 必须先构建一次 Web 控制台**：`bun run build:web`（= `cd apps/web && npm ci && npm run build`）。
+> **源码 checkout 必须先构建一次 Web 控制台**：`bun run build:web`（= `bun run --cwd apps/web build`，即 `tsc --noEmit && vite build`）。apps/web 不在根 workspaces 里，依赖需先在 `apps/web/` 下单独安装（`npm ci` 或 `bun install`），本命令不含安装步骤。
 > 没有 `apps/web/dist/index.html` 时 `vessel gateway start` 会**直接失败并提示这条命令**
 > （`vessel doctor` 的 `web` 一行也会提前报出来）。
 
@@ -179,7 +187,6 @@ vessel node status --json
 vessel ps                           # docker ps 式进程清单（--all 含已停止，--json 机器可读）
 bun run build:web                   # 生产：Platform Gateway 托管 apps/web/dist
 bun run dev:web                     # 开发：http://127.0.0.1:5173
-VESSEL_MOCK=1 vessel --serve 8642   # legacy 单监听（保留至 G5）
 ```
 
 打开控制台后，配置了认证（`auth.backends`）就走登录页（口令 / TOTP / 第三方登录）；URL 里的 `#token=` / `#bootstrap=` 只是**一次性引导码**（单次 + 10 分钟），用于首次引导设置，不是常规登录方式。缺省平台代理 node 流量（`gateway.proxy_nodes`）：浏览器只连平台端口，node token 不出网关。支持运行提交 / 取消、事件时间线、会话列表、工具列表、run 内联权限卡片、`ask` 表单、Team 列表 / 群聊 / 成员侧栏 / `@` 补全 / Body 历史、看板（`#/kanban`）与 VSCode 式设置弹窗（插件设置域装上即出现）。
@@ -213,16 +220,19 @@ vessel --resume-run <run_id>
 - **evals**：插件 + 运行器，默认完全离线；真实 provider 需 `evals.allowNetwork: true` 与 CLI `--allow-network` 双门控。
 - **飞书**：插件，官方 SDK WebSocket 长连接，文本回复；每个 chat 一个独立临时成员（id `feishu_<chat_id>`，run_id `feishu:<chat_id>`）。连接指南见 [FEISHU.md](plugins/im/feishu/FEISHU.md)。
 - **skills**：就是 Markdown 文件，放 `skills/`（项目级）或 `~/.vessel/skills/`（用户级）；`skills` 插件提供 list / search / load（TOFU 信任门控）与管理 UI。
+- 其余默认插件（web-tools / media / recall / doc-subscription / thinking-intensity / model-registry / marketplace / usage / security 三守卫等）的完整清单与职责见[包结构](#包结构)。
 
 ```yaml
 mcp_servers:
-  echo:
+  filesystem:
     transport: stdio
-    command: bun
-    args: ["run", "examples/mcp-echo-server.ts"]
-    tool_prefix: true
-    auto_approve_tools: []
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed-dir"]
+    tool_prefix: true          # 工具名加 mcp__filesystem__ 前缀（默认 true）
+    auto_approve_tools: []     # 自动批准白名单；未列出的工具默认 ask
 ```
+
+任何走 stdio 或 Streamable HTTP 的真实 MCP server 都可以这样接入（http 用 `url` / `headers` 代替 `command` / `args`）；超时用 `connect_timeout_ms` / `tool_timeout_ms`，`enabled: false` 可临时停用。
 
 ## 架构与目录
 
@@ -241,26 +251,59 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 
 ### 包结构
 
-| 包                                                  | 职责                                              |
-| --------------------------------------------------- | ------------------------------------------------- |
-| `@vessel-agent/core`                                | 运行时；零 UI 依赖，可独立嵌入                    |
-| `@vessel-agent/agent`                               | `AgentService` 成员与 Team 能力                   |
-| `@vessel-agent/config` / `@vessel-agent/permission` | 配置解析与权限                                    |
-| `@vessel-agent/tui` / `@vessel-agent/serve`         | 终端外壳与 gateway / RPC                          |
-| `apps/web`                                          | 浏览器控制台                                      |
-| `plugins/`                                          | MCP、evals、飞书、工具与上下文插件                |
+全仓共 **30 个包**：根包 `vessel-agent`（CLI 本身，bin `vessel` → `src/cli.ts`）+ `packages/*` 8 个 + `apps/web` 1 个 + `plugins/*/*` 20 个。workspaces 为 `packages/*` 与 `plugins/*/*`；**apps/web 不在 workspaces**（独立 npm 依赖安装，Vite 7 要求 Node ^20.19 || >=22.12）。
+
+**packages/*（8 个 workspace 包）**
+
+| 包 | 职责 |
+| --- | --- |
+| `@vessel-agent/core` | 运行时核心：tool-calling loop、provider 抽象、context/session、events、Guardrail/Hook、`PluginHost`（工具唯一注册表）；零 UI 依赖、`dependencies` 为空，可独立嵌入 |
+| `@vessel-agent/agent` | Agent 能力层：成员 registry、生命周期、消息队列与回复投递、可见性、快照、Team、inbox、conversation |
+| `@vessel-agent/config` | 声明式配置：YAML 解析/校验 → core 可消费对象；auth 策略、模型注册表、密钥库、配置溯源（explain） |
+| `@vessel-agent/permission` | 共享权限原语 `requestPermission`（事件驱动的人类授权），保留给外部插件 |
+| `@vessel-agent/plugin-sdk` | embedded 插件的宿主 API 契约 + 薄运行时：`createPluginHost` 冻结宿主对象、manifest 白名单校验 |
+| `@vessel-agent/plugin-ui` | 宿主与插件共享的纯展示 React 原语（Button / DataTable / Tabs 等 + `useStaleWhileRevalidate`） |
+| `@vessel-agent/serve` | 本地 HTTP/WS 服务网关：EventStream → WS+SSE 广播 + `/v1` 控制端点 |
+| `@vessel-agent/tui` | 终端外壳：Ink（React）组件式 REPL、命令注册表、首启向导与 i18n |
+
+`apps/web`（`@vessel-agent/web`，private）：本地 Web 控制台，Vite 7 + React 19 + zustand + tailwind 4；`dist/` 不入 git，由 Platform Gateway 托管。
+
+**plugins/*/*（20 个 workspace 插件，10 类）**
+
+| 类别 | 插件包 | 一句话职责 |
+| --- | --- | --- |
+| context | `@vessel-agent/doc-subscription` | `subscribe` 显式文件订阅 + edit/write/read 自动订阅 + 变更通知 |
+| context | `@vessel-agent/plugin-skills` | 技能库三来源扫描/索引/TOFU 信任门控 load（`skills` 工具）+ 库 UI |
+| context | `@vessel-agent/thinking-intensity` | 模型思考强度热配置：per-provider effort/budget 注入 + composer 档位菜单 |
+| evals | `@vessel-agent/evals` | 默认离线 eval harness（库 + 运行器，不注册工具） |
+| im | `@vessel-agent/feishu` | 飞书 WebSocket 长连接文本 bot，per-chat 临时成员 |
+| marketplace | `@vessel-agent/plugin-marketplace` | 插件市场：GitHub registry 浏览/安装/更新（Plugins 页） |
+| mcp | `@vessel-agent/mcp-client` | MCP client：按 `mcp_servers` 配置把 server 工具注册进 `PluginHost` |
+| media | `@vessel-agent/media` | 多模态 `media` 工具：read / view / ocr / describe |
+| observability | `@vessel-agent/hook-logging` | 全操作日志 Hook（`VESSEL_DEBUG` 门控，不进默认集） |
+| observability | `@vessel-agent/plugin-usage` | 用量 / 请求日志 / 模型排行榜（Usage + Logs 页） |
+| provider | `@vessel-agent/provider-anthropic` | Anthropic Claude provider 薄工厂（retry/timeout 包装） |
+| provider | `@vessel-agent/model-registry` | 模型/凭证管理：加密凭证库、连通性测试（Credentials + Models 页） |
+| provider | `@vessel-agent/provider-openai` | OpenAI 兼容 provider 集合（openai / openai-compatible / gemini 及品牌兼容名） |
+| security | `@vessel-agent/guardrail-pii` | PII 守卫：脱敏只发生在 append 侧（落盘即占位符） |
+| security | `@vessel-agent/redact-secrets` | 密钥 / Token / 密码脱敏（ToolResult + Output 阶段） |
+| security | `@vessel-agent/tool-policy` | 工具 allowlist / denylist 策略（ToolCall 阶段拦截） |
+| tools | `@vessel-agent/basic-tools` | 四个能力工具 `bash` / `read` / `edit` / `write`（唯一的基础工具包） |
+| tools | `@vessel-agent/engine-client` | tools-engine 子进程工具引擎的 `PluginHost` 接入层（协议转译 / 注册表同步） |
+| tools | `@vessel-agent/recall` | 把被压缩（compaction）掉的历史按索引读回（`recall` 工具） |
+| tools | `@vessel-agent/web-tools` | `web_search`（多后端）+ `web_fetch`（SSRF 守卫 / robots / 限流） |
 
 ### 目录结构
 
 ```text
 .
-├── packages/        core / agent / config / permission / tui / serve
-├── plugins/         MCP、evals、飞书、工具与上下文插件
-├── apps/web/        浏览器控制台
-├── src/             CLI 装配层
+├── packages/        core / agent / config / permission / plugin-sdk / plugin-ui / serve / tui
+├── plugins/         10 类 20 插件：context / evals / im / marketplace / mcp / media / observability / provider / security / tools
+├── apps/web/        浏览器控制台（非 workspace，独立 npm 依赖）
+├── src/             CLI 装配层（根包 vessel-agent 自身源码，bin vessel）
 ├── scripts/         构建、检查与发布脚本
 ├── docs/            架构、ADR、操作文档
-├── examples/        示例
+├── examples/        离线示例（真实代码路径 + mock provider，非生产用法）
 └── assets/          品牌资源
 ```
 
@@ -318,6 +361,9 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 - Team：按工作目录匹配；roster、共享日志、预算、可见性、`@` 投递；`team freeze|unfreeze` 停止增长。
 - Hub 目录：节点 / Team / 成员 / 在线状态、指针；node → hub 出站拨号（join-code / join），不接受入站。
 - 跨节点定向投递、远程控制面、Durable run、evals、飞书渠道、MCP、文件级订阅。
+- 高频插件工具面：`web_search` / `web_fetch`（多后端 + SSRF 守卫）、`media` 多模态（read / view / ocr / describe）、`recall` 压缩历史读回、思考强度热配置（thinking-intensity）。
+- 插件市场（Plugins 页浏览 / 安装 / 更新）、模型与凭证管理（Credentials / Models 页、加密凭证库、连通性测试）、用量 / 请求日志 / 模型排行榜（Usage / Logs 页）。
+- 安全守卫三插件：`guardrail-pii`（PII 脱敏，append 侧）、`redact-secrets`（密钥脱敏）、`tool-policy`（工具 allow / deny 策略）。
 
 ### 部分实现
 
@@ -349,7 +395,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 
 ### 没有 API Key 能跑吗？
 
-能。`vessel demo` 跑一次隔离的演示会话；`VESSEL_MOCK=1 vessel` 进入模拟 REPL。
+真实模型调用需要可用的 API Key 与 Base URL。没有 Key 时可以先跑 `vessel doctor` 做环境自检（配置 / 数据根 / 端口 / 插件，不联网、不需要 Key），或 `vessel config init` 生成配置模板后再回填。
 
 ### headless 命令为什么返回 exit 3？
 
