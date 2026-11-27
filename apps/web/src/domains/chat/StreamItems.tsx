@@ -85,11 +85,17 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 旧的 `<div className="msg-text live-text">` 已删除：`.live-text` 没有任何样式，
  * 保留它反而让流式与落盘的 class 列表不一致。
  *
- * 「唯一容器」还承担**动画**，而且两种出现方式**互斥**（叠在一起会发虚）：
+ * 「唯一容器」还承担**动画**，两种出现方式的内容级动画**互斥**（叠在一起会发虚）：
  * - `.msg-enter`（段级：整段淡入 + 4px）只给「事件流里新追加、且一出现就是整段落定」的
  *   item（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems` / `useEnteringItemKeys`）；
  * - `.motion-stream`（块级：正文块首次挂载时淡入 + blur 收敛，见 `styles/motion.css`）
  *   只给**流式出现**的正文 —— 也就是用户要的「先排版、后显示」。
+ *
+ * 卡框入场（q-card-entrance-fade）：流式出现的卡框不再瞬时蹦出 —— `entering` 时容器
+ * 另挂 `.motion-appear`（只动透明度，`--motion-base`），与内容块的 `.motion-stream`
+ * （`--motion-slow`）**分层**：卡框略快落定、内容块随后渐显填充，两层各动各的 opacity，
+ * 不推挤布局。整段出现仍只挂容器级 `.msg-enter`（它本身就是卡框淡入），内容块不再
+ * 另挂动画 —— 卡框与内容不做双重淡入。首屏 / 历史不播的门（`useEnteringItems`）不变。
  *
  * 判定按**首帧定格**（`useState` 初值，之后 `streaming` 翻转不改判）：这段正文第一次
  * 出现时是不是流式，决定它用哪一族。不这么做的话，run 结束时 `streaming` 翻成 false
@@ -143,6 +149,11 @@ export function AssistantText({
       className={cn(
         'msg-assistant group max-w-full',
         reveal === 'enter' && 'msg-enter',
+        // 卡框淡入（q-card-entrance-fade）：流式出现且是真追加（entering）时，容器挂
+        // `.motion-appear`（只动透明度）——卡框从无到有渐显，不再瞬时出现。与内容块的
+        // `.motion-stream` 分层：卡框 --motion-base 略快于块级 --motion-slow。类常驻不摘
+        // （动画只在挂载那一次播；entering 判定只增不改，streaming 翻转不会重播）。
+        reveal === 'stream' && entering && 'motion-appear',
         // 收字结束就摘类：`streaming` 翻转会让 Markdown 换一次解析口径（未闭合围栏 /
         // 半张表格收成正式块），那一帧若有块重建，带着类就会补播一次级联淡入。
         reveal === 'stream' && streaming && 'motion-stream',

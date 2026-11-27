@@ -717,7 +717,13 @@ export function TranscriptWindow({
             />
           );
         case 'notice':
-          return <NoticeRow event={item.event} defaultOpen={cardsDefaultOpen} />;
+          return (
+            <NoticeRow
+              event={item.event}
+              defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
+            />
+          );
         case 'prompt-context':
           // 环境快照卡（环境信息 · 上下文）：模型这一轮真正看到的系统消息
           // （基底 system prompt + Self Card）。
@@ -745,7 +751,14 @@ export function TranscriptWindow({
             if (stripCoversInboxPending && isStripCoveredInboxNotice(env)) return null;
             // 环境信息卡（vessel:notice）：与「来自 agent X」卡同一张卡、同一套展开机制。
             // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
-            return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
+            return (
+              <EnvCard
+                env={env}
+                ts={item.ts}
+                defaultOpen={cardsDefaultOpen}
+                entering={isEntering(item.key)}
+              />
+            );
           }
           // 其它运行时提示（vessel:subscription / limit …）：沿用整段文本的 notice 卡。
           // （vessel:source 已改走上面的 EnvCard：scope「来源」，见 env-notice.ts。）
@@ -754,6 +767,7 @@ export function TranscriptWindow({
               className="runtime-notice-card w-full min-w-0 max-w-full"
               tone="info"
               defaultOpen={cardsDefaultOpen}
+              entering={isEntering(item.key)}
               title={
                 <span className="font-mono text-2xs tracking-wider text-accent">
                   {t('chat.notice.runtime', { kind: item.noticeKind })}
