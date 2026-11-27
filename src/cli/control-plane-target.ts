@@ -23,7 +23,7 @@ import {
 } from '../gateway/pid';
 import { gatewayBaseUrl } from '../gateway/reload';
 import { resolveConnectToken, resolveGatewayToken } from '../gateway/transport-factory';
-import { effectivePlatformToken } from '../node/token-derive';
+import { effectiveNodeTokenAuto, effectivePlatformToken } from '../node/token-derive';
 import type { RpcClient } from '../rpc';
 import { createHttpRpcClient, normalizeConnectUrl } from '../rpc/http-client';
 
@@ -162,7 +162,21 @@ export async function resolveControlPlaneTarget(
     (nodeId === undefined ? nonEmpty(env.VESSEL_CONNECT) : undefined);
   if (connectUrl !== undefined) {
     const baseUrl = normalizeConnectUrl(connectUrl);
-    const token = resolveConnectToken(config, { connectToken: options.connectToken, env }) ?? '';
+    // R-7：显式凭据链（--connect-token > VESSEL_CONNECT_TOKEN > connect.token >
+    // resolveGatewayToken）皆空时补**只读派生回退**（create:false，查询不写盘）：
+    // - 经代理（--node）：平台 token（与本地代理路 localPlatformToken 同口径）；
+    // - 直连：node 生效 token（effectiveNodeTokenAuto，node stop / fleet restart
+    //   兄弟 seam 同口径；serve 网关把该派生值注册为追加 admin 凭据）。
+    // 派生不可得（无 root-secret / 未知 node id）→ undefined → ''（逐字旧行为）。
+    const token =
+      resolveConnectToken(config, { connectToken: options.connectToken, env }) ??
+      (nodeId !== undefined
+        ? localPlatformToken()
+        : (() => {
+            const resolved = effectiveNodeTokenAuto({ config, dataDir, env, create: false });
+            return resolved.ok ? resolved.value.token : undefined;
+          })()) ??
+      '';
     const ca = await readCa(nonEmpty(options.caFile) ?? nonEmpty(config.connect?.caFile));
     const client: RpcClient & { close(): Promise<void> } = createHttpRpcClient({
       baseUrl,

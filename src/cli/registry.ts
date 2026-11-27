@@ -559,6 +559,11 @@ export const cliCommands: readonly CliCommand[] = [
         connectToken: args.connectTokenArg,
         caFile: args.caArg,
         nodeId: args.nodeTargetArg,
+        // R-7（同 R-6 批，兄弟命令同口径）：显式传 dataDir。--data-dir 是 CLI 级
+        // 显式权威：旗标在则逐字用（不走 config 合并）；缺省回落 resolveCommandDataDir
+        // （agent inbox 等兄弟同源）。否则 resolveControlPlaneTarget 内部兜底
+        // resolveDataDir(config) 可被生产用户层 data_dir 压过 → 误 attach 生产网关。
+        dataDir: args.dataDirArg ?? (await resolveCommandDataDir()),
       };
       if (command.kind === 'view') {
         return printCommandResult(
