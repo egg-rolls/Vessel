@@ -1007,14 +1007,29 @@ function messageIdOf(message: Message): string | undefined {
 export interface TranscriptIdentityAudit {
   /** 同一来源内的重复条数（正常会话：0）。 */
   duplicates: number;
+  /**
+   * 无 id 旧数据的保守回退去重条数（`noteLegacyDuplicateIdentity`）。
+   *
+   * 与 `duplicates` 分开计数：那条只认 `message_id`，对 0.56 之前落盘的无 id 双写残留
+   * 恒 0（probe-message-dedup 实锤：6 个旧会话画两份而 duplicates=0）。这个计数器让
+   * 「回退去重真的响了」可观测 —— 旧残留会话 > 0，新会话恒 0。
+   */
+  duplicatesLegacy: number;
   /** 跨来源按 id 合并的条数（正常会话：= 有 id 的轮数）。 */
   byIdentity: number;
   /** 第一份重复样本（`来源:身份`），供排查；没有重复时 undefined。 */
   sample?: string;
+  /** 第一份旧数据回退去重样本（`history-legacy:<runId>:<absIndex>`）；没有时 undefined。 */
+  sampleLegacy?: string;
 }
 
-const identityAudit: TranscriptIdentityAudit = { duplicates: 0, byIdentity: 0 };
+const identityAudit: TranscriptIdentityAudit = {
+  duplicates: 0,
+  duplicatesLegacy: 0,
+  byIdentity: 0,
+};
 let identityAuditWarned = false;
+let identityAuditLegacyWarned = false;
 
 /** 读当前审计计数（只读快照；诊断 / 门禁用）。 */
 export function transcriptIdentityAudit(): TranscriptIdentityAudit {
@@ -1024,9 +1039,12 @@ export function transcriptIdentityAudit(): TranscriptIdentityAudit {
 /** 清零审计计数（只给诊断与校准用；产品路径不调用）。 */
 export function resetTranscriptIdentityAudit(): void {
   identityAudit.duplicates = 0;
+  identityAudit.duplicatesLegacy = 0;
   identityAudit.byIdentity = 0;
   identityAudit.sample = undefined;
+  identityAudit.sampleLegacy = undefined;
   identityAuditWarned = false;
+  identityAuditLegacyWarned = false;
 }
 
 /**
@@ -1047,6 +1065,82 @@ function noteDuplicateIdentity(source: 'history' | 'live', messageId: string): v
       `来源 ${source}，message_id ${messageId}。` +
       '这是上游重复写入的信号，不是渲染层该猜的事。',
   );
+}
+
+/**
+ * 记一次「无 id 旧数据的回退去重」：丢弃后者 + 独立计数 + 首次 warn（不许静默）。
+ *
+ * 与 `noteDuplicateIdentity` 分开计数（`duplicatesLegacy`）：这条治的是 0.56 之前
+ * `coverageCut` 旧双写缺陷落盘的残留（无 `message_id`，id 去重对它们永久失效），
+ * 不是当前上游又在写重复 —— 两种信号的处置不同（前者等一次性迁移清掉，后者要查写入点）。
+ */
+function noteLegacyDuplicateIdentity(runId: string, absIndex: number): void {
+  identityAudit.duplicatesLegacy += 1;
+  if (identityAudit.sampleLegacy !== undefined) return;
+  identityAudit.sampleLegacy = `history-legacy:${runId}:${String(absIndex)}`;
+  if (identityAuditLegacyWarned) return;
+  identityAuditLegacyWarned = true;
+  console.warn(
+    '[transcript] 无 id 旧数据出现同 run 同正文的相邻两份（已丢弃后者）：' +
+      `run ${runId}，下标 ${String(absIndex)}。` +
+      '这是 0.56 之前落盘双写的残留信号（probe-message-dedup），不是新写入的重复。',
+  );
+}
+
+/**
+ * 无 id 旧数据回退去重的**最大下标间距**（probe-message-dedup 建议 B 的「相邻」口径）。
+ *
+ * 实测残留形状恒为 `[来源行, 输入, 来源行(副本), 输入(副本)]`：两份之间只隔一条
+ * 来源行（宽度 1），下标差 = 2。放宽到更大的间距会开始命中「用户同一句话连发两次」
+ * 这类合法形状 —— 宁可少去重（重复可见），绝不吞消息。
+ */
+const LEGACY_DUPLICATE_MAX_GAP = 2;
+
+/**
+ * 无 id 消息的**回退身份键**（仅用于 history↔history 的保守去重，不是 item key）。
+ *
+ * 四个条件缺一不可：无 `message_id`（有 id 的走 `emittedMessageIds` 那道缝）、
+ * 有 `run_id`（跨 run 的同文案是合法重复）、正文 trim 后非空（空正文的思考段/工具轮
+ * 不参与）、role + name 也进键（比 probe 建议的三条更严一档：name 不同 = 不同通道）。
+ */
+function legacyDuplicateKey(message: Message): string | undefined {
+  if (messageIdOf(message) !== undefined) return undefined;
+  const runId = message.run_id;
+  if (typeof runId !== 'string' || runId.length === 0) return undefined;
+  const text = trimText(message.content);
+  if (text.length === 0) return undefined;
+  return `${runId}\u0000${message.role}\u0000${message.name ?? ''}\u0000${text}`;
+}
+
+/**
+ * 两份「回退身份键相同」的消息是否真是同一条（键撞了还要再过内容闸）。
+ *
+ * 与 `message-identity.ts#sameMessageContent` 同口径的保守判据：
+ * - 段序双方都在且不同 ⇒ 是同一 run 的**两段不同正文**（恰好同文案），不是重复；
+ * - 思考正文 / tool_calls / refs 任一不同 ⇒ 不是同一条。
+ * 任何一条不满足就两份都渲染（宁可重复，绝不吞消息）。
+ */
+function legacyDuplicateCompatible(previous: Message, message: Message): boolean {
+  const leftSegment = previous.run_segment;
+  const rightSegment = message.run_segment;
+  if (
+    typeof leftSegment === 'number' &&
+    Number.isFinite(leftSegment) &&
+    typeof rightSegment === 'number' &&
+    Number.isFinite(rightSegment) &&
+    leftSegment !== rightSegment
+  ) {
+    return false;
+  }
+  if (trimText(previous.reasoning_content) !== trimText(message.reasoning_content)) return false;
+  const callsOf = (value: Message): string =>
+    (value.tool_calls ?? [])
+      .map((call) => `${call.id}:${call.function.name}:${call.function.arguments}`)
+      .join('|');
+  if (callsOf(previous) !== callsOf(message)) return false;
+  const refsOf = (value: Message): string =>
+    (value.refs ?? []).map((ref) => `${ref.kind}:${ref.path}`).join('|');
+  return refsOf(previous) === refsOf(message);
 }
 
 /** 历史窗口 → item + 反查表（只依赖 messages 与 offset，调用侧可安全 memo）。 */
@@ -1072,6 +1166,8 @@ export function buildHistoryIndex(
   const messageIds = new Map<string, string>();
   /** 已产出的消息 id：同一条消息的第二个副本不再产出 item（见 `noteDuplicateIdentity`）。 */
   const emittedMessageIds = new Set<string>();
+  /** 无 id 回退身份键 → 最近一次出现的绝对下标（旧双写残留的保守去重，见 `legacyDuplicateKey`）。 */
+  const legacyIdentityIndex = new Map<string, number>();
   /** 工具结果消息的时间（历史工具卡的权威 ts：结果落盘那一刻）。 */
   const toolResultTs = new Map<string, number>();
 
@@ -1248,6 +1344,32 @@ export function buildHistoryIndex(
         index,
       });
       return;
+    }
+
+    // 无 id 旧数据的保守回退去重（probe-message-dedup 建议 B）：0.56 之前 `coverageCut`
+    // 旧双写缺陷落盘的输入没有 `message_id`，上面那道按 id 的去重对它们永久失效，结构化
+    // key 又因「撞号回退绝对下标 / 1ms 时差」让两份各拿一个 key 各画一遍。这里在**产出
+    // item 之前**（且在 userByContent / inputsByRun 登记之前）把「同 run + 同 role + 同
+    // name + 同 trim 正文 + 相邻（下标差 ≤ LEGACY_DUPLICATE_MAX_GAP）」的第二份丢掉：
+    // - 丢的是正文全同的副本，不是吞消息（内容闸见 `legacyDuplicateCompatible`）；
+    // - 被丢的副本不进 inputsByRun ⇒ 该 run 恢复「唯一输入」身份，认领缝不再被迫退回内容判据；
+    // - tool 消息在上面已按 call_id 走工具卡分支，天然不参与（同文案的合法工具结果很多）；
+    // - 计数走 `duplicatesLegacy`（与 id 去重的 `duplicates` 分开，可观测）。
+    const legacyKey = legacyDuplicateKey(message);
+    if (legacyKey !== undefined) {
+      const previousIndex = legacyIdentityIndex.get(legacyKey);
+      const previousMessage =
+        previousIndex === undefined ? undefined : messageByIndex.get(previousIndex);
+      if (
+        previousIndex !== undefined &&
+        previousMessage !== undefined &&
+        absIndex - previousIndex <= LEGACY_DUPLICATE_MAX_GAP &&
+        legacyDuplicateCompatible(previousMessage, message)
+      ) {
+        noteLegacyDuplicateIdentity(message.run_id ?? '', absIndex);
+        return;
+      }
+      legacyIdentityIndex.set(legacyKey, absIndex);
     }
 
     if (message.role === 'user') {
