@@ -228,10 +228,10 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  /* elev-1 卡片：阴影代替 border（q-shadow-elevation）；背景复原原 surface。 */
+  padding: 10px 14px;
+  /* elev-1 卡片：阴影代替 border（q-shadow-elevation）；radius-md 布局（q-agent-page-polish）；背景复原 surface（Option B）。 */
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--surface);
   box-shadow: var(--elev-1);
 }
@@ -313,6 +313,10 @@
   .team-body-history-item {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .team-body-history-meta {
+    align-items: flex-start;
   }
 }
 

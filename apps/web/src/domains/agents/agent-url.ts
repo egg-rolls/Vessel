@@ -58,6 +58,15 @@ export function agentBodyHash(nodeKey: string, agentId: string, sessionId: strin
   return `${agentDetailHash(nodeKey, agentId)}?${new URLSearchParams({ body: sessionId }).toString()}`;
 }
 
+/** 顶栏面包屑回列表：保留深链携带的列表过滤 query，去掉 body 参数。 */
+export function agentsListHash(hash: string): string {
+  const [, query = ''] = withoutHash(hash).split('?', 2);
+  const params = new URLSearchParams(query);
+  params.delete('body');
+  const rest = params.toString();
+  return rest ? `#/agents?${rest}` : '#/agents';
+}
+
 /** 把当前列表过滤 query 附加到深链，返回列表时保留过滤。 */
 export function withQuery(hash: string, query: string): string {
   const normalized = query.startsWith('?') ? query.slice(1) : query;
