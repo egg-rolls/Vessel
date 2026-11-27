@@ -3471,7 +3471,7 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
 
 /** 缺省总匹配数上限（防一次灌满窗口；超出截断并标注）。 */
 const DEFAULT_GREP_MAX_COUNT = 200;
-/** rg 子进程 deadline（超时杀进程，结果标注 timed out）。 */
+/** grep deadline：rg 子进程超时杀；兜底扫描器逐文件 + 文件内每 1024 行查（结果标注 timed out）。 */
 const GREP_TIMEOUT_MS = 30_000;
 /** 兜底扫描器单文件上限（搜索只跳大文件，不拒整次调用）。 */
 const GREP_FALLBACK_MAX_FILE_BYTES = 1024 * 1024;
@@ -3728,7 +3728,12 @@ async function runRg(
   return result;
 }
 
-/** 单文件扫描（兜底引擎）：匹配行 + 前后 context，全局 matchCount 闸。返回 true=总量已满。 */
+/**
+ * 单文件扫描（兜底引擎）：匹配行 + 前后 context，全局 matchCount 闸。
+ * 返回 true=停止（总量已满或 deadline 到；后者置 result.timedOut）。
+ * deadline 文件内也查（每 1024 行一次，摊薄 Date.now 开销）：
+ * 单文件≤1MiB 但正则回溯慢时不至于整文件扫完才超时。
+ */
 function grepScanFile(
   relPath: string,
   absolute: string,
@@ -3736,6 +3741,7 @@ function grepScanFile(
   opts: GrepOptions,
   result: GrepResult,
   files: Set<string>,
+  startedAt: number,
 ): boolean {
   let stat: ReturnType<typeof statSync>;
   try {
@@ -3756,6 +3762,10 @@ function grepScanFile(
   let emittedUpTo = -1;
   const ring: Array<{ line: number; content: string }> = [];
   for (let i = 0; i < lines.length; i++) {
+    if ((i & 1023) === 0 && Date.now() - startedAt > GREP_TIMEOUT_MS) {
+      result.timedOut = true;
+      return true;
+    }
     const lineNo = i + 1;
     const content = lines[i] ?? '';
     if (regex.test(content)) {
@@ -3829,7 +3839,7 @@ function grepFallback(
       result.timedOut = true;
       return true;
     }
-    return grepScanFile(relPath, absolute, regex, opts, result, files);
+    return grepScanFile(relPath, absolute, regex, opts, result, files, startedAt);
   };
   if (target !== '.') {
     // 单文件目标：relPath 用 basename（与 rg 路径 cwd=dirname 口径一致）；glob 同样生效。

@@ -387,6 +387,7 @@ export const CLI_HELP_COMMANDS: readonly CliHelpCommand[] = [
       '--column',
       '--owner',
       '--status',
+      '--data-dir',
       '--node',
       '--connect',
       '--connect-token',
