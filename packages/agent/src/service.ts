@@ -3025,12 +3025,11 @@ export class AgentServiceImpl implements AgentService {
     // 明确记 `not_ingested`，chip 显示「未发送」。
     const refs = await this.ingestRefs(normalizeRefs(input.refs));
 
-    // 0.52 S1a：node 退出期间的准入 fence —— 人类来源的写立刻拒绝。
-    // 必须早于任何 inbox / body 副作用：「收下再假装成功」会让 UI 以为 run 真的起来了。
-    // agent 来源的投递不在这里拦：走下面的「只落 durable inbox、返回 queued」（见 fence 段）。
-    if (this.draining && this.isHumanPrincipal(from)) {
-      throw new AgentError('node_draining', `node_draining: from=${from}`);
-    }
+    // q-inbox-ux-fix（承 0.52 S1a fence）：node 退出期间**不再按来源拒绝**。
+    // 人类与 agent 来源的写一律走下面「只落 durable inbox、返回 deferred(draining)」
+    // 的排队路（见 fence 段）：正文先持久化，刷新不丢；node 回来由 recoverPendingInputs
+    // 重投（hold 只在内存，重启后条目回到 unread）。没有 durable inbox 时那里才明确
+    // 拒绝（node_draining → RPC gateway_restarting）—— 没有「排队」这回事可言。
 
     // 1. session → agent/body 解析（绑定优先；矛盾输入 = invalid_input）
     let record: MemberRecord;
@@ -3088,14 +3087,18 @@ export class AgentServiceImpl implements AgentService {
       // 这里只是不再等它：RPC 带着 run_id 立刻返回，spawn 同时进行。
       // 失败也不会静默丢消息 —— 见 `startExecutionUnitRun` 里那条 catch（run 以明确的
       // `spawn_failed` 终态收口，正文留在 mailbox / inbox 里可以读回、可以重投）。
-      this.startSpawn(entry);
+      // q-inbox-ux-fix：drain 期间不 kick spawn —— 这一进程不会再起任何 run，
+      // 消息只落 durable inbox（下面的 fence 段），spawn 留给重启后的恢复链路。
+      if (!this.draining) this.startSpawn(entry);
     }
 
     // 0.55 硬错误闸的解闸动作（第一处，共三处）：
     // **人类**投递 = 人在键盘前说「再试一次」。agent 投递**不**解闸 —— 今天事故正是
     // 别的成员每来一条报告就自动把 main 唤醒重发同一份必然 400 的上下文；把「agent
     // 发消息」当成解闸信号，等于把那个循环原样搬回来。
-    if (this.isHumanPrincipal(from)) this.unblockBodies(record.id, 'human');
+    // q-inbox-ux-fix：drain 期间不解闸 —— 解闸会触发 retryHeldMessages / dispatchInbox，
+    // 而这一进程不会再起任何 run；消息照常走下面的 draining 排队路，闸留到重启后。
+    if (this.isHumanPrincipal(from) && !this.draining) this.unblockBodies(record.id, 'human');
 
     // 4. 预算：human 直接对话免 conversation budget（替代原 externalOwner 特例）；
     //    面向 member 的投递（含 human → member）仍走 budget，与旧口径一致。
@@ -3213,7 +3216,8 @@ export class AgentServiceImpl implements AgentService {
         };
       }
     }
-    // 0.52 S1a：node 正在退出 —— agent 来源的投递落 durable inbox 即返回 queued。
+    // 0.52 S1a / q-inbox-ux-fix：node 正在退出 —— **所有来源**（人类 runs.start /
+    // agents.send 与 agent 投递）都落 durable inbox 即返回 deferred(draining)。
     // 语义就是「排队」：不提交、不入 mailbox、不唤醒（admit 本身不等任何 run；
     // drain-to-quiesce 只等已受理的 live run）；正文留在 inbox 里，下次启动由
     // recoverPendingInputs / 启动续作投递接着处理。没有 durable inbox 就没有
@@ -7738,9 +7742,11 @@ export class AgentServiceImpl implements AgentService {
    * 0.52 S1a：node 优雅退出的**准入 fence**（drain-to-quiesce 第一段，先于 quiesce 等待）。
    *
    * 打开后：
-   * - 人类来源的写（runs.start / 直接投递）⇒ 立刻抛 node_draining（RPC 侧映射成可重试的
-   *   gateway_restarting），**绝不**收下再假装成功；
-   * - agent 来源的写（agents.dispatch / agents.send）⇒ 只落 durable inbox，返回 queued；
+   * - 所有来源的写（人类 runs.start / 直接投递 与 agents.dispatch / agents.send）⇒
+   *   只落 durable inbox，返回 deferred(draining)（q-inbox-ux-fix：不再拒绝人类输入 ——
+   *   拒绝会让 UI 显示「未发送」且刷新后正文丢失；排队则持久化，node 回来自动重投）。
+   *   没有 durable inbox / 启动嘱托 ⇒ 仍抛 node_draining（RPC 侧映射成可重试的
+   *   gateway_restarting）；
    * - 队列里不再起新轮（既有 draining 行为，见 submitMessage）。
    *
    * 幂等：重复调用只回报当前状态，不重复做任何事（退出期间连收信号是常态）。

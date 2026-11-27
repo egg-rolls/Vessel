@@ -1961,14 +1961,15 @@ export interface AgentService {
    */
   drain(options?: AgentDrainOptions): Promise<AgentDrainOutcome>;
   /**
-   * 0.52 S1a：node 优雅退出的**准入 fence**（退出序列第一段）。
+   * 0.52 S1a / q-inbox-ux-fix：node 优雅退出的**准入 fence**（退出序列第一段）。
    *
-   * 打开后人类来源的写立刻被拒（node_draining，RPC 侧是可重试的 gateway_restarting），
-   * agent 来源的投递只落 durable inbox 并返回 queued，队列不再起新轮。
+   * 打开后所有来源的投递只落 durable inbox 并返回 deferred(draining)（正文持久化，
+   * node 回来由恢复链路重投）；没有 durable inbox / 启动嘱托才拒（node_draining，
+   * RPC 侧是可重试的 gateway_restarting）。队列不再起新轮。
    * 幂等：返回 true 表示**本次**真正打开了 fence。
    */
   beginDrain(): boolean;
-  /** 0.52 S1a：fence 是否已打开（退出序列 / runs.start 闸门用）。 */
+  /** 0.52 S1a：fence 是否已打开（退出序列用）。 */
   isDraining(): boolean;
   /**
    * 0.52 S1a：按会话汇总 durable inbox 里尚未消费的条目 id（只读列举，不 hold/不推进）。

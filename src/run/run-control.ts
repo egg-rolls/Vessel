@@ -99,14 +99,11 @@ export function createRunControl(
   return {
     tenantId,
     async start(input: RunStartLikeInput): Promise<RunStartLikeResult> {
-      // 0.52 S1a：node 正在优雅退出 ⇒ 立刻可重试错误，**不收下**。
-      // 收下再排队等于骗 UI（run_id 回填了、进程随后就没了），所以这里直接拒。
-      if (service.isDraining()) {
-        throw new RpcError(
-          'gateway_restarting',
-          'node is draining for restart; retry the run once it is back',
-        );
-      }
+      // q-inbox-ux-fix（承 0.52 S1a）：drain 期间**不再立刻拒绝** —— admit 会把正文
+      // 落 durable inbox 并返回 deferred(draining)（不编 run id），UI 显示「节点正在
+      // 重启，消息已留在收件箱」，刷新不丢，node 回来由恢复链路重投。
+      // 只有 admit 真的抛 node_draining（无 durable inbox / 启动嘱托）才映射成
+      // 可重试的 gateway_restarting（见下面 catch）。
       // run_id 由 admit 生成（与 body / dispatch / team 同一入口，0.27 D4）。
       const admit: AdmitInput = {
         content: input.input,
@@ -120,7 +117,8 @@ export function createRunControl(
       try {
         result = await service.admit(admit);
       } catch (error) {
-        // 0.52 S1a：admit 内部的 fence 与上面的快速判断之间可能正好打开 ⇒ 同一个错误码。
+        // q-inbox-ux-fix：drain 的正常路是 deferred(draining)（admit 内落 inbox）；
+        // 仍抛 node_draining 的只剩「没有 durable inbox / 启动嘱托」⇒ 可重试错误。
         if (isNodeDrainingError(error)) {
           throw new RpcError(
             'gateway_restarting',
