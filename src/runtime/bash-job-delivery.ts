@@ -27,8 +27,10 @@ import type { AgentService } from '../../packages/agent/src/index';
 import type { Logger } from '../../packages/core/src/index';
 import {
   type AsyncBashCompletion,
+  type AsyncBashJobStart,
   getAsyncBashLimits,
   registerAsyncBashCompletionSink,
+  registerAsyncBashStartSink,
 } from '../../plugins/tools/basic-tools/src/index';
 
 /**
@@ -39,40 +41,106 @@ import {
  * 而不是排队 —— 排队会让「作业完成」和「模型看到结果」之间的延迟无上界。
  */
 
-/** 装配依赖：只要 admit + identify 两个口（不把整个 AgentService 契约绑进来）。 */
+/** 装配依赖：admit + identify + 占位插入 / 原位完成四个口（不把整个 AgentService 契约绑进来）。 */
 export type BashJobDeliveryDeps = {
-  service: Pick<AgentService, 'admit' | 'identify'>;
+  service: Pick<AgentService, 'admit' | 'identify' | 'insertAsyncPlaceholder' | 'completeAsyncJob'>;
   logger?: Logger;
 };
 
 /**
- * 注册唤醒投递。返回注销函数（宿主收口时调；进程级单槽，重复注册后者取代前者）。
+ * 注册唤醒投递 + 起作业占位。返回注销函数（宿主收口时调；进程级单槽，重复注册后者取代前者）。
+ *
+ * q-async-bash-viz（复用 inbox，灵魂出窍复原）：
+ * - **起作业**：往 inbox 插一条 running 占位回调卡（科技蓝、不可消费、沉底），jobId 为键。
+ * - **完成**：先按 jobId **原位更新占位**（running→done/failed + 填结果正文 + 唤醒读取）——
+ *   完成路由本就进 inbox，改动只是匹配占位槽填充而非新插一条（单一真相源，防双份）。
+ *   无占位（未起过 / 已被裁 / 无 inbox）时退回既有 admit 投递（结果不丢）。
  */
 export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
-  let inflight = 0;
-  return registerAsyncBashCompletionSink(async (completion: AsyncBashCompletion) => {
-    if (inflight >= getAsyncBashLimits().maxAsyncJobs) {
-      deps.logger?.warn('agent.bash_job.delivery_skipped', {
-        job_id: completion.jobId,
-        reason: 'inflight_limit',
-      });
-      return false;
-    }
-    inflight += 1;
+  // 起作业占位（fire-and-forget）：插入失败只记日志，完成时退回 admit 旧路径。
+  const unregisterStart = registerAsyncBashStartSink(async (start: AsyncBashJobStart) => {
     try {
-      return await deliver(deps, completion);
+      // bash 是通用占位机制的首个消费者（kind='bash'）；命令/pid/日志路径放 kind 专属 payload。
+      const inserted = await deps.service.insertAsyncPlaceholder({
+        kind: 'bash',
+        jobId: start.jobId,
+        sessionId: start.sessionId,
+        startedAt: start.startedAt,
+        summary: `[bash job ${start.jobId}] running: ${start.command}`,
+        payload: {
+          command: start.command,
+          log_path: start.logPath,
+          ...(start.pid !== undefined ? { pid: start.pid } : {}),
+        },
+      });
+      deps.logger?.debug('agent.bash_job.placeholder', {
+        job_id: start.jobId,
+        session_id: start.sessionId,
+        inserted,
+      });
     } catch (error) {
-      // 任何意外都收敛成 false：出口失败只是退回 hook，绝不影响作业本身。
-      deps.logger?.warn('agent.bash_job.delivery_failed', {
-        job_id: completion.jobId,
-        session_id: completion.sessionId,
+      deps.logger?.warn('agent.bash_job.placeholder_failed', {
+        job_id: start.jobId,
+        session_id: start.sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return false;
-    } finally {
-      inflight -= 1;
     }
   });
+
+  let inflight = 0;
+  const unregisterCompletion = registerAsyncBashCompletionSink(
+    async (completion: AsyncBashCompletion) => {
+      if (inflight >= getAsyncBashLimits().maxAsyncJobs) {
+        deps.logger?.warn('agent.bash_job.delivery_skipped', {
+          job_id: completion.jobId,
+          reason: 'inflight_limit',
+        });
+        return false;
+      }
+      inflight += 1;
+      try {
+        // 先试原位更新占位（单一真相源）：成功 = 结果已落 inbox + 唤醒读取，标 announced。
+        const filled = await deps.service.completeAsyncJob({
+          jobId: completion.jobId,
+          sessionId: completion.sessionId,
+          status:
+            completion.timedOut || (completion.exitCode !== null && completion.exitCode !== 0)
+              ? 'failed'
+              : 'done',
+          content: completion.content,
+          endedAt: Date.now(),
+          // kind 专属 payload：bash 填退出码（机制层不解释，原位合并进占位 payload）。
+          payload: { exit_code: completion.exitCode },
+        });
+        if (filled) {
+          deps.logger?.debug('agent.bash_job.placeholder_filled', {
+            job_id: completion.jobId,
+            session_id: completion.sessionId,
+            exit_code: completion.exitCode,
+            timed_out: completion.timedOut,
+          });
+          return true;
+        }
+        // 无占位：退回既有 admit 投递（新插一条 inbox input + run），结果不丢。
+        return await deliver(deps, completion);
+      } catch (error) {
+        // 任何意外都收敛成 false：出口失败只是退回 hook，绝不影响作业本身。
+        deps.logger?.warn('agent.bash_job.delivery_failed', {
+          job_id: completion.jobId,
+          session_id: completion.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      } finally {
+        inflight -= 1;
+      }
+    },
+  );
+
+  return () => {
+    unregisterStart();
+    unregisterCompletion();
+  };
 }
 
 /**

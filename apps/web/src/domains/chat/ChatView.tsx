@@ -23,6 +23,7 @@ import { useAskDraftPrune } from '../pending/ask-draft-store';
 import { rosterAttributionIndex } from '../pending/attribution';
 import { itemsForSession, pendingItems } from '../pending/cluster';
 import { PluginPanels } from '../plugins/PluginPanels';
+import { AwaitingJobsBadge } from './AwaitingJobsBadge';
 import { agentNamesOf } from './agent-labels';
 import { AgentNamesProvider } from './agent-name-context';
 import type { AnsweredAsk } from './ask-answered';
@@ -40,6 +41,7 @@ import type { SessionRefScope } from './session-ref';
 import { TranscriptWindow } from './TranscriptWindow';
 import { ToolCatalogProvider } from './tool-catalog';
 import { useAnsweredAsks } from './useAnsweredAsks';
+import { useAwaitingJobs } from './useAwaitingJobs';
 import { useChatSessions } from './useChatSessions';
 import { useChatSubmit } from './useChatSubmit';
 import { useChatTranscript } from './useChatTranscript';
@@ -351,6 +353,16 @@ export function ChatView({
   const stopHandler =
     connected && runningGroup ? () => void submitApi.handleCancel(runningGroup) : undefined;
 
+  // q-async-bash-viz C：会话 idle 但还有 running 异步 bash 作业 → 「等待异步任务 X」徽标。
+  // 子 agent 详情页讲的是另一个 run，不挂（与失败卡 / 已答卡同口径）。
+  const awaitingJobs = useAwaitingJobs({
+    sessionId: transcriptApi.activeAgent ? null : selectedId,
+    client,
+    epoch,
+    entries: snapshot.entries,
+    enabled: connected,
+  });
+
   // 编辑 / 重试不再截断历史：先确认，确认后从源 session 前缀创建新 session
   // （`sessions.create{from_session_id, keep_messages}`），源 session 保留只读。
   const openCreate = (kind: CreateTarget['kind'], keepMessages: number, text: string) => {
@@ -621,6 +633,11 @@ export function ChatView({
               `refreshKey` 只是「再读一次盘」的触发器（本会话新受理一次发送 / run 数变化 /
               inbox 变更 live 事件：`inbox read/delete` 消费、新条目入队，**agent 级**判据，
               含跨会话 / wake-quiet 投递；面板展开重读在条带内部，D-5）。 */}
+            {/* idle（无在飞 run）但还有 running 异步作业 → 「等待异步任务」徽标（q-async-bash-viz C）。
+                有在飞 run 时不挂（那时链路本就在跑，不是「停了还是在等」的疑问态）。 */}
+            {!runningGroup && (
+              <AwaitingJobsBadge count={awaitingJobs.count} jobIds={awaitingJobs.jobIds} />
+            )}
             <PendingStrip
               sessionId={selectedId}
               agentId={catalogAgentId}

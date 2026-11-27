@@ -1058,6 +1058,14 @@ export const messages = {
   'inbox.unheld': '已取消 hold：这条按未读留档，模型仍能读到',
   'inbox.unholdRejected': '服务端没有解除 hold，已重读对齐（这条可能已经不在了）',
   'inbox.unholdFailed': '取消 hold 失败：{detail}',
+  // 异步 bash 作业占位回调卡（q-async-bash-viz）
+  'inbox.asyncJob.running': '运行中',
+  'inbox.asyncJob.done': '已完成',
+  'inbox.asyncJob.failed': '失败',
+  'inbox.asyncJob.logShow': '查看日志',
+  'inbox.asyncJob.logHide': '收起日志',
+  'inbox.asyncJob.logLoading': '正在读取日志…',
+  'inbox.asyncJob.logEmpty': '（日志为空）',
 
   // Teams（跨节点）
   'teams.title': '团队',
@@ -1312,6 +1320,7 @@ export const messages = {
   'chat.index.label': '会话索引',
   'chat.index.jump': '跳到第 {index} 条',
   'chat.pending.title': '收件箱 · {count}',
+  'chat.awaitingJobs': '等待异步任务 {count}',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask 答复',
   // 固定 runtime 标签（服务端 InboxSourceLabel）：不是「谁说的话」，不走显示名分支

@@ -92,6 +92,7 @@ import type {
   HookContext,
   Plugin,
   PluginHost,
+  RunEvent,
   ToolContext,
   ToolDefinition,
 } from '@vessel-agent/core';
@@ -1436,6 +1437,18 @@ interface AsyncBashJob {
   readonly sinks: { stdout: OutputSink; stderr: OutputSink };
   /** 发起它的会话；缺省 = 无会话（CLI 单会话），任何会话的下一轮都可注入 */
   sessionId?: string;
+  /** 发起它的 run（q-async-bash-viz：时间线事实事件 / 注册表元数据用）。 */
+  runId?: string;
+  /** 子进程 pid（展示 / 诊断用）。 */
+  pid?: number;
+  /** 退出码（收口时填；null = 被信号杀）。 */
+  exitCode?: number | null;
+  /**
+   * 事实发射端口快照（q-async-bash-viz）：起作业时从 ctx.emitFact 捕获，收口时据此发
+   * bash.job.completed/failed 时间线事实（run 已结束也能发——EU.publishEvent 走 transient
+   * journal）。缺省（旧装配未注入）= 不发时间线事件，零回归。
+   */
+  emitFact?: (event: RunEvent) => void;
   /** 超时被杀 / 被 detach（由定时器写，收口时读） */
   timedOut: boolean;
   /** 超时后是否杀进程树（起作业时从生效 limits 快照；作业生命周期内不随热应用变） */
@@ -1657,9 +1670,23 @@ async function startAsyncBash(options: {
     timedOut: false,
     killOnTimeout: limits.killOnTimeout,
     ...(options.ctx.session_id !== undefined ? { sessionId: options.ctx.session_id } : {}),
+    ...(options.ctx.run_id !== undefined ? { runId: options.ctx.run_id } : {}),
+    ...(typeof proc.pid === 'number' ? { pid: proc.pid } : {}),
+    ...(options.ctx.emitFact !== undefined ? { emitFact: options.ctx.emitFact } : {}),
   };
   asyncJobs.set(id, job);
   installAsyncExitSweep();
+  // q-async-bash-viz：通知装配层起了一条作业（往 inbox 插 running 占位卡）。fire-and-forget：
+  // 没装出口（CLI / TUI / 嵌入方）= 不插占位，完成退回 hook 通知，零回归。
+  notifyAsyncBashStarted(job);
+  // 时间线事实：bash.job.started（WebUI 据此跟踪在跑作业 → run 徽标「等待异步任务」）。
+  emitBashJobFact(job, 'bash.job.started', {
+    status: 'running',
+    command: oneLineText(job.command),
+    pid: job.pid,
+    log_path: job.logPath,
+    started_at: job.startedAt,
+  });
   // 一条起步日志：事后能回答「这条作业当时走的是哪条交付通道」（装配层的唤醒投递
   // 注册在 src/，插件看不到它是否成功；这里只读出口槽本身）。
   jobLog.debug('basic_tools.bash_job.started', {
@@ -1865,6 +1892,16 @@ function detachAsyncJob(job: AsyncBashJob): void {
       })
     ).content;
     await deliverAsyncNotice(job, job.notice, null, saved ?? job.logPath);
+    // q-async-bash-viz：超时 detach 的时间线事实（进程仍在跑，但作业额度已释放、通知已发）。
+    emitBashJobFact(job, 'bash.job.failed', {
+      status: 'failed',
+      exit_code: null,
+      timed_out: true,
+      detached: true,
+      elapsed_ms: (job.finishedAt ?? Date.now()) - job.startedAt,
+      log_path: saved ?? job.logPath,
+      ended_at: job.finishedAt,
+    });
     pruneAsyncJobs();
   })().catch(() => {
     appender.open();
@@ -1881,6 +1918,7 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
   } catch {
     exitCode = job.proc.exitCode ?? null;
   }
+  job.exitCode = exitCode;
   if (job.timer !== undefined) clearTimeout(job.timer);
   if (job.detached === true) {
     // 超时通知已在 detach 时发过：这里只做真正退出的收口，绝不发第二条通知。
@@ -1960,6 +1998,17 @@ async function finalizeAsyncBash(job: AsyncBashJob): Promise<void> {
   // 二选一：装了唤醒出口就试它一次（成功 = 自己起一轮 run，hook 永不再注入这份通知）。
   // 失败不标记，hook 仍会兜底 —— 宁可晚到，不可不到，也不可送两遍。
   await deliverAsyncNotice(job, job.notice, exitCode, saved ?? job.logPath);
+
+  // q-async-bash-viz：时间线事实 bash.job.completed/failed（WebUI 徽标解除 / 作业卡态迁）。
+  const failed = job.timedOut || job.sweptBy !== undefined || (exitCode !== null && exitCode !== 0);
+  emitBashJobFact(job, failed ? 'bash.job.failed' : 'bash.job.completed', {
+    status: failed ? 'failed' : 'done',
+    exit_code: exitCode,
+    timed_out: job.timedOut,
+    elapsed_ms: job.finishedAt - job.startedAt,
+    log_path: saved ?? job.logPath,
+    ended_at: job.finishedAt,
+  });
 
   // 输出缓冲释放：完成态只留元数据与通知文本（否则一条 16 MiB 的输出会被一直攥着）
   job.sinks.stdout.chunks.length = 0;
@@ -2041,6 +2090,176 @@ export function registerAsyncBashCompletionSink(sink: AsyncBashCompletionSink): 
     const slot = asyncSinkSlot();
     if (slot.sink === sink) slot.sink = undefined;
   };
+}
+
+// ── q-async-bash-viz：起作业通知 + 注册表快照 + 时间线事实 ──────────────
+//
+// 复用 inbox 的占位回调卡：起作业时装配层往 inbox 插一条 running 占位（科技蓝、不可消费、
+// 沉底），完成时**按 jobId 原位更新同一条目**（done/failed + 填结果）。起作业通知与完成
+// 通知共用 jobId 键。完成路由本就进 inbox（admit origin bash_job），改动只是匹配占位槽
+// 原位填充而非新插一条 —— 单一真相源，杜绝双份。
+
+/** 起一条作业时通知装配层的元数据（与完成通知共用 jobId 键）。 */
+export interface AsyncBashJobStart {
+  jobId: string;
+  sessionId: string;
+  runId?: string;
+  command: string;
+  pid?: number;
+  startedAt: number;
+  logPath: string;
+}
+
+export type AsyncBashStartSink = (start: AsyncBashJobStart) => void | Promise<void>;
+
+/** 起作业出口槽：与完成槽同一先例（进程级单槽 + Symbol.for，跨模块实例共享）。 */
+const ASYNC_START_SINK_SLOT = Symbol.for('vessel.basic-tools.async-bash-start-sink');
+
+function asyncStartSinkSlot(): { sink?: AsyncBashStartSink } {
+  const host = globalThis as unknown as Record<symbol, { sink?: AsyncBashStartSink }>;
+  const existing = host[ASYNC_START_SINK_SLOT];
+  if (existing !== undefined) return existing;
+  const created: { sink?: AsyncBashStartSink } = {};
+  host[ASYNC_START_SINK_SLOT] = created;
+  return created;
+}
+
+/** 注册起作业通知出口（进程级单槽，最后一次注册生效）；返回注销函数。 */
+export function registerAsyncBashStartSink(sink: AsyncBashStartSink): () => void {
+  asyncStartSinkSlot().sink = sink;
+  return () => {
+    const slot = asyncStartSinkSlot();
+    if (slot.sink === sink) slot.sink = undefined;
+  };
+}
+
+/** 起作业通知（fire-and-forget）：没装出口 / 无会话 = 不插占位；异常只记日志，不影响作业。 */
+function notifyAsyncBashStarted(job: AsyncBashJob): void {
+  const sink = asyncStartSinkSlot().sink;
+  if (sink === undefined || job.sessionId === undefined) return;
+  const start: AsyncBashJobStart = {
+    jobId: job.id,
+    sessionId: job.sessionId,
+    command: oneLineText(job.command),
+    startedAt: job.startedAt,
+    logPath: job.logPath,
+    ...(job.runId !== undefined ? { runId: job.runId } : {}),
+    ...(job.pid !== undefined ? { pid: job.pid } : {}),
+  };
+  try {
+    const result = sink(start);
+    if (result instanceof Promise) result.catch(() => {});
+  } catch {
+    // 占位插入失败不影响作业本身（完成时 updateBashJob 找不到占位会退回旧投递路径）。
+  }
+}
+
+/**
+ * 发一条 bash 作业时间线事实（bash.job.started/completed/failed）。经 ctx.emitFact 快照
+ * （EU.publishEvent → journal → 时间线双写）：run 已结束也能发（transient journal）。
+ * 缺省（旧装配未注入 emitFact）= 不发，零回归。异常只记日志，不影响作业收口。
+ */
+function emitBashJobFact(job: AsyncBashJob, type: string, data: Record<string, unknown>): void {
+  const emit = job.emitFact;
+  if (emit === undefined) return;
+  try {
+    emit({
+      type,
+      run_id: job.runId ?? 'plugin',
+      data: {
+        job_id: job.id,
+        session_id: job.sessionId,
+        run_id: job.runId,
+        ...data,
+      },
+      ts: Date.now(),
+    });
+  } catch (error) {
+    jobLog.debug('basic_tools.bash_job.fact_failed', {
+      job_id: job.id,
+      type,
+      error: String(error),
+    });
+  }
+}
+
+/** 注册表快照的一条作业元数据（会话绑定；RPC jobs.list / WebUI 徽标用）。 */
+export interface AsyncBashJobSnapshot {
+  jobId: string;
+  sessionId?: string;
+  runId?: string;
+  command: string;
+  pid?: number;
+  status: 'running' | 'done' | 'failed';
+  startedAt: number;
+  endedAt?: number;
+  exitCode?: number | null;
+  logPath: string;
+  timedOut: boolean;
+  detached: boolean;
+}
+
+/**
+ * 会话绑定的作业注册表快照（只读）：活跃 + 近期 job。`sessionId` 缺省 = 全部会话。
+ *
+ * 注册表唯一真相源就是进程级 `asyncJobs`（每条带 sessionId）—— 不另存第二份嵌套 Map
+ * （两份必漂）；会话绑定经 job.sessionId 过滤体现。status 由收口态派生：未收口 = running；
+ * 收口后 exitCode≠0 / timedOut / sweptBy = failed，否则 done。
+ */
+export function listAsyncBashJobs(sessionId?: string): AsyncBashJobSnapshot[] {
+  const out: AsyncBashJobSnapshot[] = [];
+  for (const job of asyncJobs.values()) {
+    if (sessionId !== undefined && job.sessionId !== sessionId) continue;
+    const finished = job.notice !== undefined;
+    const failed =
+      finished &&
+      (job.timedOut ||
+        job.sweptBy !== undefined ||
+        (job.exitCode !== undefined && job.exitCode !== null && job.exitCode !== 0));
+    out.push({
+      jobId: job.id,
+      command: oneLineText(job.command),
+      status: !finished ? 'running' : failed ? 'failed' : 'done',
+      startedAt: job.startedAt,
+      logPath: job.logPath,
+      timedOut: job.timedOut,
+      detached: job.detached === true,
+      ...(job.sessionId !== undefined ? { sessionId: job.sessionId } : {}),
+      ...(job.runId !== undefined ? { runId: job.runId } : {}),
+      ...(job.pid !== undefined ? { pid: job.pid } : {}),
+      ...(job.finishedAt !== undefined ? { endedAt: job.finishedAt } : {}),
+      ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+    });
+  }
+  return out.sort((left, right) => right.startedAt - left.startedAt);
+}
+
+/**
+ * 读一条作业日志的尾部（q-async-bash-viz：inbox 作业卡的 log tail 按钮）。
+ *
+ * 只对在跑 / 近期还在注册表里的作业有效（jobId → logPath）；已被 prune 的旧作业返回 null
+ * （其完整结果已在 inbox 条目正文里，log tail 主要服务在跑作业的实时输出）。读最后
+ * `maxBytes` 字节（缺省 8 KiB），按 UTF-8 解码（可能截断多字节字符，尾部预览可接受）。
+ */
+export function readAsyncBashJobLogTail(jobId: string, maxBytes = 8192): string | null {
+  const job = asyncJobs.get(jobId) ?? detachedAsyncProcs.get(jobId);
+  if (job === undefined) return null;
+  try {
+    const size = statSync(job.logPath).size;
+    const start = Math.max(0, size - maxBytes);
+    const length = size - start;
+    if (length <= 0) return '';
+    const fd = openSync(job.logPath, 'r');
+    try {
+      const buf = Buffer.alloc(length);
+      readSync(fd, buf, 0, length, start);
+      return buf.toString('utf-8');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
 }
 
 /**

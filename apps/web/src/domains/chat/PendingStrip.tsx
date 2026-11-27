@@ -74,6 +74,7 @@ import type {
   AgentRecallResponse,
 } from '../../gateway/types';
 import { t } from '../../i18n';
+import { AsyncJobCard } from '../inbox/AsyncJobCard';
 import { errorMessage } from './errors';
 import {
   claimedEntryIdOf,
@@ -142,6 +143,8 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
     ts: entry.ts,
     // 身份行要读名字：服务端在入队时存下的发送者显示名，原样带到条带上。
     ...(entry.from_name !== undefined ? { from_name: entry.from_name } : {}),
+    // bash 作业占位元数据（q-async-bash-viz）：条带据此用专属作业卡渲染。
+    ...(entry.async_job !== undefined ? { async_job: entry.async_job } : {}),
   };
 }
 
@@ -545,7 +548,13 @@ export function PendingStrip({
     const claimed = claimedEntryIds(pendings, entries);
     const sent = new Set(sentMessageIds);
     const serverRows: StripRow[] = entries
-      .filter((entry) => !claimed.has(entry.message_id) && !sent.has(entry.message_id))
+      .filter(
+        (entry) =>
+          !claimed.has(entry.message_id) &&
+          !sent.has(entry.message_id) &&
+          // bash 作业占位走专属沉底卡（jobRows），不进通用排队分组（q-async-bash-viz）。
+          entry.async_job === undefined,
+      )
       .map((entry) => ({
         entry: toEntry(entry),
         item: {
@@ -558,6 +567,19 @@ export function PendingStrip({
     const clientRows = pendings.filter(inPendingStrip).map((item) => clientRowOf(item, cancelling));
     return [...serverRows, ...clientRows];
   }, [entries, pendings, sentMessageIds, cancelling]);
+
+  // bash 作业占位行（q-async-bash-viz）：沉底专属卡，running 科技蓝 / done 绿 / failed 红。
+  // 与通用排队行同一份 claimed/sent 过滤（一条消息只有一行），但不参与同源折叠分组。
+  const jobRows = useMemo(() => {
+    const claimed = claimedEntryIds(pendings, entries);
+    const sent = new Set(sentMessageIds);
+    return entries.filter(
+      (entry) =>
+        entry.async_job !== undefined &&
+        !claimed.has(entry.message_id) &&
+        !sent.has(entry.message_id),
+    );
+  }, [entries, pendings, sentMessageIds]);
 
   // 零 interval（用户理想裁定，§6.5）：轮询已删，兜底面全部事件/用户驱动 ——
   // R2 页面回可见重读一次（承接「连接活着但事件丢了」的静默缺口；条带不是 useResource
@@ -922,8 +944,8 @@ export function PendingStrip({
     if (pending !== undefined) onDismissPending?.(pending);
   };
 
-  // 空列表整块不渲染（不占高度、不留空壳）。
-  if (view.total === 0) return null;
+  // 空列表整块不渲染（不占高度、不留空壳）。bash 作业占位行也算有内容。
+  if (view.total === 0 && jobRows.length === 0) return null;
 
   const label = t('chat.pending.title', { count: view.total });
 
@@ -1134,6 +1156,16 @@ export function PendingStrip({
                   })}
                 </ul>
               </div>
+              {/* 异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派
+                  （bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
+                  结果正文由模型 inbox read 取走（单一真相源）。 */}
+              {jobRows.length > 0 && (
+                <div className="mt-1.5 flex flex-col gap-1.5">
+                  {jobRows.map((entry) => (
+                    <AsyncJobCard key={entry.message_id} entry={entry} client={client} />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 

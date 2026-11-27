@@ -527,7 +527,8 @@ export interface AgentClaimLikeInput {
  */
 export interface AgentClaimLikeSkip {
   message_id: string;
-  reason: 'not_found' | 'consumed';
+  /** `pending`：仍在跑的 bash 作业占位（还没结果，不可认领；q-async-bash-viz）。 */
+  reason: 'not_found' | 'consumed' | 'pending';
 }
 
 /**

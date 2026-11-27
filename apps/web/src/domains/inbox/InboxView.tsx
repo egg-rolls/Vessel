@@ -381,6 +381,7 @@ export function InboxView({
                   <InboxRow
                     key={entry.message_id}
                     entry={entry}
+                    client={client}
                     identity={identityOf(entry)}
                     busy={busyIds.has(entry.message_id)}
                     expanded={expandedIds.has(entry.message_id)}
