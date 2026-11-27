@@ -291,7 +291,10 @@ const NODE_UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
  * 形状不合（空 principal / 空 host）返回 undefined，调用方退回原文呈现，绝不吞正文。
  */
 export function parseSourceAddress(location: string): SourceAddress | undefined {
-  const value = location.trim();
+  // q-inbox-ux-fix：联邦来源 `federation:principal@node:team` 先剥前缀 —— principal 段
+  // 才是发送者身份；带着前缀解析会把 principal 认成 `federation:<name>`，roster 查不到、
+  // 名字被挡。vessel:source 的 location 本就无前缀（服务端已剥），此处幂等。
+  const value = location.trim().replace(/^federation:/, '');
   if (value.length === 0) return undefined;
   const at = value.indexOf('@');
   if (at < 0) return { principal: value };

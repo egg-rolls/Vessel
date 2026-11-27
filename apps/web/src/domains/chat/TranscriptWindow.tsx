@@ -29,7 +29,7 @@ import {
   BASH_SOURCE,
   HUMAN_SOURCE,
   SYSTEM_SOURCE,
-  shortSenderId,
+  senderLabelOfPrincipal,
 } from './pending-strip';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { RotateHandoffCard } from './RotateHandoffCard';
@@ -573,7 +573,7 @@ export function TranscriptWindow({
         const principal = parseSourceAddress(item.source)?.principal ?? item.source;
         return (
           <AgentMessageCard
-            sender={agentNames?.get(principal) ?? shortSenderId(principal)}
+            sender={agentNames?.get(principal) ?? senderLabelOfPrincipal(principal)}
             content={item.text}
             ts={item.ts}
             source={item.source}
