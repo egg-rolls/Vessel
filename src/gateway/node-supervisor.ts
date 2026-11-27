@@ -27,7 +27,7 @@ import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { effectiveNodeToken } from '../node/token-derive';
 import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
-import { buildDaemonArgv } from './daemon';
+import { buildDaemonArgv, tailLog } from './daemon';
 import { loadNodeRegistry } from './node-registry';
 import {
   type CommandRunner,
@@ -73,6 +73,14 @@ const DEFAULT_STOP_TIMEOUT_MS = 5_000;
  */
 const GRACEFUL_SHUTDOWN_REQUEST_MS = 3_000;
 const POLL_MS = 100;
+
+/**
+ * R-3（q-restart-tool）：node bind 撞 port_in_use 的退避重 spawn 预算。
+ * Windows 杀旧 node 后端口释放有竞态（netstat 事后已空闲），新 node 点火即撞
+ * EADDRINUSE 自杀 ⇒ 平台活/node 死半态。有界重试候端口释放；整进程重起无残留态。
+ */
+const NODE_BIND_RETRIES = 3;
+const NODE_BIND_RETRY_DELAY_MS = 1_500;
 const HEALTH_TIMEOUT_MS = 1_000;
 const ADOPT_WAIT_MS = 2_000;
 const MANIFEST_VERSION = 1;
@@ -1306,26 +1314,62 @@ export class NodeSupervisor {
   /** 本进程 spawn 的节点：等 `gateway.pid` + `/health`；失败只标该节点。 */
   private async finishSpawned(entry: PendingNode): Promise<void> {
     const { spec } = entry;
-    const ready = await this.waitForReady(spec, entry.pid);
+    let pending = entry;
+    let ready = await this.waitForReady(spec, pending.pid);
+    // R-3：bind 撞 port_in_use（Windows 端口释放竞态）→ 有界退避重 spawn，
+    // 不立即标 failed 留半态。只认证据重试（子进程已死 + 日志尾部 port_in_use），
+    // 其它失败路径口径不变；重 spawn 是整进程重起，无失败尝试的残留状态。
+    for (
+      let attempt = 1;
+      !ready.ok && ready.code === 'node_start_failed' && attempt <= NODE_BIND_RETRIES;
+      attempt += 1
+    ) {
+      if (this.stopping) return;
+      if (!(await this.nodeExitedOnPortInUse(spec, pending.pid))) break;
+      await this.abandonSpawned(
+        pending,
+        `${ready.code}: ${ready.message} (port_in_use; bind retry ${attempt}/${NODE_BIND_RETRIES})`,
+      );
+      if (this.stopping) return;
+      await this.sleep(NODE_BIND_RETRY_DELAY_MS);
+      const manifestEntry = await this.spawnOnly(spec);
+      if (manifestEntry === null) return; // spawnOnly 已标 failed
+      pending = { spec, pid: manifestEntry.pid, spawned: true, manifestEntry };
+      const slot = this.pending.indexOf(entry);
+      if (slot >= 0) this.pending[slot] = pending;
+      this.setState(spec, 'starting', { spawned: true, pid: manifestEntry.pid });
+      ready = await this.waitForReady(spec, pending.pid);
+    }
     if (!ready.ok) {
       // 本进程正在停止：不算节点失败，也不去杀（stop() 已经在收）。
       if (ready.code === 'stopped') return;
-      await this.abandonSpawned(entry, `${ready.code}: ${ready.message}`);
+      await this.abandonSpawned(pending, `${ready.code}: ${ready.message}`);
       return;
     }
     const record = await readGatewayPidRecord(spec.dataDir);
     if (record === null) {
       await this.abandonSpawned(
-        entry,
+        pending,
         `node_start_failed: node "${spec.name}" did not write ${path.join(spec.dataDir, 'gateway.pid')}`,
       );
       return;
     }
-    if (entry.manifestEntry !== undefined) entry.manifestEntry.started_at = record.started_at;
+    if (pending.manifestEntry !== undefined) pending.manifestEntry.started_at = record.started_at;
     await this.writeManifest();
-    this.setState(spec, 'ready', { spawned: true, pid: entry.pid });
+    this.setState(spec, 'ready', { spawned: true, pid: pending.pid });
     // 0.58：就绪之后才开始探活（启动期的慢不算僵死）。
-    this.startWatchdog(spec, entry.pid);
+    this.startWatchdog(spec, pending.pid);
+  }
+
+  /**
+   * R-3：port_in_use 退避重试的证据判定 —— 子进程已死 **且** 日志尾部（最后 5 行）
+   * 含 `port_in_use`（node 前台 bind 失败的最后输出）。日志是 append 模式，旧轮
+   * 残留行理论上可致假阳性：代价只是对真失败节点多至 3 次有界重 spawn，可接受。
+   */
+  private async nodeExitedOnPortInUse(spec: LocalNodeSpec, pid: number): Promise<boolean> {
+    if (isProcessAlive(pid)) return false;
+    const tail = await tailLog(nodeLogPath(this.options.gatewayDataDir, spec.name), 5);
+    return tail.split(/\r?\n/).some((line) => line.includes('port_in_use'));
   }
 
   /** adopt 候选：确认健康后定 `adopted`（manifest 有记录）/ `external`（外部启动）。 */

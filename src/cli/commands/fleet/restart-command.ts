@@ -49,6 +49,7 @@ import type { GatewaySelector } from '../../args';
 import { ui } from '../../output';
 import {
   type GatewayCommandDeps,
+  probeHttpHealth,
   resolveGatewayTargets,
   startDaemonCommand,
   stopGateway,
@@ -513,6 +514,13 @@ interface RestartOrchestrateInput {
 
 const ORCHESTRATE_POLL_MS = 2_000;
 
+/**
+ * R-3（q-restart-tool）：start 返回后的健康确认预算。startDaemonCommand 返回只表示
+ * daemon spawn 受理，不保证 node bind 成功（Windows 端口释放竞态可留平台活/node 死
+ * 半态）；platform + 触发者 node 的 /health 都可达才算 restart complete。
+ */
+const ORCHESTRATE_HEALTH_WAIT_MS = 60_000;
+
 /** run 终态判定：queued/running 之外都是终态（completed/failed/cancelled/interrupted）。 */
 function isTerminalRunStatus(status: unknown): boolean {
   return typeof status === 'string' && status !== 'queued' && status !== 'running';
@@ -648,13 +656,61 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
     });
     if (code !== 0) failed = true;
   }
-  await clearSelfRestartHandoff(handoffDir);
   if (failed) {
+    await clearSelfRestartHandoff(handoffDir);
     printErr(ui.err('self-restart orchestrator: start failed (see instance logs)'));
     return 1;
   }
+
+  // ── R-3 健康确认：start 返回 ≠ 真活。platform 各目标 + 触发者 node 的 /health
+  // 都可达才算 restart complete；预算内不达 → 如实报 INCOMPLETE（非假成功）。
+  // node bind 的 port_in_use 竞态由 node-supervisor 有界退避重 spawn 兜底（R-3），
+  // 这里是编排者的最后一道闸，覆盖一切「进程受理但服务未起」的半态。──
+  const tls = config.node?.tls !== undefined;
+  const healthDeadline = Date.now() + ORCHESTRATE_HEALTH_WAIT_MS;
+  let healthy = false;
+  for (;;) {
+    let platformOk = true;
+    for (const target of handoff.targets) {
+      const record = await readGatewayPidRecord(dataDir, target.instance, 'platform');
+      const health =
+        record !== null && isProcessAlive(record.pid)
+          ? await probeHttpHealth(record, 800, false)
+          : undefined;
+      if (health?.role !== 'platform') {
+        platformOk = false;
+        break;
+      }
+    }
+    const nodeRecord = await readGatewayPidRecord(handoff.node.data_dir);
+    const nodeHealth =
+      nodeRecord !== null && isProcessAlive(nodeRecord.pid)
+        ? await probeHttpHealth(nodeRecord, 800, tls)
+        : undefined;
+    // node 监听判据与 collectGatewayState 同口径：role 非 platform 即 node 面。
+    const nodeOk = nodeHealth !== undefined && nodeHealth.role !== 'platform';
+    if (platformOk && nodeOk) {
+      healthy = true;
+      break;
+    }
+    if (Date.now() >= healthDeadline) break;
+    await sleep(ORCHESTRATE_POLL_MS);
+  }
+  await clearSelfRestartHandoff(handoffDir);
+  if (!healthy) {
+    printErr(
+      ui.err(
+        `self-restart orchestrator: started but health NOT confirmed within ${ORCHESTRATE_HEALTH_WAIT_MS}ms ` +
+          '(platform/node /health unreachable); restart INCOMPLETE — inspect instance logs',
+      ),
+    );
+    return 1;
+  }
   print(
-    ui.ok('self-restart orchestrator: restart complete; continuation will be delivered at startup'),
+    ui.ok(
+      'self-restart orchestrator: restart complete (platform + node health confirmed); ' +
+        'continuation will be delivered at startup',
+    ),
   );
   return 0;
 }
