@@ -2346,6 +2346,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
     // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
     listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
+    // R-1（q-restart-tool）：vessel op=rpc 走的是本 localDispatcher（vesselRpcPort），
+    // gateway.restart 必须在这里同样注入，否则设计主入口 not_supported——
+    // cli.ts 的网络 gatewayOptions 只是另一路。惰性包装：gatewayRestart 定义在
+    // 装配后段，dispatch 发生时早已初始化（TDZ 无虞）。additive 只补 restart；
+    // selfRestart/shutdown/reload 的本地面缺口另议，不在本批扩面。
+    restart: async (input) => gatewayRestart(input),
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
