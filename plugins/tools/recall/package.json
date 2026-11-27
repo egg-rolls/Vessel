@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/recall",
-  "version": "2.1.22",
+  "version": "2.1.23",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
