@@ -4,8 +4,19 @@
  * @module @vessel-agent/serve
  */
 
-import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
-import { loggingEnvOverrides, type PluginHost } from '@vessel-agent/core';
+import {
+  DEFAULT_ENV_CADENCE,
+  PINNED_REQUEST_SCOPES,
+  redactConfig,
+  redactSourcePaths,
+  type VesselConfig,
+} from '@vessel-agent/config';
+import {
+  ENV_CADENCE_VALUES,
+  ENV_CHANNEL_VALUES,
+  loggingEnvOverrides,
+  type PluginHost,
+} from '@vessel-agent/core';
 import type { AgentControlLike } from '../../agent-control.js';
 import type { PluginCatalogItem } from '../../plugin-host/catalog.js';
 import type {
@@ -95,10 +106,27 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
   'observability.log.time': ['auto', 'none', 'clock', 'iso'],
 };
 
+/**
+ * q-env-config-set：env_injection 三层键（与 src/config/ui-settings 白名单同口径）。
+ * default + scopes.<16 词> + channels.<16 词>；scope 词表取自 DEFAULT_ENV_CADENCE
+ * （单一事实源，与 ui-settings ENV_GRANULARITY_SCOPES 人工对拍同一张表）。
+ * 节奏轴 ∈ request|run|off（pinned trim/model 拒 request，off 允许）；
+ * 通道轴 ∈ model+ui|ui-only。值校验与 config validator / setUserConfigValue 同界。
+ */
+const ENV_INJECTION_CADENCE_KEYS: ReadonlySet<string> = new Set([
+  'envInjection.default',
+  ...Object.keys(DEFAULT_ENV_CADENCE).map((scope) => `envInjection.scopes.${scope}`),
+]);
+const ENV_INJECTION_CHANNEL_KEYS: ReadonlySet<string> = new Set(
+  Object.keys(DEFAULT_ENV_CADENCE).map((scope) => `envInjection.channels.${scope}`),
+);
+
 const SETTABLE_KEYS: ReadonlySet<string> = new Set([
   ...BOOLEAN_KEYS,
   ...Object.keys(ENUM_KEYS),
   ...Object.keys(NUMBER_KEYS),
+  ...ENV_INJECTION_CADENCE_KEYS,
+  ...ENV_INJECTION_CHANNEL_KEYS,
   'agent.cwd',
   // q-empty-response：nudge 文案（非空字符串，走通用 string 路径）。
   'emptyResponse.nudge',
@@ -143,6 +171,41 @@ function normalizeConfigValue(key: string, raw: unknown): string | boolean | num
   if (allowed !== undefined) {
     if (!allowed.includes(raw)) {
       throw new RpcError('invalid_params', `${key} must be one of ${allowed.join(', ')}`, { key });
+    }
+    return raw;
+  }
+  // q-env-config-set：env_injection 两轴枚举（与 config validator / ui-settings 同口径）。
+  if (ENV_INJECTION_CADENCE_KEYS.has(key)) {
+    if (!(ENV_CADENCE_VALUES as readonly string[]).includes(raw)) {
+      throw new RpcError(
+        'invalid_params',
+        `${key} must be one of ${ENV_CADENCE_VALUES.join(', ')}`,
+        { key },
+      );
+    }
+    const scope = key.startsWith('envInjection.scopes.')
+      ? key.slice('envInjection.scopes.'.length)
+      : undefined;
+    if (
+      raw === 'request' &&
+      scope !== undefined &&
+      (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope)
+    ) {
+      throw new RpcError(
+        'invalid_params',
+        `${key} is pinned to "run"; "request" is not configurable ("off" is allowed)`,
+        { key },
+      );
+    }
+    return raw;
+  }
+  if (ENV_INJECTION_CHANNEL_KEYS.has(key)) {
+    if (!(ENV_CHANNEL_VALUES as readonly string[]).includes(raw)) {
+      throw new RpcError(
+        'invalid_params',
+        `${key} must be one of ${ENV_CHANNEL_VALUES.join(', ')}`,
+        { key },
+      );
     }
     return raw;
   }
