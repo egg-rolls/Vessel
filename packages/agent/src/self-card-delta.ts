@@ -376,7 +376,9 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
       const injected: Message[] = [];
       for (const content of formatSelfCardDeltas(changes)) {
         // 首行 scope 词（线格式 `<scope>: …`）；解析不出按 model+ui 现状（零回归）。
-        const scope = /^([A-Za-z_][A-Za-z0-9_]*)\s*[:：]/.exec(content.split('\n', 1)[0] ?? '')?.[1];
+        const scope = /^([A-Za-z_][A-Za-z0-9_]*)\s*[:：]/.exec(
+          content.split('\n', 1)[0] ?? '',
+        )?.[1];
         if (scope !== undefined && options.scopeOff?.(scope) === true) continue;
         const message: Message = {
           role: 'user',
@@ -397,7 +399,10 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
             data: {
               run_id: ctx.run_id,
               session_id: ctx.session_id,
-              message: { ...message, message_id: `${ctx.run_id}:notice:${String(timestamp)}:${scope}` },
+              message: {
+                ...message,
+                message_id: `${ctx.run_id}:notice:${String(timestamp)}:${scope}`,
+              },
             },
             ts: timestamp,
           });

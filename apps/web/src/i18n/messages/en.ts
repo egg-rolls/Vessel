@@ -171,6 +171,24 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Off keeps only replies, tool calls, errors and permission/ask cards. On adds runtime notices, hook / LLM context and other system messages; the vessel:* transcript messages follow this key too, and verbosity=debug shows them as well.',
   // q-msg-visibility: message display group (five toggles; legacy showInternalEvents wording kept for old deep links).
   'settings.group.messageVisibility': 'Message display',
+  // q-env-granularity (P2 §4.3): environment notice granularity group (runtime category).
+  'settings.group.envNotice': 'Environment notices',
+  'settings.env.default.title': 'Default cadence',
+  'settings.env.default.desc':
+    'Fallback detection cadence for scopes not listed below. Per-scope settings override this.',
+  'settings.env.cadence.request': 'Every request',
+  'settings.env.cadence.run': 'Every run',
+  'settings.env.cadence.off': 'Off',
+  'settings.env.delivery.desc':
+    'How often the model is told about this kind of environment change. Off silences it entirely (no card, no model injection).',
+  'settings.env.pinned.desc':
+    'Pinned to "Every run" to keep the request prefix stable; "Every request" is not allowed. Off silences it (the model will no longer be told about this change).',
+  'settings.env.files.desc':
+    'How often subscribed-file changes are reported. Side-channel writes (bash / builds / git) cannot be attributed to an editor and still notify.',
+  'settings.env.channel.desc':
+    'Delivery channel. "Model + UI" injects into the model context and shows a card; "UI only" shows the card but the model is not injected.',
+  'settings.env.channel.modelUi': 'Model + UI',
+  'settings.env.channel.uiOnly': 'UI only',
   'settings.item.reasoning.title': 'Thinking process',
   'settings.item.reasoning.desc':
     'Show the model reasoning stream (live and history). Off hides reasoning blocks; verbosity=minimal still hides them.',

@@ -2404,10 +2404,7 @@ export class ExecutionUnit {
    * （live + 刷新回放同源）。与 appendInjectedMessages 的事实段同形，去掉上下文写入。
    */
   private emitNoticeFactOnly(execution: Run, runId: string, message: Message): void {
-    const identified = withMessageId(
-      message,
-      injectedHookMessageIdOf(runId, this.injectedHookSeq),
-    );
+    const identified = withMessageId(message, injectedHookMessageIdOf(runId, this.injectedHookSeq));
     this.injectedHookSeq += 1;
     this.publishEvent({
       type: 'message.injected',

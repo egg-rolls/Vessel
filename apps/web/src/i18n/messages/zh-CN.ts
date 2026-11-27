@@ -166,6 +166,23 @@ export const messages = {
     '关闭时只保留正文、工具调用、错误与权限/ask 卡片；打开后额外显示运行提示、hook / LLM 上下文等系统消息（会话里的 vessel:* 上下文消息同受此键控制）；verbosity=debug 也会显示这些系统消息。',
   // q-msg-visibility：消息显示分组（五 toggle；旧 showInternalEvents 键文案保留给存量深链）。
   'settings.group.messageVisibility': '消息显示',
+  // q-env-granularity（P2 §4.3）：环境信息粒度组（runtime 分类）。
+  'settings.group.envNotice': '环境通知',
+  'settings.env.default.title': '缺省节奏',
+  'settings.env.default.desc': '下方未单列 scope 的兜底检测节奏；单 scope 设置优先于此。',
+  'settings.env.cadence.request': '每请求',
+  'settings.env.cadence.run': '每 run',
+  'settings.env.cadence.off': '关闭',
+  'settings.env.delivery.desc':
+    '模型多久被告知一次这类环境变化。关闭 = 完全静默（不出卡、不注入模型）。',
+  'settings.env.pinned.desc':
+    '为保持请求前缀稳定钉死「每 run」，不允许「每请求」。关闭可静默（模型将不再收到此类变化）。',
+  'settings.env.files.desc':
+    '订阅文件变更多久报告一次。旁路写（bash / 构建 / git）不可归因到编辑者，仍会通知。',
+  'settings.env.channel.desc':
+    '投递通道。「模型 + UI」注入模型上下文并出卡；「仅 UI」只出卡，模型不注入。',
+  'settings.env.channel.modelUi': '模型 + UI',
+  'settings.env.channel.uiOnly': '仅 UI',
   'settings.item.reasoning.title': '思考过程',
   'settings.item.reasoning.desc':
     '显示模型的思考流（实时与历史）；关闭后思考块不再渲染。输出详略 minimal 档仍会隐藏思考。',
