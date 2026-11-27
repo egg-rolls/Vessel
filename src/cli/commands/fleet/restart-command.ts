@@ -18,11 +18,12 @@
  * @module vessel/restart-command
  */
 
-import { mkdir, open } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { loadConfig, type VesselConfig } from '../../../../packages/config/src/index';
 import { resolveDataDir } from '../../../data/data-paths';
+import { cleanupChainOrphansWindows, spawnDetachedClean } from '../../../gateway/clean-spawn';
 import { isHumanTerminal } from '../../../gateway/gateway-banner';
 import { loadNodeRegistry } from '../../../gateway/node-registry';
 import {
@@ -459,24 +460,18 @@ export async function selfRestartReserveCommand(input: SelfRestartReserveInput):
   let orchestratorPid: number;
   try {
     await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
-    const handle = await open(logPath, 'a', 0o600);
-    try {
-      const proc = spawn(
-        [process.execPath, entryPath, 'restart', '--orchestrate', '--data-dir', dataDir],
-        {
-          stdin: 'ignore',
-          stdout: handle.fd,
-          stderr: handle.fd,
-          detached: true,
-          windowsHide: true,
-          env: { ...process.env, VESSEL_DATA_DIR: dataDir },
-        },
-      );
-      proc.unref();
-      orchestratorPid = proc.pid;
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
+    // R-5①：Windows 经 WMI 干净父系 spawn，断 Bun 1.3.9 监听 socket handle
+    // 继承链（node→编排者→新 gateway 僵尸端口根因）；POSIX / 显式 spawn 注入
+    // 保持 Bun.spawn detached 语义。WMI 失败内部告警回退 detached。
+    const clean = await spawnDetachedClean({
+      argv: [process.execPath, entryPath, 'restart', '--orchestrate', '--data-dir', dataDir],
+      logPath,
+      env: { ...process.env, VESSEL_DATA_DIR: dataDir },
+      cwd: process.cwd(),
+      ...(deps.spawn !== undefined ? { spawn } : {}),
+      warn: (message) => printErr(ui.warn(message)),
+    });
+    orchestratorPid = clean.pid;
   } catch (error) {
     await clearSelfRestartHandoff(dataDir);
     printErr(ui.err(`restart --self: failed to spawn the orchestrator: ${String(error)}`));
@@ -643,6 +638,17 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
   } else {
     print(ui.warn('self-restart orchestrator: no matching platform entries at stop time'));
   }
+
+  // ── R-5③ start 前预检：目标端口若被**本重启链孤儿**（本编排者后代的活进程）
+  // 持有，定点 taskkill /T /F 后再 start；死 pid 归属只告警不盲杀。──
+  await cleanupChainOrphansWindows({
+    ports: handoff.targets
+      .map((target) => target.port)
+      .filter((port): port is number => port !== undefined),
+    selfPid: process.pid,
+    ...(deps.spawn !== undefined ? { spawn: deps.spawn } : {}),
+    print: (line) => print(ui.warn(line)),
+  });
 
   // ── start：复用既有 daemon start 接缝（原实例/端口恢复）。──
   let failed = false;
