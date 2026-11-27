@@ -450,6 +450,23 @@ export function parseInline(source: string): InlineNode[] {
         break;
       }
       if (source[close + 1] === '(') {
+        // 尖括号目标形 `[name](<scheme:target>)`（CommonMark；file-ref-ux A6）：
+        // 容空格 / 圆括号（Windows 路径 `D:/my file (1).pdf`）。安全性在渲染侧
+        // 判（scheme 白名单 / 增强器），这里只解析形状。
+        if (source[close + 2] === '<') {
+          const gt = source.indexOf('>', close + 3);
+          if (gt !== -1 && source[gt + 1] === ')') {
+            const href = source.slice(close + 3, gt);
+            if (href.length > 0 && !/[\n]/.test(href)) {
+              flush();
+              nodes.push({ type: 'link', text: source.slice(index + 1, close), href });
+              index = gt + 2;
+              closeBracket = undefined;
+              closeParen = undefined;
+              continue;
+            }
+          }
+        }
         if (closeParen === undefined || (closeParen !== -1 && closeParen <= close + 1)) {
           closeParen = source.indexOf(')', close + 2);
         }
@@ -459,8 +476,14 @@ export function parseInline(source: string): InlineNode[] {
           if (!/\s/.test(href)) {
             flush();
             const label = source.slice(index + 1, close);
-            if (isSafeHref(href)) nodes.push({ type: 'link', text: label, href });
-            else nodes.push({ type: 'text', text: label });
+            // 安全 scheme ⇒ 可点击链接；带 scheme 但不安全 ⇒ 仍出 link 节点，
+            // 渲染侧落「不可点击文本（名称+目标可见）」档（A9 通用兜底）；
+            // 其余（javascript: 等无 scheme 形状的怪值）保持旧行为只留 label。
+            if (isSafeHref(href) || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) {
+              nodes.push({ type: 'link', text: label, href });
+            } else {
+              nodes.push({ type: 'text', text: label });
+            }
             index = end + 1;
             closeBracket = undefined;
             closeParen = undefined;

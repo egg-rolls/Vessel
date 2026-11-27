@@ -37,6 +37,14 @@ export interface PluginHostEvent {
   payload?: unknown;
 }
 
+/** 宿主通用 attachments 域能力（file-ref-ux；任何 embed 插件可用，非功能专属）。 */
+export interface PluginHostAttachments {
+  /** 缩略图字节 + 过期探针（canonical attachments.preview，read）。 */
+  preview(path: string): Promise<ComposerPreviewResult>;
+  /** 浏览器文件 → node 暂存副本（canonical attachments.stage，write）。 */
+  stage(files: readonly File[]): Promise<StagedAttachment[]>;
+}
+
 /**
  * 内嵌插件拿到的宿主对象（P2 面）。由 `createPluginHost` 构造并冻结；
  * 不暴露 client / token / eventStore 原对象。
@@ -58,6 +66,8 @@ export interface VesselPluginHost {
   i18n: { t(key: string, vars?: Record<string, string | number>): string };
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown): void;
   permissions: { has(permission: string): boolean };
+  /** 通用 attachments 域能力（宿主未提供时调用 reject，fail-closed）。 */
+  attachments: PluginHostAttachments;
 }
 
 /** 挂载点属性（P2 只有 page；mounts 在 P3）。 */
@@ -94,6 +104,8 @@ export interface PluginHostAdapter {
   eventPatterns: readonly string[];
   permissions: PluginPermissionDeclaration;
   rpc(method: string, params?: unknown): Promise<unknown>;
+  /** 通用 attachments 域能力（缺省 = 调用 reject，fail-closed）。 */
+  attachments?: PluginHostAttachments;
   subscribeEvent(type: string, cb: (e: PluginHostEvent) => void): () => void;
   theme: VesselPluginHost['theme'];
   toast: VesselPluginHost['toast'];
@@ -171,6 +183,113 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost {
     permissions: Object.freeze({
       has: (permission: string): boolean => hasPermission(adapter.permissions, permission),
     }),
+    attachments: Object.freeze({
+      preview: (path: string): Promise<ComposerPreviewResult> => {
+        if (adapter.attachments === undefined) {
+          return Promise.reject(
+            new Error('attachments_unavailable: host adapter has no attachments'),
+          );
+        }
+        return adapter.attachments.preview(path);
+      },
+      stage: (files: readonly File[]): Promise<StagedAttachment[]> => {
+        if (adapter.attachments === undefined) {
+          return Promise.reject(
+            new Error('attachments_unavailable: host adapter has no attachments'),
+          );
+        }
+        return adapter.attachments.stage(files);
+      },
+    }),
   };
   return Object.freeze(host);
+}
+// ── composer 内嵌接缝（file-ref-ux additive）─────────────────────────────
+//
+// 宿主经 `contributes.composer` 把输入框编辑能力以**类型化端口**交给插件：
+// 插件拿不到宿主 DOM / 路由 / 草稿 store 原对象，只有这一面（与 toolbar
+// 「插件拿不到宿主回调」同一安全哲学）。宿主不认识「文件引用」这个功能名。
+
+/** 结构化引用（与 core MessageRef 同形；sdk 不 import core，结构类型在此）。 */
+export interface ComposerRef {
+  kind: 'file' | 'image' | 'document';
+  path: string;
+  name?: string;
+  mime?: string;
+  bytes?: number;
+  sha256?: string;
+}
+
+/** 瞬态节点句柄（上传占位 → 落定 / 更新 / 删除；与宿主 RichComposer 同形）。 */
+export interface ComposerTransientHandle {
+  settle(token: string): void;
+  update(data: unknown): void;
+  remove(): void;
+}
+
+/** 单文件暂存上传结果（宿主 attachments.stage 的逐条投影）。 */
+export type StagedAttachment =
+  | {
+      ok: true;
+      name: string;
+      path: string;
+      sha256: string;
+      bytes: number;
+      kind: 'file' | 'image' | 'document';
+      mime?: string;
+      expiresAt: number;
+    }
+  | { ok: false; name: string; error: string };
+
+/** 预览 / 过期探针结果（宿主 attachments.preview 同形）。 */
+export interface ComposerPreviewResult {
+  status: 'ok' | 'gone' | 'denied' | 'too_large' | 'not_image';
+  staging?: boolean;
+  expiresAt?: number;
+  mime?: string;
+  bytes?: number;
+  dataUrl?: string;
+}
+
+/**
+ * 输入框编辑端口（宿主通用能力，任何 composer 贡献插件可用）：
+ * 读 / 增 / 删草稿引用、插入文本 / 原子节点 / 瞬态节点、取光标、
+ * 暂存上传（stage）与预览（preview）——后两者是宿主 attachments 域能力。
+ */
+export interface ComposerEditorPort {
+  refs(): readonly ComposerRef[];
+  addRef(ref: ComposerRef): boolean;
+  removeRef(index: number): void;
+  insertText(text: string, at?: number): void;
+  insertAtomic(token: string, at?: number): void;
+  insertTransient(scheme: string, data: unknown, at?: number): ComposerTransientHandle | null;
+  getCaretOffset(): number;
+  caretOffsetFromPoint(x: number, y: number): number | null;
+  stage(files: readonly File[]): Promise<StagedAttachment[]>;
+  preview(path: string): Promise<ComposerPreviewResult>;
+}
+
+/** drop 槽处理器：OS 文件（drop / 截图粘贴）→ 插件自行上传 + 插卡。 */
+export type ComposerDropHandler = (
+  files: File[],
+  port: ComposerEditorPort,
+  at: { offset: number | null },
+) => void | Promise<void>;
+
+/** 原子卡片渲染器 props（refs 槽；host 由宿主注入，port 是编辑端口）。 */
+export interface ComposerCardProps {
+  scheme: string;
+  name: string;
+  target: string;
+  data?: unknown;
+  onRemove: () => void;
+  port?: ComposerEditorPort;
+  host: VesselPluginHost;
+}
+
+/** 消息 link 增强器 props（link 槽；href 含 scheme 前缀）。 */
+export interface ComposerLinkCardProps {
+  href: string;
+  text: string;
+  host: VesselPluginHost;
 }

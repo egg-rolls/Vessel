@@ -90,6 +90,12 @@ import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
 import { createReplSettings, type ReplSettingsControlLike } from '../config/ui-settings';
 import { visionSurfaceOf } from '../config/vision-settings';
 import { createConfigAttachmentIngest } from '../data/attachment-ingest';
+import {
+  createConfigAttachmentPreviewer,
+  createConfigAttachmentStager,
+  type StagingGcRunner,
+  startStagingGc,
+} from '../data/attachment-staging';
 import { createConfigAttachmentLister } from '../data/attachments-list';
 import {
   type AutoPrunePassReport,
@@ -1521,6 +1527,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    */
   let imageBlobGc: ImageBlobGcRunner | undefined;
   /**
+   * 附件暂存区 TTL GC（file-ref-ux A2）：drop/paste 上传的临时副本 60min + 1h 宽限。
+   * 与 blob GC 同形态（第一趟 dry-run、unref、在飞不叠）。
+   */
+  let stagingGc: StagingGcRunner | undefined;
+  /**
    * auto-gc P1：closed / 归档数据自动回收调度器。缺省开（用户裁定：系统应自清洁；
    * 保护不变量保安全）。第一趟固定 dry-run；配置经 live resolver 活生效。
    */
@@ -2377,6 +2388,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // not_found「board path is not configured」——cli.ts 的网络 gatewayOptions 只是另一路。
     // 可变对象：cli 的 applyKanban 热应用经 result.kanbanDeps 原地更新（handler 每次调用读）。
     kanban: kanbanDeps,
+    // file-ref-ux（A2/A3/A4）：暂存上传 + 预览/过期探针。边界与入池同一份
+    // basic-tools 配置；暂存根已由 buildPathBoundary 追加进允许根。
+    stageAttachment: createConfigAttachmentStager({ getConfig: () => config }),
+    previewAttachment: createConfigAttachmentPreviewer({ getConfig: () => config }),
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
@@ -2685,6 +2700,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.56 P1：blob GC 定时器（在飞的那一趟照旧跑完，不阻塞退出）。
     imageBlobGc?.stop();
     imageBlobGc = undefined;
+    // file-ref-ux：暂存 TTL GC 定时器（在飞的那一趟照旧跑完）。
+    stagingGc?.stop();
+    stagingGc = undefined;
     // auto-gc P1：先停调度并**等在飞趟收口**再拆 agent 执行面 —— 在线趟会调
     // service.flushSnapshot，若 agent dispose 的终态 flush 先跑，已摘记录会被复活。
     autoPrune?.stop();
@@ -2947,6 +2965,22 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             ok: false,
           });
         }
+      },
+    });
+  }
+
+  // ── file-ref-ux A2：附件暂存区 TTL GC（60min + 1h 宽限，按 mtime）─────────────
+  // 与 blob GC 同闸（localWrites）同形态（第一趟 dry-run、unref）。暂存副本是
+  // 用户上传的临时字节，过期回收不需要引用集合扫描（TTL + 宽限即判据）。
+  if (localWrites) {
+    stagingGc = startStagingGc({
+      onReport: (report) => {
+        logger.info('attachment staging gc pass', {
+          dry_run: report.dryRun,
+          scanned: report.scanned,
+          reclaimed: report.reclaimed,
+          bytes: report.bytes,
+        });
       },
     });
   }

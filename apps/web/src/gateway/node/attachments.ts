@@ -52,6 +52,75 @@ export interface AttachmentListParams {
 /** 服务端缺省值（面板与 RPC 用同一组数字）。 */
 export const ATTACHMENT_LIST_LIMIT = 200;
 
+// ── 暂存上传 / 预览（file-ref-ux A2/A3/A4）──────────────────────────────
+
+/** `attachments.stage` 结果（与 serve AttachmentStageResult 同形）。 */
+export interface AttachmentStageResult {
+  path: string;
+  sha256: string;
+  bytes: number;
+  kind: 'file' | 'image' | 'document';
+  name: string;
+  mime?: string;
+  expiresAt: number;
+}
+
+/** `attachments.preview` 结果（与 serve AttachmentPreviewResult 同形）。 */
+export interface AttachmentPreviewResult {
+  status: 'ok' | 'gone' | 'denied' | 'too_large' | 'not_image';
+  staging?: boolean;
+  expiresAt?: number;
+  mime?: string;
+  bytes?: number;
+  dataUrl?: string;
+}
+
+/** 单文件暂存结果（逐条失败逐条报，不整批吞）。 */
+export type StagedFileResult =
+  | ({ ok: true } & AttachmentStageResult)
+  | { ok: false; name: string; error: string };
+
+/** Uint8Array → 标准 base64（分块 btoa，避免大文件 String.fromCharCode 爆栈）。 */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+  }
+  return btoa(binary);
+}
+
+/** 最小 RPC 面（GatewayClient / TeamControl 都满足）。 */
+export interface AttachmentStageRpc {
+  rpc<T>(method: string, params?: Record<string, unknown>): Promise<T>;
+}
+
+/** 浏览器 File[] → 逐条 attachments.stage（上传暂存副本，拿节点绝对路径）。 */
+export async function stageFiles(
+  client: AttachmentStageRpc,
+  files: readonly File[],
+): Promise<StagedFileResult[]> {
+  const results: StagedFileResult[] = [];
+  for (const file of files) {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const result = await client.rpc<AttachmentStageResult>('attachments.stage', {
+        name: file.name,
+        ...(file.type !== '' ? { mime: file.type } : {}),
+        data: bytesToBase64(bytes),
+      });
+      results.push({ ok: true, ...result });
+    } catch (error) {
+      results.push({
+        ok: false,
+        name: file.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return results;
+}
+
 /**
  * 附件域客户端方法。
  *
@@ -62,5 +131,10 @@ export abstract class AttachmentsClient extends IntegrationsClient {
   /** 列 node 上的单层目录（只读）。 */
   listAttachments(params: AttachmentListParams = {}): Promise<AttachmentListResult> {
     return this.rpc<AttachmentListResult>('attachments.list', params);
+  }
+
+  /** 预览 / 过期探针（file-ref-ux A4；缩略图字节 + staging 判定）。 */
+  previewAttachment(path: string): Promise<AttachmentPreviewResult> {
+    return this.rpc<AttachmentPreviewResult>('attachments.preview', { path });
   }
 }

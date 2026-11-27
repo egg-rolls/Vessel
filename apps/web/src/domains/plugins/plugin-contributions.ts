@@ -5,6 +5,7 @@
  * 没有 `contributions` 时返回空数组，导航与挂载点自然消失。
  */
 import type {
+  PluginContributionComposer,
   PluginContributionPage,
   PluginContributionPanel,
   PluginContributionToolbar,
@@ -100,6 +101,23 @@ export interface PluginToolbarMenuItem {
   value: string;
   labelKey?: string;
   label?: string;
+}
+
+/**
+ * 输入框内嵌贡献项（file-ref-ux additive，归一化后）。
+ *
+ * refs 槽 = 原子卡片渲染器（scheme + component）；drop 槽 = OS 文件处理器
+ * （handler）；link 槽 = 消息 markdown link 增强器（scheme + component）。
+ * 宿主只认通用接缝；插件撤离 ⇒ 条目随 plugins.list 消失（A9）。
+ */
+export interface PluginComposerItem {
+  pluginId: string;
+  pluginName: string;
+  slot: 'refs' | 'drop' | 'link';
+  scheme?: string;
+  component?: string;
+  handler?: string;
+  order: number;
 }
 
 /** 通用 RPC 绑定菜单（归一化后；read/write 已校验 ∈ 本插件 rpc 白名单且权限匹配）。 */
@@ -471,6 +489,26 @@ function toolbarMenuOf(
   };
 }
 
+/** composer 内嵌贡献归一化：refs/link 要 scheme+component，drop 要 handler；违规整项丢弃。 */
+function composerOf(
+  plugin: PluginListItem,
+  item: PluginContributionComposer,
+): PluginComposerItem | null {
+  const slot = item.slot;
+  if (slot !== 'refs' && slot !== 'drop' && slot !== 'link') return null;
+  const order = orderOf(item.order);
+  if (slot === 'drop') {
+    const handler = text(item.handler);
+    if (handler === '' || !COMPONENT_NAME.test(handler)) return null;
+    return { pluginId: plugin.name, pluginName: plugin.name, slot, handler, order };
+  }
+  const scheme = text(item.scheme);
+  const component = text(item.component);
+  if (!/^[a-z][a-z0-9-]{0,31}$/.test(scheme)) return null;
+  if (component === '' || !COMPONENT_NAME.test(component)) return null;
+  return { pluginId: plugin.name, pluginName: plugin.name, slot, scheme, component, order };
+}
+
 function isPluginListItem(value: unknown): value is PluginListItem {
   if (value === null || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
@@ -496,6 +534,8 @@ export interface PluginInventory {
   panels: PluginPanelItem[];
   /** 输入框工具栏声明（0.51 additive）；旧 gateway 不返回时为空数组。 */
   toolbar: PluginToolbarItem[];
+  /** 输入框内嵌贡献（file-ref-ux additive）；旧 gateway 不返回时为空数组。 */
+  composer: PluginComposerItem[];
   /** S3 additive：插件设置域（vscode-settings-design §4.3）；旧 gateway 为空数组。 */
   settings: PluginSettingsDomain[];
   /** plugin id → 私有 i18n 字典（不合并进宿主 catalog）。 */
@@ -666,6 +706,7 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   const navGroups: PluginNavGroupItem[] = [];
   const panels: PluginPanelItem[] = [];
   const toolbar: PluginToolbarItem[] = [];
+  const composer: PluginComposerItem[] = [];
   const settings: PluginSettingsDomain[] = [];
   const i18nByPlugin = new Map<string, PluginI18n>();
   const methodsByPlugin = new Map<string, Set<string>>();
@@ -707,6 +748,10 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
       const item = toolbarOf(plugin, entry);
       if (item !== null) toolbar.push(item);
     }
+    for (const entry of contributions.composer ?? []) {
+      const item = composerOf(plugin, entry);
+      if (item !== null) composer.push(item);
+    }
 
     const methods = new Set<string>();
     for (const rpc of contributions.rpc ?? []) {
@@ -726,6 +771,7 @@ export function buildPluginInventory(plugins: readonly PluginListItem[]): Plugin
   navGroups.sort(byOrder);
   panels.sort(byOrder);
   toolbar.sort(byOrder);
+  composer.sort((a, b) => a.order - b.order || a.pluginId.localeCompare(b.pluginId));
   settings.sort((a, b) => a.pluginName.localeCompare(b.pluginName));
-  return { pages, navGroups, panels, toolbar, settings, i18nByPlugin, methodsByPlugin };
+  return { pages, navGroups, panels, toolbar, composer, settings, i18nByPlugin, methodsByPlugin };
 }

@@ -282,6 +282,8 @@ export interface PluginContributions {
   panels?: PluginPanelContribution[];
   /** 0.51 additive：输入框工具栏声明（declarative，点击由宿主映射） */
   toolbar?: PluginToolbarContribution[];
+  /** file-ref-ux additive：输入框内嵌贡献（refs / drop / link 槽，embed 组件/处理器） */
+  composer?: PluginComposerContribution[];
   /** 0.48 M1：宿主 loopback 反代的 HTTP 路由 */
   http?: PluginHttpContribution[];
   /** 0.48 M2：经 rpc handler 执行的 CLI 命令 */
@@ -752,6 +754,81 @@ function readToolbar(value: unknown): PluginToolbarContribution[] {
 /** 菜单档位项上限 / 值长度上限（设计 §4.7.2）。 */
 const TOOLBAR_MENU_MAX_ITEMS = 16;
 const TOOLBAR_MENU_MAX_VALUE_LEN = 64;
+
+// ── contributes.composer（file-ref-ux additive）─────────────────────────
+//
+// 输入框**内嵌**贡献点（与 declarative toolbar 互补）：插件经 embed 模块贡献
+// 原子卡片渲染器（refs 槽）/ OS 文件 drop+paste 处理器（drop 槽）/ 消息 markdown
+// link 增强器（link 槽）。宿主只认通用接缝，不认识任何具体功能名；插件撤离 ⇒
+// 贡献随声明式加载机制消失（A9）。
+
+/** composer 内嵌槽位闭集。 */
+export type PluginComposerSlot = 'refs' | 'drop' | 'link';
+
+export interface PluginComposerContribution {
+  slot: PluginComposerSlot;
+  /** refs / link 槽：token / link 的 scheme（如 `vessel-ref`）；宿主按 scheme 分流。 */
+  scheme?: string;
+  /** refs / link 槽：embed 模块具名导出组件（JS 标识符形状）。 */
+  component?: string;
+  /** drop 槽：embed 模块具名导出处理器函数。 */
+  handler?: string;
+  order?: number;
+}
+
+/** scheme 形状：小写字母开头，字母数字连字符（保留私有 scheme，现实 URL 不会用）。 */
+const COMPOSER_SCHEME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+function isComposerSlot(value: unknown): value is PluginComposerSlot {
+  return value === 'refs' || value === 'drop' || value === 'link';
+}
+
+/**
+ * `contributes.composer[]` 校验：refs/link 必须 scheme + component，drop 必须
+ * handler；component / handler 都是 embed 具名导出 ⇒ 声明它们必须有 ui.embed
+ * （与 pages.component 同一 fail-closed 口径）。
+ */
+function readComposer(value: unknown, hasUiEmbed: boolean): PluginComposerContribution[] {
+  if (!Array.isArray(value)) {
+    fail('plugin_manifest_invalid', 'contributes.composer must be an array');
+  }
+  return value.map((item, index) => {
+    const field = `contributes.composer[${index}]`;
+    if (!isRecord(item)) fail('plugin_manifest_invalid', `${field} must be an object`);
+    if (!isComposerSlot(item.slot)) {
+      fail('plugin_manifest_invalid', `${field}.slot is invalid (refs | drop | link)`);
+    }
+    const order = optionalNumber(item.order, `${field}.order`);
+    if (item.slot === 'drop') {
+      const handler = requireString(item.handler, `${field}.handler`);
+      if (!PLUGIN_COMPONENT_RE.test(handler)) {
+        fail(
+          'plugin_manifest_invalid',
+          `${field}.handler must match ${PLUGIN_COMPONENT_RE.source}`,
+        );
+      }
+      if (!hasUiEmbed) {
+        fail('plugin_manifest_invalid', `${field}.handler requires ui.embed`);
+      }
+      return { slot: item.slot, handler, ...(order !== undefined ? { order } : {}) };
+    }
+    const scheme = requireString(item.scheme, `${field}.scheme`);
+    if (!COMPOSER_SCHEME_RE.test(scheme)) {
+      fail('plugin_manifest_invalid', `${field}.scheme must match ${COMPOSER_SCHEME_RE.source}`);
+    }
+    const component = requireString(item.component, `${field}.component`);
+    if (!PLUGIN_COMPONENT_RE.test(component)) {
+      fail(
+        'plugin_manifest_invalid',
+        `${field}.component must match ${PLUGIN_COMPONENT_RE.source}`,
+      );
+    }
+    if (!hasUiEmbed) {
+      fail('plugin_manifest_invalid', `${field}.component requires ui.embed`);
+    }
+    return { slot: item.slot, scheme, component, ...(order !== undefined ? { order } : {}) };
+  });
+}
 
 /**
  * 校验通用 RPC 绑定菜单形状（additive）。违规 ⇒ 返回 undefined（丢 menu 保留普通
@@ -1417,6 +1494,7 @@ function readContributions(
   }
   if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
   if (raw.toolbar !== undefined) out.toolbar = readToolbar(raw.toolbar);
+  if (raw.composer !== undefined) out.composer = readComposer(raw.composer, hasUiEmbed);
   if (raw.http !== undefined) {
     out.http = readHttp(
       raw.http,

@@ -21,6 +21,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { stageFiles } from '../../gateway/node/attachments';
 import type { PluginCatalogItem } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resolvedTheme, useTheme } from '../../state/theme';
@@ -153,6 +154,10 @@ export function usePluginHost(pluginId: string, surface: PluginHostSurface): Ves
         return live.current.surface.permissions;
       },
       rpc: (method, params) => live.current.client.rpc(method, params),
+      attachments: {
+        preview: (path) => live.current.client.previewAttachment(path),
+        stage: (files) => stageFiles(live.current.client, files),
+      },
       subscribeEvent: (type, cb) => {
         const store = live.current.eventStore;
         let lastSeq = store.getSnapshot().lastSeq;

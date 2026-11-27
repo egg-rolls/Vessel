@@ -15,8 +15,11 @@ export type {
   AttachmentListParams,
   AttachmentListReason,
   AttachmentListResult,
+  AttachmentPreviewResult,
+  AttachmentStageResult,
+  StagedFileResult,
 } from './attachments';
-export { ATTACHMENT_LIST_LIMIT } from './attachments';
+export { ATTACHMENT_LIST_LIMIT, bytesToBase64, stageFiles } from './attachments';
 
 export type { ConnectionState, EventMeta } from './protocol';
 export { GatewayHttpError } from './protocol';
