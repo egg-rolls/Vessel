@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Tooltip } from '../components/Tooltip';
+import { agentsListHash } from '../domains/agents/agent-url';
+import { useAgentBreadcrumb } from '../domains/agents/useAgentBreadcrumb';
 import { AccountMenu } from '../domains/auth/AccountMenu';
 import { useNodeNames } from '../domains/nodes/useNodeNames';
 import { t, useLocale } from '../i18n';
@@ -30,6 +32,8 @@ export function AppBar({
   useLocale();
   // 节点展示名（问题3）：节点详情面包屑显示名字而非 node id；拿不到退 nodeKey 原文。
   const nodeNames = useNodeNames();
+  // agent 深链不在壳层 Route 里：面包屑补出「智能体 › <名字>」，首段可点击回列表。
+  const agentBreadcrumb = useAgentBreadcrumb();
   const drawerToggle = onToggleSessions
     ? {
         id: 'sessions-toggle',
@@ -75,7 +79,25 @@ export function AppBar({
         className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-serif text-xl font-semibold text-ink"
         aria-live="polite"
       >
-        {routeBreadcrumb(route, nodeNames)}
+        {agentBreadcrumb ? (
+          <>
+            <button
+              type="button"
+              className="cursor-pointer bg-transparent p-0 text-muted underline-offset-4 hover:text-ink hover:underline"
+              onClick={() => {
+                window.location.hash = agentsListHash(window.location.hash);
+              }}
+            >
+              {t('breadcrumb.agents')}
+            </button>
+            <span aria-hidden="true" className="mx-1.5 text-faint">
+              ›
+            </span>
+            <span>{agentBreadcrumb.name}</span>
+          </>
+        ) : (
+          routeBreadcrumb(route, nodeNames)
+        )}
       </span>
 
       <div className="flex min-w-0 flex-1 justify-center px-2 max-compact:px-1">{center}</div>

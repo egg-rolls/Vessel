@@ -20,7 +20,7 @@ import {
   StaleNotice,
 } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
-import { Button, KeyValueList } from '../../components/ui';
+import { Button, KeyValueList, Section } from '../../components/ui';
 import type { TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
@@ -188,69 +188,81 @@ export function MemberDetail({
       {error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
 
       <div className="flex w-full flex-col gap-5">
-        <section className="team-body-card rounded-md bg-raised p-4 shadow-elev-1 forced-colors:border">
-          <h2 className="text-md font-semibold text-ink">{t('team.member.currentBody')}</h2>
+        {/* 布局：标题左 / 动作右；字段宽屏双列分组，窄屏单列，标签值对齐留白。 */}
+        <Section
+          title={t('team.member.currentBody')}
+          actions={
+            <div className="ml-auto flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                disabled={!member.session_id}
+                onClick={() => {
+                  if (member.session_id) onOpenSession(member.session_id);
+                }}
+              >
+                {t('team.member.currentSession')}
+              </Button>
+              <Button onClick={openRotate}>{t('team.member.rotate.open')}</Button>
+            </div>
+          }
+        >
           {/* Detail 槽：id / 会话 / 状态 / 可见性等事实的唯一渲染点（DESIGN-0.33.0 §1）。 */}
-          <KeyValueList
-            items={[
-              {
-                key: 'sessionNumber',
-                label: t('team.member.sessionNumber'),
-                value: (
-                  <span className="font-mono tabular-nums">
-                    {member.epoch !== undefined
-                      ? t('team.member.sessionIndex', { n: member.epoch })
-                      : '—'}
-                  </span>
-                ),
-              },
-              {
-                key: 'session',
-                label: t('agents.detail.session'),
-                value: <span className="font-mono">{member.session_id ?? '—'}</span>,
-              },
-              {
-                key: 'state',
-                label: t('agents.filter.state'),
-                value: t(status.labelKey),
-              },
-              {
-                key: 'presence',
-                label: t('agents.filter.presence'),
-                value:
-                  member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone'),
-              },
-              {
-                key: 'agentId',
-                label: t('agents.detail.agentId'),
-                value: (
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-mono">{member.agent_id}</span>
-                    <CopyButton text={member.agent_id} />
-                  </span>
-                ),
-              },
-              {
-                key: 'visibility',
-                label: t('agents.detail.visibility'),
-                value: <span className="font-mono">{member.visibility}</span>,
-              },
-            ]}
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="primary"
-              disabled={!member.session_id}
-              onClick={() => {
-                if (member.session_id) onOpenSession(member.session_id);
-              }}
-            >
-              {t('team.member.currentSession')}
-            </Button>
-            <Button onClick={openRotate}>{t('team.member.rotate.open')}</Button>
+          <div className="grid gap-x-8 gap-y-4 md:grid-cols-2">
+            <KeyValueList
+              className="mt-0 gap-y-2.5"
+              items={[
+                {
+                  key: 'sessionNumber',
+                  label: t('team.member.sessionNumber'),
+                  value: (
+                    <span className="font-mono tabular-nums">
+                      {member.epoch !== undefined
+                        ? t('team.member.sessionIndex', { n: member.epoch })
+                        : '—'}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'session',
+                  label: t('agents.detail.session'),
+                  value: <span className="font-mono">{member.session_id ?? '—'}</span>,
+                },
+                {
+                  key: 'state',
+                  label: t('agents.filter.state'),
+                  value: t(status.labelKey),
+                },
+              ]}
+            />
+            <KeyValueList
+              className="mt-0 gap-y-2.5"
+              items={[
+                {
+                  key: 'presence',
+                  label: t('agents.filter.presence'),
+                  value:
+                    member.presence === 'live' ? t('team.presence.live') : t('team.presence.gone'),
+                },
+                {
+                  key: 'agentId',
+                  label: t('agents.detail.agentId'),
+                  value: (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono">{member.agent_id}</span>
+                      <CopyButton text={member.agent_id} />
+                    </span>
+                  ),
+                },
+                {
+                  key: 'visibility',
+                  label: t('agents.detail.visibility'),
+                  value: <span className="font-mono">{member.visibility}</span>,
+                },
+              ]}
+            />
           </div>
           <LiveBodiesList member={member} onOpenSession={onOpenSession} />
-        </section>
+        </Section>
 
         <RoleConversionSection
           key={`${nodeKey}:${teamId}:${member.agent_id}`}
@@ -262,17 +274,25 @@ export function MemberDetail({
           onConverted={reload}
         />
 
-        <section className="flex flex-col gap-2">
-          <h2 className="text-md font-semibold text-ink">{t('team.member.retiredBodies')}</h2>
-          {observedOnly && observed.length > 0 && (
-            <p className="m-0 text-xs">{t('team.member.observedOnly')}</p>
-          )}
-          <BodyHistoryList
-            entries={history.server}
-            observed={history.observed}
-            onOpenBody={onOpenBody}
-          />
-        </section>
+        <Section
+          title={t('team.member.retiredBodies')}
+          actions={
+            <span className="ml-auto text-sm tabular-nums text-muted">
+              {observed.length > 0 ? observed.length : history.server.length}
+            </span>
+          }
+        >
+          <div className="flex flex-col gap-2.5">
+            {observedOnly && observed.length > 0 && (
+              <p className="m-0 text-xs text-muted">{t('team.member.observedOnly')}</p>
+            )}
+            <BodyHistoryList
+              entries={history.server}
+              observed={history.observed}
+              onOpenBody={onOpenBody}
+            />
+          </div>
+        </Section>
       </div>
 
       {rotateOpen && (

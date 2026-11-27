@@ -809,7 +809,7 @@ export const messages = {
   'team.member.primaryBadge': 'primary',
   'team.member.openBody': '打开该会话',
   'team.member.retiredBodies': '历史会话',
-  'team.member.sessionNumber': '会话',
+  'team.member.sessionNumber': '会话序号',
   'team.member.sessionIndex': '第 {n} 次会话',
   'team.member.startedAt': '开始 {time}',
   'team.member.retiredAt': '退役 {time}',
