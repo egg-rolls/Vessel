@@ -48,7 +48,7 @@ export function SettingsSearchBar({ query, onQueryChange, pluginIds }: SettingsS
         >
           @ ▾
         </summary>
-        <div className="absolute right-0 z-10 mt-1 flex w-56 flex-col gap-0.5 rounded-sm border border-line bg-surface p-1.5 shadow-elev-2">
+        <div className="absolute right-0 z-10 mt-1 flex w-56 flex-col gap-0.5 rounded-sm bg-surface p-1.5 shadow-elev-2 forced-colors:border">
           <button
             type="button"
             className="rounded-sm bg-transparent px-2 py-1 text-left text-sm hover:bg-hover"

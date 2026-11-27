@@ -172,7 +172,7 @@ export function LoginPage({
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-bg px-6 text-ink">
-      <div className="w-full max-w-sm rounded-lg border border-line bg-surface p-6 shadow-elev-1">
+      <div className="w-full max-w-sm rounded-lg bg-surface p-6 shadow-elev-1 forced-colors:border">
         <h1 className="text-center font-serif text-title font-semibold leading-tight tracking-wide text-ink">
           {t('auth.login.title')}
         </h1>

@@ -133,7 +133,8 @@
 
   /* 字体族：沿用 tokens 的 --font-* 变量（同名，不需要再映射）。 */
 
-  /* 阴影 / 焦点环 */
+  /* 阴影 / 焦点环（分级契约见 tokens.css 的 Elevation 注释） */
+  --shadow-elev-0: var(--elev-0);
   --shadow-elev-1: var(--elev-1);
   --shadow-elev-2: var(--elev-2);
   --shadow-elev-3: var(--elev-3);

@@ -4,10 +4,20 @@
    L3 utilities 无法等价表达。多节点分组布局已迁到 AttentionPanel 的 utilities。
    ───────────────────────────────────────────────────────────── */
 
+/* 表格外框：elev-1 卡片（阴影代替 border，q-shadow-elevation）；
+   行 / 头之间的分隔线保留（必要分隔线）。 */
 .attention-list {
-  border: 1px solid var(--line);
   border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
   overflow: hidden;
+}
+
+/* 高对比模式没有阴影：外框退回系统色描边（与 base.css 的 forced-colors 兜底同做法）。 */
+@media (forced-colors: active) {
+  .attention-list {
+    border: 1px solid CanvasText;
+  }
 }
 
 .attention-head,
