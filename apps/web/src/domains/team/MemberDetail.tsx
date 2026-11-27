@@ -188,7 +188,7 @@ export function MemberDetail({
       {error && <StaleNotice message={t('team.error.stale')} onRetry={reload} />}
 
       <div className="flex w-full flex-col gap-5">
-        <section className="team-body-card rounded-md border border-line bg-surface p-4">
+        <section className="team-body-card rounded-md bg-raised p-4 shadow-elev-1 forced-colors:border">
           <h2 className="text-md font-semibold text-ink">{t('team.member.currentBody')}</h2>
           {/* Detail 槽：id / 会话 / 状态 / 可见性等事实的唯一渲染点（DESIGN-0.33.0 §1）。 */}
           <KeyValueList

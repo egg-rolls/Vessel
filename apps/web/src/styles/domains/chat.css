@@ -1,7 +1,9 @@
 /* ── 会话列表 ─────────────────────────────────────────── */
 
-/* 行间分组只靠父容器 gap，不再用分隔线。 */
-
+/* 行间分组只靠父容器 gap，不再用分隔线。
+   q-shadow-elevation：会话项 = elev-1 卡片（静止态就有表面 + 柔和阴影，
+   亮色档不再与侧栏白底融在一起；暗色档 raised 略亮于侧栏 surface，阴影辅助）。
+   透明 border 只保几何稳定，层次交给阴影；hover 抬起一档（elev-2）。 */
 .session-row {
   display: flex;
   align-items: stretch;
@@ -13,6 +15,8 @@
   min-height: 44px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
   transition:
     background 0.16s var(--ease),
     border-color 0.16s var(--ease),
@@ -20,9 +24,8 @@
 }
 
 .session-row:hover {
-  border-color: var(--line);
   background: var(--surface-hover);
-  box-shadow: var(--elev-1);
+  box-shadow: var(--elev-2);
 }
 
 .session-row.active {
@@ -587,12 +590,24 @@
   color: var(--muted);
 }
 
-/* 工具卡不铺底色（0.52 用户裁定：与环境信息卡同一底色 = 透明，交给 StreamCard 自己的排版）。
+/* 工具卡（q-shadow-elevation）：elev-1 卡片 —— raised 表面 + 柔和阴影，
+   亮色档与消息流背景分明分开（阴影代替 border）；暗色档靠 raised 亮度差 + 微阴影。
    注意**没有动 `--surface-sunken`**：它被 notice-block / 输入框凹槽 / palette / json 等 20+
-   处共用（`grep -c surface-sunken apps/web/src --include=*.css` 可复核），不是工具卡专属；
-   按「只有工具卡用才改 token」的条件，这里只摘掉这一条声明。 */
+   处共用（`grep -c surface-sunken apps/web/src --include=*.css` 可复核），不是工具卡专属。
+   卡头 / 卡体补水平内衬，让文字不贴卡片边缘（子分区自带 8px 边距，合计与卡头 10px 对齐）。 */
 .tool-card {
   border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
+}
+
+.tool-card > summary,
+.tool-card > .event-block-summary {
+  padding-inline: 10px;
+}
+
+.tool-card > .event-block-body {
+  padding-inline: 2px;
 }
 
 .tool-card-glyph {
@@ -958,11 +973,13 @@
   overflow-wrap: anywhere;
 }
 
-/* notice 仍保留原来的弱化底色与语义色。 */
+/* notice 仍保留原来的弱化底色与语义色；q-shadow-elevation 统一挂 elev-1，
+   让提示卡在消息流里有卡片层次（阴影代替 border）。 */
 
 .notice-block {
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
+  box-shadow: var(--elev-1);
   font-size: var(--size-sm);
   line-height: 1.55;
 }

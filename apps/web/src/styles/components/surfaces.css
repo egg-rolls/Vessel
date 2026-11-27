@@ -16,6 +16,8 @@
   min-height: 0;
   height: 100%;
   background: var(--surface);
+  /* 侧栏面板静止态挂 elev-1：与主内容区柔和分开（抽屉档由 is-drawer 的 elev-3 覆盖）。 */
+  box-shadow: var(--elev-1);
 }
 
 .sidebar-head {

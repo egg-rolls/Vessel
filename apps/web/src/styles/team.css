@@ -229,9 +229,18 @@
   justify-content: space-between;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  /* elev-1 卡片：阴影代替 border（q-shadow-elevation）。 */
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
+}
+
+/* 高对比模式没有阴影：历史条目退回系统色描边。 */
+@media (forced-colors: active) {
+  .team-body-history-item {
+    border-color: CanvasText;
+  }
 }
 
 /* ── 响应式 ───────────────────────────────────────────── */
@@ -263,8 +272,8 @@
     right: 0;
     z-index: var(--z-drawer);
     width: min(86vw, var(--drawer-w));
-    border-left: 1px solid var(--line);
-    box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 22%, transparent);
+    /* 浮起抽屉统一走 elev-3（阴影代替边线）。 */
+    box-shadow: var(--elev-3);
     visibility: hidden;
     transform: translateX(100%);
     transition:
