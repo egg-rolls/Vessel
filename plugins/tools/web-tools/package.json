@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/web-tools",
-  "version": "2.1.12",
+  "version": "2.1.13",
   "description": "web_fetch — SSRF-guarded HTTP fetch with local text extraction",
   "type": "module",
   "main": "src/index.ts",
@@ -32,7 +32,7 @@
   "vessel": {
     "id": "web-tools",
     "name": "Web Tools",
-    "version": "2.1.12",
+    "version": "2.1.13",
     "description": "web_search（DeepSeek tools API）+ web_fetch（local SSRF 守卫 / 可选 deepseek 后端）",
     "side": "backend",
     "contributes": {
