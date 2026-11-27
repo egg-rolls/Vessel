@@ -119,6 +119,7 @@ import {
 import { createRunMethods } from './gateway/methods/runs.js';
 import {
   createSessionMethods,
+  type SessionCompositionPort,
   type SessionContextUsagePort,
   type SessionEventsPort,
   type SessionImageDeliveryPort,
@@ -426,6 +427,15 @@ export interface GatewayOptions {
    * 缺省 = `sessions.get` 不带该字段（旧行为一字不改）。
    */
   contextUsage?: SessionContextUsagePort;
+  /**
+   * 请求组成快照（additive `sessions.composition`，q-context-composition）。
+   *
+   * 与 `contextUsage` 同一范式、同一个时间线读口：装配层用
+   * `src/session/context-composition.ts` 回扫 `context.composition` 事实事件。
+   * 显式 introspection RPC（低频按需），不做水位缓存。
+   * 缺省 = 方法返回 `not_supported`（旧装配行为一字不改、不抛错）。
+   */
+  composition?: SessionCompositionPort;
   /**
    * 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`，asm 注入）。
    *
@@ -2611,6 +2621,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       compactRuntime: () => runtime,
       // 会话级用量（additive）：缺省不带该字段，旧装配行为不变。
       ...(opts.contextUsage !== undefined ? { contextUsage: opts.contextUsage } : {}),
+      // 请求组成快照（additive q-context-composition）：缺省 = 方法 not_supported。
+      ...(opts.composition !== undefined ? { composition: opts.composition } : {}),
       // 「模型这一轮看到的系统消息」（additive）：缺省不带该字段，旧装配行为不变。
       ...(opts.systemContext !== undefined ? { systemContext: opts.systemContext } : {}),
       // 每张图的投递状态（additive 0.56）：缺省不带该字段，旧装配行为不变。

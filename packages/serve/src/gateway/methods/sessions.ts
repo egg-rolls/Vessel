@@ -95,6 +95,51 @@ export interface SessionContextUsagePort {
 }
 
 /**
+ * 请求组成快照（`sessions.composition`，q-context-composition，additive）。
+ *
+ * 一条 = 一次真实 LLM 请求的 `context.composition` 事件载荷：请求视图 token
+ * 按成分分解（固定键集，见 core `context/composition.ts`），供上下文优化分析
+ * 「窗口被什么占据」。`at` / `run_id` / `attempt` 定位是哪一次请求。
+ */
+export interface SessionCompositionSnapshot {
+  /** 事件时刻（Unix ms）。 */
+  at?: number;
+  run_id?: string;
+  /** 重试链里的第几次请求（1 起）。 */
+  attempt?: number;
+  model?: string;
+  /** 请求视图 token 上界（成分之和）。 */
+  total_tokens: number;
+  /** 锚点校正后的现值（与 `context_usage.used` 同口径）。 */
+  corrected_tokens?: number;
+  context_max?: number;
+  message_count: number;
+  /** 成分表：键集固定（system_prompt / compaction_summary / user_history /
+   * current_input / assistant / tool_results / tool_placeholders / notices /
+   * images / tools / overhead），值 = {tokens, count, share}。 */
+  components: Record<string, { tokens: number; count: number; share: number }>;
+  /** 占位对应原文的 token 上界（落盘窗口里取）。 */
+  cleared_original_tokens?: number;
+  /** 占位相对原文省下的 token。 */
+  cleared_saved_tokens?: number;
+}
+
+/**
+ * 会话级组成快照的注入口（装配层实现，见 `src/session/context-composition.ts`）。
+ *
+ * 与 `SessionContextUsagePort` 同一范式（事件日志尾窗派生），但这是**显式
+ * introspection RPC**（按需调用、低频），不做水位缓存：一次调用最多读一遍尾窗。
+ * 缺省 = `sessions.composition` 返回 `not_supported`（旧装配行为不变）。
+ */
+export interface SessionCompositionPort {
+  /** 最近 `limit` 条快照，**新 → 旧**；没有数据 = 空数组。 */
+  lookup(sessionId: string, limit: number): Promise<SessionCompositionSnapshot[]>;
+}
+
+/** `sessions.composition.limit` 硬顶（一次introspection 最多回看 100 次请求）。 */
+const MAX_COMPOSITION_SNAPSHOTS = 100;
+
+/**
  * 会话级「模型这一轮看到了什么系统消息」（`sessions.get.system_context`，additive）。
  *
  * 载荷 = core 的 `prompt.system_context` 事件（`PromptSystemContextPayload`）里能展示的
@@ -680,6 +725,12 @@ export interface SessionMethodsDeps {
    * 读取面（`SessionEventLog` 所在的 data-dir）由 app 侧注入。
    */
   contextUsage?: SessionContextUsagePort;
+  /**
+   * 会话级请求组成快照（additive `sessions.composition`，q-context-composition）：
+   * 由装配层从**事件日志尾窗**派生（`context.composition` 事实事件）。
+   * 缺省 = 方法返回 `not_supported`（旧装配行为一字不改、不抛错）。
+   */
+  composition?: SessionCompositionPort;
   /**
    * 会话级「模型这一轮看到了什么系统消息」（additive `system_context`）：由装配层从
    * **事件日志尾窗**派生（进程重启 / 回放窗口淘汰之后仍然能拿到 —— 事件不是 message，
@@ -1962,6 +2013,77 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           types,
           toolCallId,
         );
+      },
+    },
+    {
+      name: 'sessions.composition',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string', minLength: 1, maxLength: 256 },
+          // 回看最近几次请求的组成快照（新 → 旧）；缺省 1 = 只看最近一次。
+          limit: { type: 'integer', minimum: 1, maximum: MAX_COMPOSITION_SNAPSHOTS },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['snapshots'],
+        properties: {
+          snapshots: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['total_tokens', 'message_count', 'components'],
+              properties: {
+                at: { type: 'number' },
+                run_id: { type: 'string' },
+                attempt: { type: 'integer', minimum: 1 },
+                model: { type: 'string' },
+                total_tokens: { type: 'integer', minimum: 0 },
+                corrected_tokens: { type: 'integer', minimum: 0 },
+                context_max: { type: 'integer', minimum: 1 },
+                message_count: { type: 'integer', minimum: 0 },
+                components: {
+                  type: 'object',
+                  additionalProperties: {
+                    type: 'object',
+                    required: ['tokens', 'count', 'share'],
+                    properties: {
+                      tokens: { type: 'integer', minimum: 0 },
+                      count: { type: 'integer', minimum: 0 },
+                      share: { type: 'number', minimum: 0, maximum: 1 },
+                    },
+                  },
+                },
+                cleared_original_tokens: { type: 'integer', minimum: 0 },
+                cleared_saved_tokens: { type: 'integer', minimum: 0 },
+              },
+            },
+          },
+        },
+      },
+      handler: async (params) => {
+        const sessionId = stringParam(params, 'session_id');
+        const backend = requireSession();
+        // 存在性 / 授权与 sessions.get / sessions.events 同一条口径。
+        const exists = await sessionExists(backend, sessionId);
+        if (!exists) {
+          throw new RpcError('not_found', 'Session not found');
+        }
+        const port = deps.composition;
+        if (port === undefined) {
+          // 能力没注入就是没注入（同 sessions.events 的 timelineRead 口径）。
+          throw new RpcError('not_supported', 'Session composition is not configured');
+        }
+        const rawLimit = params.limit;
+        const limit =
+          typeof rawLimit === 'number' && Number.isFinite(rawLimit)
+            ? Math.min(Math.max(Math.floor(rawLimit), 1), MAX_COMPOSITION_SNAPSHOTS)
+            : 1;
+        const snapshots = await port.lookup(sessionId, limit);
+        return { snapshots };
       },
     },
     {

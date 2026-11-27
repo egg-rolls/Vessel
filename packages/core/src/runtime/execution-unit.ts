@@ -11,6 +11,7 @@ import {
   archiveReadbackAvailability,
   auditChainOf,
   buildCompactionIndexEntry,
+  buildRequestComposition,
   type CompactionIndexEntry,
   type ContextAnchor,
   ContextWindowExceededError,
@@ -1054,6 +1055,11 @@ export class ExecutionUnit {
    */
   private readonly toolResultWhitelist?: readonly ToolResultWhitelistRule[];
   /**
+   * 请求组成快照开关（q-context-composition）：缺省/true = 每次真实请求落一条
+   * `context.composition`（成分 token/条数/占比）；false = 不算不发。
+   */
+  private readonly compositionRecord: boolean;
+  /**
    * cadence='run' 的 per-run 首请求守卫：runId → 本 run 已观察过的 scope 集。
    * 环形上限 64（仿 runtime-notice-hook 的 injectedByRun）：长进程不无界增长。
    */
@@ -1084,6 +1090,7 @@ export class ExecutionUnit {
     this.visionSettings = opts.vision;
     this.envCadence = opts.envCadence;
     this.toolResultWhitelist = opts.toolResultWhitelist;
+    this.compositionRecord = opts.compositionRecord !== false;
     // 缺省走中枢薄封装：级别跟随进程级配置（不再以 VESSEL_DEBUG 定死 debug/noop）。
     this.logger = opts.logger ?? createStderrLogger();
     // 空闲 EU 也必须续租 BindingLease：仅靠 acquireSessionLease/ensureSessionLease
@@ -3939,6 +3946,35 @@ export class ExecutionUnit {
         // `run.failed` 的 envelope 因此是 `context_window_exceeded` + `{used, max}`。
         execution.phase = 'run';
         throw new ContextWindowExceededError(contextUsed, contextMax);
+      }
+
+      // q-context-composition：组成快照（additive 事实事件，落时间线）。闸通过才记 ——
+      // 记的是「真实发出的这一次请求」的构成；重试链每个 attempt 各一条（attempt 区分）。
+      // 成本 = 一遍逐条上界估算（与闸同量级）；`composition_record: false` 时整段跳过。
+      if (this.compositionRecord) {
+        const composition = buildRequestComposition(messages, {
+          tools: args.tools,
+          attachments: {
+            tokens: attachmentTokens,
+            count: summarizeAttachmentPlan(attachmentPlan).images,
+          },
+          correctedTokens: contextUsed,
+          ...(contextMax !== undefined ? { contextMax } : {}),
+          originalMessages: execution.workingContext.messages,
+          currentRunId: runId,
+        });
+        this.publishEvent({
+          type: 'context.composition',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: args.sessionId,
+            model: this.model,
+            attempt,
+            ...composition,
+          },
+          ts: Date.now(),
+        });
       }
 
       // 「模型这一轮看到的系统消息」（基底 system prompt + Self Card）紧贴着请求落一条

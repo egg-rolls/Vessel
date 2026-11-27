@@ -187,6 +187,7 @@ import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
 import { RUNTIME_NOTICE_HOOK } from './runtime/runtime-notice-hook';
 import { normalizeBridgeDeny } from './runtime/vessel-meta';
+import { createContextCompositionSource } from './session/context-composition';
 import { createContextUsageSource } from './session/context-usage';
 import { createImageDeliverySource } from './session/image-delivery';
 import { createSessionEventsSource } from './session/session-events';
@@ -1943,6 +1944,9 @@ async function runWithConfig(result: BootstrapResult) {
                 ? { contextWindowTokens: liveConfig.context.maxTokens }
                 : {}),
             }),
+            // 请求组成快照（additive `sessions.composition`，q-context-composition）：
+            // 同一个读口，取 `context.composition` 事实事件（每请求一条成分明细）。
+            composition: createContextCompositionSource({ tail: gatewayBundle.timelineLog }),
             // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
             // 同一个读口，只是取的是另一类事件（`prompt.system_context`）。事件不是 message，
             // 回放窗口淘汰 / 进程重启之后只有重新派生才能把会话页那张卡找回来。
