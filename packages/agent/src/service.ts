@@ -3134,7 +3134,8 @@ export class AgentServiceImpl implements AgentService {
       // 跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）声明。缺省不写 —— 人类正文的载荷
       // 与今天逐字节一致。
       ...(internal?.inputName !== undefined ? { input_name: internal.inputName } : {}),
-      // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
+      // 附件引用：只有路径 + 元信息，随消息进执行内核 → core Message.refs；
+      // inbox 副本同样保留（trackInbox / rotate quiet 两条落盘路都带），取走时不丢附件。
       ...(refs.length > 0 ? { refs } : {}),
     };
     // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交）。
@@ -3163,6 +3164,12 @@ export class AgentServiceImpl implements AgentService {
             // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
             // 缺了它卡头一样只剩 UUID（本来就知道的名字，没有理由丢掉）。
             ...(senderName !== undefined ? { from_name: senderName } : {}),
+            // 附件引用同样随 quiet 条目落盘：rotate 窗口收到的带图消息之后由新 body
+            // `inbox read` 取走 —— 这里不带 refs，附件就在落盘这一层丢了（与 trackInbox
+            // 同口径：存储保留，取走时随正文一并交出）。
+            ...(message.refs !== undefined && message.refs.length > 0
+              ? { refs: message.refs }
+              : {}),
           },
           { delivery: 'quiet' },
         );
@@ -5017,6 +5024,9 @@ export class AgentServiceImpl implements AgentService {
         : readRequiredString(input, 'origin_session_id');
     const originRunId =
       input.origin_run_id === undefined ? undefined : readRequiredString(input, 'origin_run_id');
+    // 附件引用与直接投递（runs.start / admit）同口径：形状归一后随投递带上 ——
+    // wake 落 inbox 副本、input 进 core Message.refs，两条路都不丢附件。
+    const refs = normalizeRefs(input.refs);
     if (wakes) {
       const outcome = await this.wakeDelivery(target, {
         from,
@@ -5024,6 +5034,7 @@ export class AgentServiceImpl implements AgentService {
         ...(conversationId !== undefined ? { conversationId } : {}),
         ...(originSessionId !== undefined ? { originSessionId } : {}),
         ...(batchKey !== undefined ? { batchKey } : {}),
+        ...(refs.length > 0 ? { refs } : {}),
       });
       return {
         queued: false,
@@ -5054,6 +5065,7 @@ export class AgentServiceImpl implements AgentService {
       ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
       ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
+      ...(refs.length > 0 ? { refs } : {}),
       strict: true,
     });
     // 消息身份直接取 admit 回填的 `message_id`（0.57 起恒有）；`run_id` 只在真起跑时才有
@@ -5430,6 +5442,9 @@ export class AgentServiceImpl implements AgentService {
         ...(message.conversation_id !== undefined
           ? { conversation_id: message.conversation_id }
           : {}),
+        // 附件引用随还原一并带回：这条之后由模型自己 read，丢了 refs 等于把带图
+        // 消息降级成纯文本（与 trackInbox 同口径）。
+        ...(message.refs !== undefined && message.refs.length > 0 ? { refs: message.refs } : {}),
       },
       { delivery: 'quiet' },
     );
@@ -5454,6 +5469,8 @@ export class AgentServiceImpl implements AgentService {
       originSessionId?: string;
       originTeamId?: string;
       batchKey?: string;
+      /** 附件引用（已归一）：随条目落盘，队头直投 / 模型 read 都带得上。 */
+      refs?: MessageRef[];
     },
   ): Promise<{
     message_id: string;
@@ -5503,6 +5520,9 @@ export class AgentServiceImpl implements AgentService {
         source: input.from,
         text: input.content,
         conversation_id: conversationId,
+        // 附件引用随 wake 条目落盘：notify 投递的带图消息与 input 投递同口径 ——
+        // 队头直投（dispatchInbox 读 head.refs）与模型 read 都靠这份副本带上附件。
+        ...(input.refs !== undefined && input.refs.length > 0 ? { refs: input.refs } : {}),
       },
       { delivery: 'wake' },
     );
@@ -5831,6 +5851,10 @@ export class AgentServiceImpl implements AgentService {
     // 供「编辑 / 删除 team 消息」级联定位收件箱副本。
     const teamMessageId =
       raw.team_message_id === undefined ? undefined : readRequiredString(raw, 'team_message_id');
+    // 附件引用（0.52）：只有路径 + 元信息。input 投递进 admit → core Message.refs；
+    // wake 投递随 inbox 条目落盘（队头直投 / 模型 read 都带得上）—— 两条路同口径，
+    // 不再「wake 不带引用」（那会让 notify 的带图消息在落盘层丢附件）。
+    const refs = normalizeRefs(input.refs);
     if (wakes) {
       try {
         const outcome = await this.wakeDelivery(target, {
@@ -5840,6 +5864,7 @@ export class AgentServiceImpl implements AgentService {
           ...(originSessionId !== undefined ? { originSessionId } : {}),
           ...(originTeamId !== undefined ? { originTeamId } : {}),
           ...(batchKey !== undefined ? { batchKey } : {}),
+          ...(refs.length > 0 ? { refs } : {}),
         });
         return {
           status: 'notified',
@@ -5883,9 +5908,6 @@ export class AgentServiceImpl implements AgentService {
       target,
     );
     const boundSession = this.registry.getBySession(to)?.id === target.id ? to : undefined;
-    // 附件引用（0.52）：只有路径，随投递进 admit → core Message.refs。
-    // wake / urgent 两种投递不带引用（它们不写新用户消息），因此只在下面 admit 分支透传。
-    const refs = normalizeRefs(input.refs);
     const attempt = async (agentId: string, sessionId?: string) =>
       this.admit({
         content,

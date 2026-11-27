@@ -1334,7 +1334,8 @@ const INBOX_TOOL_DESCRIPTION =
   'never consumes anything — use it to decide what to read. ' +
   'read without ids needs no list round: it directly takes the newest messages (default 3, ' +
   'returned oldest-first); pass limit for more or ids to pick exactly. ' +
-  'read TAKES messages: it returns the full text and consumes them, held (pending) ones included — for ' +
+  'read TAKES messages: it returns the full text (plus refs = attachment paths when present; view them ' +
+  'with the media tool) and consumes them, held (pending) ones included — for ' +
   'those it also cancels their queued run input, so the same text cannot arrive twice. it is irreversible: ' +
   'a message you read is never delivered again and never listed again. there is no peek-then-take: if you ' +
   'do not want to handle a message yet, do not read it (list is enough), and never act twice on one ' +
@@ -1615,6 +1616,10 @@ export function createInboxTool(options: {
           ts: message.ts,
           source: message.source,
           text: message.text,
+          // 附件引用随正文一并交出（与直接投递同口径）：丢了它，带图消息经 inbox
+          // 取走后模型就不知道有附件 —— 存储里有 refs 也等于没有。无附件时字段不出现，
+          // 旧结果形状逐字节不变（Web inbox-read 投影只认 id/text/source，additive 安全）。
+          ...(message.refs !== undefined && message.refs.length > 0 ? { refs: message.refs } : {}),
         })),
         ...(legacyClaim
           ? {
