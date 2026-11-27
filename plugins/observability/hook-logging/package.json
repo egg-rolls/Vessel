@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/hook-logging",
-  "version": "2.1.18",
+  "version": "2.1.23",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/plugin-usage",
-  "version": "2.1.18",
+  "version": "2.1.23",
   "description": "Usage, logs and model leaderboard for Vessel",
   "type": "module",
   "types": "./src/index.ts",
@@ -42,7 +42,7 @@
   "vessel": {
     "id": "usage",
     "name": "Usage",
-    "version": "2.1.18",
+    "version": "2.1.23",
     "description": "Usage, logs and model leaderboard",
     "side": "both",
     "entry": "src/index.ts",

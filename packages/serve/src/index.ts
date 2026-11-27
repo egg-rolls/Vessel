@@ -153,12 +153,20 @@ export {
 export {
   ATTACHMENT_LIST_DEFAULT_LIMIT,
   ATTACHMENT_LIST_MAX_LIMIT,
+  ATTACHMENT_PREVIEW_MAX_BYTES,
+  ATTACHMENT_STAGE_MAX_BYTES,
   type AttachmentListEntry,
   type AttachmentLister,
   type AttachmentListReason,
   type AttachmentListRequest,
   type AttachmentListResult,
   type AttachmentMethodsDeps,
+  type AttachmentPreviewer,
+  type AttachmentPreviewRequest,
+  type AttachmentPreviewResult,
+  type AttachmentStageRequest,
+  type AttachmentStageResult,
+  type AttachmentStager,
   createAttachmentMethods,
 } from './gateway/methods/attachments.js';
 export {

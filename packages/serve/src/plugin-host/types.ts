@@ -216,6 +216,14 @@ export interface PluginManifestContributions {
   pages?: PluginPageContribution[];
   panels?: PluginPanelContribution[];
   toolbar?: PluginToolbarContribution[];
+  /** file-ref-ux additive：输入框内嵌贡献（refs / drop / link 槽）。 */
+  composer?: Array<{
+    slot: string;
+    scheme?: string;
+    component?: string;
+    handler?: string;
+    order?: number;
+  }>;
   commands?: PluginCommandContribution[];
   rpc?: PluginRpcContribution[];
   events?: string[];
@@ -322,6 +330,14 @@ export interface PluginRenderContributions {
     icon?: PluginIconName;
     order: number;
     menu?: PluginToolbarMenu;
+  }>;
+  /** file-ref-ux additive：输入框内嵌贡献（refs / drop / link 槽；embed 组件/处理器）。 */
+  composer?: Array<{
+    slot: string;
+    scheme?: string;
+    component?: string;
+    handler?: string;
+    order: number;
   }>;
   commands: Array<{ name: string; title: string }>;
   /**

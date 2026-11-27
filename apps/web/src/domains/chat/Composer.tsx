@@ -1,9 +1,10 @@
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Tooltip } from '../../components/Tooltip';
-import { AutoGrowTextarea, Button } from '../../components/ui';
+import { Button, parseSegments, RichComposer, type RichComposerHandle } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
+import { useComposerExtensions } from '../plugins/composer-extensions';
 import type { AttachBrowseClient } from './AttachDialog';
 import { ChatDock } from './ChatDock';
 import { composerAttachBinding } from './ComposerAttach';
@@ -14,7 +15,7 @@ import {
   ComposerSendButton,
   focusComposerInputOnBlankClick,
   refIndexForId,
-  refsToAttachments,
+  refsToAttachmentsFiltered,
 } from './ComposerChrome';
 import { MemberModelSwitch, type MemberModelSwitchProps } from './MemberModelSwitch';
 import {
@@ -25,6 +26,7 @@ import {
   sessionRefBadges,
   sessionRefDescription,
 } from './session-ref';
+import { useComposerEditorPort } from './useComposerEditorPort';
 
 /**
  * 会话输入框卡片：卡片 > 引用区 > 字段容器 > (textarea + 工具栏)。
@@ -116,13 +118,34 @@ export function Composer({
   /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
   sessionId?: string;
 }) {
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputRef = useRef<RichComposerHandle | null>(null);
   const mountedRef = useRef(true);
   const wasSubmittingRef = useRef(submitting);
   const compositionEndRef = useRef(0);
-  /** 会话卡拖拽悬停在卡片上（drop 目标高亮）；只认 SESSION_REF_MIME。 */
+  /** 会话卡 / OS 文件拖拽悬停在卡片上（drop 目标高亮）。 */
   const [dropActive, setDropActive] = useState(false);
   const canSend = hasToken && connected && !disabled && !submitting && value.trim().length > 0;
+
+  // composer 内嵌扩展（插件贡献的原子卡片 scheme / OS 文件处理器）+ 编辑端口。
+  const { atomicSchemes, dropHandlers } = useComposerExtensions();
+  const port = useComposerEditorPort({
+    editorRef: inputRef,
+    refs: refs ?? [],
+    onAddRef,
+    onRemoveRef,
+  });
+
+  /** OS 文件（drop / 截图粘贴）→ 插件 drop 处理器（上传暂存 + 指针位置插卡）。 */
+  const dispatchFiles = (files: File[], offset: number | null) => {
+    if (port === undefined || dropHandlers.length === 0) return;
+    for (const handler of dropHandlers) {
+      try {
+        void handler(files, port, { offset });
+      } catch {
+        // 插件处理器异常不阻断输入框（宿主 fail-safe）。
+      }
+    }
+  };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -154,6 +177,8 @@ export function Composer({
       : t('chat.composer.placeholder');
 
   // 引用区唯一实现：MessageRef[] → 通用 chip 行（id 用 path），删除按 path 回写下标。
+  // 正文里已有原子卡片 token 的引用**不进 chip 行**（卡片即其输入框内视图，
+  // 删卡片 = 删 token，引用回落 chip 行；两条视图同一份 refs，不重复渲染）。
   // 会话引用 chip 并进同一行（id 用 `session-ref:<sessionId>`，与团队页 mention chip
   // 同一套「前缀分流」做法）：label = 会话名，徽章 = agent / 跨队 team / 跨节点 node。
   const sessionRefItems: ComposerAttachment[] = (sessionRefs ?? []).map((chip) => ({
@@ -164,7 +189,13 @@ export function Composer({
     description: sessionRefDescription(chip),
     badges: sessionRefBadges(chip, currentScope),
   }));
-  const refItems = [...refsToAttachments(refs ?? []), ...sessionRefItems];
+  const inlineCounts = new Map<string, number>();
+  for (const segment of parseSegments(value, atomicSchemes)) {
+    if (segment.type === 'atomic') {
+      inlineCounts.set(segment.target, (inlineCounts.get(segment.target) ?? 0) + 1);
+    }
+  }
+  const refItems = [...refsToAttachmentsFiltered(refs ?? [], inlineCounts), ...sessionRefItems];
   const removeRef = (id: string) => {
     if (id.startsWith('session-ref:')) {
       const sessionId = id.slice('session-ref:'.length);
@@ -198,9 +229,14 @@ export function Composer({
         }`}
         onClick={focusComposerInputOnBlankClick}
         onDragOver={(event) => {
-          // 只认会话引用 MIME：普通文本 / 文件拖入不接管，textarea 原生拖放不变。
-          if (onAddSessionRef === undefined) return;
-          if (!event.dataTransfer.types.includes(SESSION_REF_MIME)) return;
+          // 会话引用 MIME 照旧；OS 文件在有插件 drop 处理器时也接管（A2/A3）。
+          const isSessionRef =
+            onAddSessionRef !== undefined && event.dataTransfer.types.includes(SESSION_REF_MIME);
+          const isOsFiles =
+            port !== undefined &&
+            dropHandlers.length > 0 &&
+            event.dataTransfer.types.includes('Files');
+          if (!isSessionRef && !isOsFiles) return;
           event.preventDefault();
           event.dataTransfer.dropEffect = 'copy';
           setDropActive(true);
@@ -217,6 +253,16 @@ export function Composer({
         }}
         onDrop={(event) => {
           setDropActive(false);
+          // OS 文件优先交插件 drop 处理器（指针位置插卡）；会话引用 MIME 照旧。
+          if (event.dataTransfer.files.length > 0) {
+            if (port === undefined || dropHandlers.length === 0) return;
+            event.preventDefault();
+            const offset =
+              inputRef.current?.caretOffsetFromPoint(event.clientX, event.clientY) ?? null;
+            dispatchFiles(Array.from(event.dataTransfer.files), offset);
+            inputRef.current?.focus();
+            return;
+          }
           if (onAddSessionRef === undefined) return;
           const raw = event.dataTransfer.getData(SESSION_REF_MIME);
           if (raw === '') return;
@@ -279,19 +325,18 @@ export function Composer({
             )
           }
         >
-          <AutoGrowTextarea
+          <RichComposer
             ref={inputRef}
             className="composer-input"
-            rows={1}
             value={value}
-            onChange={(event) => onChange(event.target.value)}
+            onChange={onChange}
             onCompositionEnd={() => {
               compositionEndRef.current = Date.now();
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
               // Ctrl / Cmd + Enter 是显式发送和弦；裸 Enter 保持既有发送行为，
-              // Shift+Enter 仍换行。三条路径共用同一个 canSend 判定。
+              // Shift+Enter 仍换行（RichComposer 内部插入换行）。三条路径共用 canSend。
               const chord = event.ctrlKey || event.metaKey;
               if (!chord && event.shiftKey) return;
               event.preventDefault();
@@ -299,11 +344,16 @@ export function Composer({
               if (Date.now() - compositionEndRef.current < 50) return;
               if (canSend) onSubmit();
             }}
+            onPasteFiles={(files) => {
+              dispatchFiles(files, inputRef.current?.getCaretOffset() ?? null);
+            }}
             placeholder={placeholder}
             disabled={!hasToken || !connected || submitting || disabled}
             spellCheck={false}
             aria-label={t('chat.composer.input')}
             enterKeyHint="send"
+            atomicSchemes={atomicSchemes}
+            atomicPort={port}
           />
         </ComposerField>
       </div>

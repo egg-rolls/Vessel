@@ -249,6 +249,19 @@ export interface PluginContributionCommand {
   title?: string;
 }
 
+/** `contributes.composer[]` 的 wire 形状（file-ref-ux additive；旧 gateway 不返回）。 */
+export interface PluginContributionComposer {
+  /** 内嵌槽位：refs（输入框原子卡片）/ drop（OS 文件处理器）/ link（消息 link 增强器）。 */
+  slot: 'refs' | 'drop' | 'link';
+  /** refs / link 槽的 scheme（如 `vessel-ref`）。 */
+  scheme?: string;
+  /** refs / link 槽：embed 具名导出组件。 */
+  component?: string;
+  /** drop 槽：embed 具名导出处理器。 */
+  handler?: string;
+  order?: number;
+}
+
 export interface PluginContributions {
   /** CONTRACT-0.43 §2.11 E9：插件私有 i18n 字典；不合并进宿主 catalog。 */
   i18n?: PluginI18n;
@@ -258,6 +271,8 @@ export interface PluginContributions {
   panels?: PluginContributionPanel[];
   /** 输入框工具栏声明（additive）；插件只声明按钮，点击由宿主映射。 */
   toolbar?: PluginContributionToolbar[];
+  /** 输入框内嵌贡献（file-ref-ux additive）；refs / drop / link 槽。 */
+  composer?: PluginContributionComposer[];
   commands?: PluginContributionCommand[];
   /**
    * CONTRACT-0.43 E1：canonical 是裸方法名字符串数组（`["summary","logs"]`）。

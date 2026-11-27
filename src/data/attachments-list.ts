@@ -22,6 +22,7 @@ import { readdir, realpath, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
+import { attachmentStagingRoot } from '../../packages/core/src/index';
 import type {
   AttachmentListEntry,
   AttachmentLister,
@@ -82,9 +83,16 @@ function resolveBoundary(config: Record<string, unknown> | undefined): BoundaryS
   const baseCwd = configuredCwd ?? process.cwd();
   if (boundary.allowedRoots.length > 0) return { boundary, roots: boundary.allowedRoots, baseCwd };
   const fallbackRoot = canonicalPath(configuredCwd ?? os.homedir());
+  // 未配 allowed_roots 的安全默认根之外，附件暂存根也要可浏览/可引用
+  // （与 buildPathBoundary 的追加同一口径；dataDir 可能不在 home 下）。
+  const stagingRoot = canonicalPath(attachmentStagingRoot());
+  const roots = [fallbackRoot];
+  if (stagingRoot !== fallbackRoot && !stagingRoot.startsWith(fallbackRoot + path.sep)) {
+    roots.push(stagingRoot);
+  }
   return {
-    boundary: { ...boundary, allowedRoots: [fallbackRoot] },
-    roots: [fallbackRoot],
+    boundary: { ...boundary, allowedRoots: roots },
+    roots,
     baseCwd,
   };
 }

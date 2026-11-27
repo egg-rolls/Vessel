@@ -87,6 +87,36 @@ export function refIndexForId(refs: readonly MessageRef[], id: string): number {
 }
 
 /**
+ * 引用区条目（file-ref-ux）：跳过正文里已有原子卡片 token 的引用（按 path 计数），
+ * 但 chip id 的「第几次」仍按**完整 refs** 计——删除回写的是完整 refs 的下标。
+ */
+export function refsToAttachmentsFiltered(
+  refs: readonly MessageRef[],
+  inlineCounts: ReadonlyMap<string, number>,
+): ComposerAttachment[] {
+  const occurrence = new Map<string, number>();
+  const remaining = new Map(inlineCounts);
+  const items: ComposerAttachment[] = [];
+  for (const ref of refs) {
+    const seen = occurrence.get(ref.path) ?? 0;
+    occurrence.set(ref.path, seen + 1);
+    const left = remaining.get(ref.path) ?? 0;
+    if (left > 0) {
+      remaining.set(ref.path, left - 1);
+      continue;
+    }
+    items.push({
+      id: `${ref.path}#${seen}`,
+      label: refDisplayName(ref),
+      kind: refKindMarker(ref.kind),
+      note: refKindLabel(ref),
+      description: ref.path,
+    });
+  }
+  return items;
+}
+
+/**
  * 顶部引用区（唯一实现）：受控 `items` + `onRemove`，空数组不渲染（不占高）。
  * 会话页喂 `refsToAttachments(MessageRef[])`，团队页把 @ 提及 chip 也并进同一行。
  */
@@ -279,8 +309,15 @@ export function focusComposerInputOnBlankClick(event: MouseEvent<HTMLElement>): 
   if (!(target instanceof Element)) return;
   if (target.closest(COMPOSER_INTERACTIVE_SELECTOR) !== null) return;
   const input = event.currentTarget.querySelector('textarea');
-  if (!(input instanceof HTMLTextAreaElement) || input.disabled) return;
-  input.focus();
+  if (input instanceof HTMLTextAreaElement) {
+    if (!input.disabled) input.focus();
+    return;
+  }
+  // RichComposer（contenteditable）：同一份「点空白进输入框」语义。
+  const rich = event.currentTarget.querySelector('[data-rich-composer]');
+  if (rich instanceof HTMLElement && rich.getAttribute('aria-disabled') !== 'true') {
+    rich.focus();
+  }
 }
 
 /**
