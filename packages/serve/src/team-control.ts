@@ -44,6 +44,11 @@ export interface TeamMemberLike {
   name?: string;
   session_id: string;
   team_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：parent 链服务端真值（根 = 0），
+   * 与 `TeamMemberSummary.depth` 同值透传；老 gateway 缺省。
+   */
+  depth?: number;
   membership: 'present' | 'left';
   presence: 'live' | 'gone';
   /** 归属 principal；peer 缺省（Web 用于标记 peer / contractor） */

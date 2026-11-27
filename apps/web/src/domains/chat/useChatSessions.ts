@@ -28,6 +28,7 @@ import { findMainSession, type MainSession, primaryBodySessions } from './main-s
 import { closedAgentSessionIds, sessionAgentAddresses } from './SessionList';
 import {
   agentAddressesById as agentAddressesByIdOf,
+  sessionAgentDepths,
   sessionAgentLabels,
   sessionAgentRetiredLabels,
 } from './session-agent-labels';
@@ -130,6 +131,9 @@ export function useChatSessions({
   // agent id → 节点地址（0.52）：让旧 body / 非 primary 会话也能显示 `名字@节点:team`，
   // 而不是退化成 `名字@primary`（用户报的 `main@primary` 正是这一条）。
   const agentAddressesById = useMemo(() => agentAddressesByIdOf(rosters), [rosters]);
+  // 会话 → 树深度（depth-color D1）：roster 反查档，与地址同一条派生链。
+  // 主路径是 session.agent.depth（服务端绑定）；这里补老 gateway 无 agent 字段时的回落。
+  const agentDepths = useMemo(() => sessionAgentDepths(rosters, sessions), [rosters, sessions]);
   // 归属到已停用 agent 的会话只做标记、不做过滤：会话是用户自己的历史，隐藏等于
   // 把找回入口弄丢（0.51 裁决）。反查不到（别的节点 / 窗口截断 / 旧 gateway）→ 不标。
   const closedAgentSessions = useMemo(() => closedAgentSessionIds(rosters), [rosters]);
@@ -513,6 +517,7 @@ export function useChatSessions({
     activeServerSearch,
     agentAddresses,
     agentAddressesById,
+    agentDepths,
     agentLabels,
     agentRetiredLabels,
     closedAgentSessions,

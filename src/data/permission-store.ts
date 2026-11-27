@@ -7,20 +7,24 @@
  * 本模块属于应用层：core 不感知 YAML；TUI 选 "always" 时由 `src/bootstrap.ts`
  * 自动调用 `addAutoApproveRule()`，也可直接调用本模块的显式接口（如未来 `/permissions`）。
  *
+ * q-env-card-visibility-fix（缺口B）：读写原语改用 `@vessel-agent/config` 的
+ * `readUserConfigRoot` / `writeUserConfigRoot`，写操作统一包 `withConfigLock`
+ * （与 `src/config/ui-settings.ts` / `src/plugin/plugin-config.ts` 同一把跨进程单写锁）。
+ * 此前本模块自带 readFileSync/writeFileSync 全根 YAML 往返写、不走锁 —— 与用户
+ * toggle 的 `config.set` 写同一份文件时，「读 → 写」毫秒窗口互相覆盖（toggle
+ * false→true 被旧根快照盖回）。现在「读 → 改 → 写」整体在锁内，覆盖窗口消失。
+ * 读侧不加锁：写是临时文件 + rename 原子替换，读到的永远是旧/新完整文件之一。
+ * API 因此变为 async（调用方：cli.ts 写盘面 / bootstrap.ts 权限控制面，均已随之 await）。
+ *
  * @module vessel/permission-store
  */
 
 import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import * as path from 'node:path';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { getUserConfigPath } from '../../packages/config/src/index';
+  getUserConfigPath,
+  readUserConfigRoot,
+  withConfigLock,
+  writeUserConfigRoot,
+} from '../../packages/config/src/index';
 
 /** 存储选项 */
 export interface PermissionStoreOptions {
@@ -40,16 +44,16 @@ export interface ToolPolicySnapshot {
   neverAutoApprove: string[];
 }
 
-/** 复用的权限规则存储 */
+/** 复用的权限规则存储（q-env-card-visibility-fix 起写读均 async：写走 withConfigLock） */
 export interface PermissionStore {
-  list(): string[];
-  add(tool: string): string[];
-  remove(tool: string): string[];
-  set(rules: string[]): string[];
+  list(): Promise<string[]>;
+  add(tool: string): Promise<string[]>;
+  remove(tool: string): Promise<string[]>;
+  set(rules: string[]): Promise<string[]>;
   /** 两个数组的快照（`auto` / `ask` / `never` 的判定来源） */
-  policy(): ToolPolicySnapshot;
+  policy(): Promise<ToolPolicySnapshot>;
   /** 三档策略写回：同时维护两个数组；返回写入后的快照 */
-  setPolicy(tool: string, policy: ToolPolicy): ToolPolicySnapshot;
+  setPolicy(tool: string, policy: ToolPolicy): Promise<ToolPolicySnapshot>;
 }
 
 /** 工具名：非空、无控制字符 */
@@ -68,38 +72,6 @@ function resolveConfigPath(options: PermissionStoreOptions): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** 读取 YAML 根对象；不存在/空文档返回 {}；根不是对象时抛错 */
-function readRoot(configPath: string): Record<string, unknown> {
-  if (!existsSync(configPath)) return {};
-  const content = readFileSync(configPath, 'utf-8');
-  const parsed: unknown = parseYaml(content);
-  if (parsed === null || parsed === undefined) return {};
-  if (!isRecord(parsed)) {
-    throw new Error(`permission_store_invalid_config: ${configPath} must contain a YAML object`);
-  }
-  return parsed;
-}
-
-/** 原子写入（同目录临时文件 + rename）；保留文件其它内容 */
-function writeRoot(configPath: string, root: Record<string, unknown>): void {
-  mkdirSync(path.dirname(configPath), { recursive: true });
-  const body = stringifyYaml(root, { lineWidth: 0 });
-  const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
-  writeFileSync(tmp, body, { encoding: 'utf-8', mode: 0o600 });
-  try {
-    renameSync(tmp, configPath);
-  } catch (error) {
-    // Windows 上目标被占用时 rename 可能失败：清理临时文件后显式替换。
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // 忽略清理失败
-    }
-    if (!existsSync(configPath)) throw error;
-    writeFileSync(configPath, body, { encoding: 'utf-8', mode: 0o600 });
-  }
 }
 
 /** 从 permission 块读取规则（兼容 auto_approve / autoApprove） */
@@ -132,10 +104,16 @@ function normalizeRules(rules: readonly string[]): string[] {
   return out;
 }
 
-/** 写入规则；permission 块其它键保留 */
-function writeRules(configPath: string, rules: readonly string[]): string[] {
+/**
+ * 锁内写规则：root 是**同一把锁里刚读到的**快照（读 → 改 → 写不隔锁），
+ * permission 块其它键保留。调用方必须已持有 withConfigLock。
+ */
+async function writeRulesInLock(
+  configPath: string,
+  root: Record<string, unknown>,
+  rules: readonly string[],
+): Promise<string[]> {
   const normalized = normalizeRules(rules);
-  const root = readRoot(configPath);
   const existing = root.permission;
   if (existing !== undefined && existing !== null && !isRecord(existing)) {
     throw new Error('permission_store_invalid_config: permission must be a YAML object');
@@ -145,7 +123,7 @@ function writeRules(configPath: string, rules: readonly string[]): string[] {
   delete permission.autoApprove;
   permission.auto_approve = normalized;
   root.permission = permission;
-  writeRoot(configPath, root);
+  await writeUserConfigRoot(configPath, root);
   return normalized;
 }
 
@@ -219,11 +197,17 @@ export function applyToolPolicy(
   return { autoApprove, neverAutoApprove };
 }
 
-/** 写两个数组；permission 块其它键保留，统一写 snake_case */
-function writePolicy(configPath: string, snapshot: ToolPolicySnapshot): ToolPolicySnapshot {
+/**
+ * 锁内写两个数组：root 是同一把锁里刚读到的快照；permission 块其它键保留，
+ * 统一写 snake_case。调用方必须已持有 withConfigLock。
+ */
+async function writePolicyInLock(
+  configPath: string,
+  root: Record<string, unknown>,
+  snapshot: ToolPolicySnapshot,
+): Promise<ToolPolicySnapshot> {
   const autoApprove = normalizeRules(snapshot.autoApprove);
   const neverAutoApprove = normalizeRules(snapshot.neverAutoApprove);
-  const root = readRoot(configPath);
   const existing = root.permission;
   if (existing !== undefined && existing !== null && !isRecord(existing)) {
     throw new Error('permission_store_invalid_config: permission must be a YAML object');
@@ -235,50 +219,66 @@ function writePolicy(configPath: string, snapshot: ToolPolicySnapshot): ToolPoli
   permission.auto_approve = autoApprove;
   permission.never_auto_approve = neverAutoApprove;
   root.permission = permission;
-  writeRoot(configPath, root);
+  await writeUserConfigRoot(configPath, root);
   return { autoApprove, neverAutoApprove };
 }
 
 /** 读取当前免确认工具名（文件不存在返回 []） */
-export function listAutoApproveRules(options: PermissionStoreOptions = {}): string[] {
-  const configPath = resolveConfigPath(options);
-  return readRules(readRoot(configPath));
+export async function listAutoApproveRules(
+  options: PermissionStoreOptions = {},
+): Promise<string[]> {
+  return readRules(await readUserConfigRoot(resolveConfigPath(options)));
 }
 
 /** 添加一条 "always" 规则（幂等）；返回写入后的完整列表 */
-export function addAutoApproveRule(tool: string, options: PermissionStoreOptions = {}): string[] {
+export async function addAutoApproveRule(
+  tool: string,
+  options: PermissionStoreOptions = {},
+): Promise<string[]> {
   const name = assertToolName(tool);
   const configPath = resolveConfigPath(options);
-  const rules = readRules(readRoot(configPath));
-  if (!rules.includes(name)) rules.push(name);
-  return writeRules(configPath, rules);
+  return withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const rules = readRules(root);
+    if (!rules.includes(name)) rules.push(name);
+    return writeRulesInLock(configPath, root, rules);
+  });
 }
 
 /** 删除一条规则（不存在时 no-op）；返回写入后的完整列表 */
-export function removeAutoApproveRule(
+export async function removeAutoApproveRule(
   tool: string,
   options: PermissionStoreOptions = {},
-): string[] {
+): Promise<string[]> {
   const name = assertToolName(tool);
   const configPath = resolveConfigPath(options);
-  const rules = readRules(readRoot(configPath)).filter((rule) => rule !== name);
-  return writeRules(configPath, rules);
+  return withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const rules = readRules(root).filter((rule) => rule !== name);
+    return writeRulesInLock(configPath, root, rules);
+  });
 }
 
 /** 整体替换规则；返回规范化后的列表 */
-export function setAutoApproveRules(
+export async function setAutoApproveRules(
   rules: readonly string[],
   options: PermissionStoreOptions = {},
-): string[] {
-  return writeRules(resolveConfigPath(options), rules);
+): Promise<string[]> {
+  const configPath = resolveConfigPath(options);
+  return withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    return writeRulesInLock(configPath, root, rules);
+  });
 }
 
 /**
  * 读取两个规则数组（文件 / key 不存在时 autoApprove 为空，neverAutoApprove 返回
  * 运行时默认 `['agent.close']`；显式配置优先）。
  */
-export function readToolPolicies(options: PermissionStoreOptions = {}): ToolPolicySnapshot {
-  const root = readRoot(resolveConfigPath(options));
+export async function readToolPolicies(
+  options: PermissionStoreOptions = {},
+): Promise<ToolPolicySnapshot> {
+  const root = await readUserConfigRoot(resolveConfigPath(options));
   return {
     autoApprove: readRules(root),
     neverAutoApprove: readNeverRules(root),
@@ -287,17 +287,25 @@ export function readToolPolicies(options: PermissionStoreOptions = {}): ToolPoli
 
 /**
  * 三档策略写回（契约 §7）。工具名由调用方校验存在性；这里只校验形状。
+ * 读 → 判定 → 写整体在同一把 withConfigLock 内（此前读与写分离，并发 toggle
+ * 的写入会被旧根快照覆盖 —— 缺口B 的病灶）。
  * @returns 写入后的两个数组
  */
-export function setToolPolicy(
+export async function setToolPolicy(
   tool: string,
   policy: ToolPolicy,
   options: PermissionStoreOptions = {},
-): ToolPolicySnapshot {
+): Promise<ToolPolicySnapshot> {
   const name = assertToolName(tool);
   const configPath = resolveConfigPath(options);
-  const current = readToolPolicies({ configPath });
-  return writePolicy(configPath, applyToolPolicy(current, name, policy));
+  return withConfigLock(configPath, async () => {
+    const root = await readUserConfigRoot(configPath);
+    const current: ToolPolicySnapshot = {
+      autoApprove: readRules(root),
+      neverAutoApprove: readNeverRules(root),
+    };
+    return writePolicyInLock(configPath, root, applyToolPolicy(current, name, policy));
+  });
 }
 
 /** 构造可注入的存储对象（TUI / 测试用） */

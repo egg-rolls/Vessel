@@ -23,6 +23,22 @@
   margin: 0 0 0.7em;
 }
 
+/* base.css 全局把 ul 重置成 list-style:none（导航列表用），markdown 正文里
+   必须显式恢复 marker，否则无序列表 / 嵌套子 bullet 不显示符号。 */
+.markdown ul {
+  list-style: disc;
+}
+
+.markdown ol {
+  list-style: decimal;
+}
+
+/* 嵌套子列表贴着父项正文，不再吃一整个块级下边距。 */
+.markdown li > ul,
+.markdown li > ol {
+  margin: 0.2em 0 0;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,

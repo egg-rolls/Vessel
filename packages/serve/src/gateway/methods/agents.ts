@@ -143,12 +143,13 @@ function publicAgent(entry: AgentRegistryEntry): Record<string, unknown> {
 
 /**
  * owner viewer 的 `agents.list` 条目：agentInfoSchema 的超集（additive）。
- * `depth` 是注册表字段，成员没有嵌套深度，统一为 0。
+ * `depth` 是注册表字段：成员树深度由服务端 parent 链解析（depth-color D1，
+ * `MemberStatus.depth` 透传）；老适配器缺省时回落 0（旧行为）。
  */
 function publicMember(entry: AgentStatusLike): Record<string, unknown> {
   return {
     id: entry.id,
-    depth: 0,
+    depth: entry.depth ?? 0,
     state: entry.state,
     session_id: entry.session_id,
     ...(entry.name !== undefined ? { name: entry.name } : {}),

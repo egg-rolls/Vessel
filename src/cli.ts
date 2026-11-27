@@ -1797,8 +1797,9 @@ async function runWithConfig(result: BootstrapResult) {
             bridgeDeny,
           };
         },
-        setToolPolicy: ({ tool, policy }) => {
-          const written = setToolPolicy(tool, policy, { configPath: hotApplyConfigPath });
+        // q-env-card-visibility-fix：写盘走 withConfigLock（async），与 config.set 同一把锁。
+        setToolPolicy: async ({ tool, policy }) => {
+          const written = await setToolPolicy(tool, policy, { configPath: hotApplyConfigPath });
           // 写盘成功后同步活配置（重新赋值而非原地修改），让随后的 config.get 返回新数组。
           liveConfig = {
             ...liveConfig,

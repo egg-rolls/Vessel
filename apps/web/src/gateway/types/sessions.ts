@@ -25,6 +25,11 @@ export interface SessionInfo {
     state: string;
     presence?: 'live' | 'gone';
     primary: boolean;
+    /**
+     * Additive (depth-color D1)：成员树深度（parent 链服务端真值，根 = 0）。
+     * 会话卡地址子标题色相轮转的主路径；老 gateway 缺省 ⇒ roster 反查 / 不着色。
+     */
+    depth?: number;
   };
 }
 

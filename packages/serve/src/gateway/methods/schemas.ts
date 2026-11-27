@@ -491,6 +491,9 @@ export const sessionInfoSchema = {
         state: { type: 'string' },
         presence: { type: 'string', enum: ['live', 'gone'] },
         primary: { type: 'boolean' },
+        // Additive (depth-color D1)：成员树深度（parent 链服务端真值，根 = 0）。
+        // 老 gateway 不返回 ⇒ 前端回落 roster 反查 / 不着色。
+        depth: { type: 'integer', minimum: 0 },
       },
     },
   },
@@ -821,6 +824,9 @@ export const teamMemberSchema = {
     last_seen: { type: 'number' },
     // 显式模型 pin（只读 additive，model-registry A+B）；缺省 = 跟随节点默认。
     model: { type: 'string' },
+    // Additive (depth-color D1)：成员树深度（parent 链服务端真值，根 = 0）；
+    // 与 session.agent.depth / agents.list 同一 resolver。老 gateway 缺省。
+    depth: { type: 'integer', minimum: 0 },
     body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
   },
 };

@@ -80,6 +80,16 @@
   color: var(--accent-ink);
 }
 
+/* depth-color：带深度变量（data-depth + 内联 --depth-h）的地址档按树深度着色——
+   OKLCH 固定 L/C（主题级联，tokens.css）、色相黄金角轮转（per-card --depth-h）。
+   只在 @supports 内：不支持 oklch 的浏览器规则不生效 ⇒ 保持 accent-ink（零回归）。
+   退役 / 徽标灰档不加变量——状态语义优先（D3）；L/C 值域护栏保证全色相 ≥4.5:1。 */
+@supports (color: oklch(0.5 0.1 180)) {
+  .session-agent.session-agent-address[data-depth] {
+    color: oklch(var(--depth-l) var(--depth-c) var(--depth-h));
+  }
+}
+
 /* primary body 徽标退成中性灰，与其它元信息同级；用 muted 而非更弱的 faint，
    10px 小字仍可读（BodyHistory 的 primary Badge 同步用 muted）。 */
 .session-agent.session-agent-primary {

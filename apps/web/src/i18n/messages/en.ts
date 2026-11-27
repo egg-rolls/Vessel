@@ -219,6 +219,29 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.emptyResponseNudge.title': 'Empty-response nudge text',
   'settings.item.emptyResponseNudge.desc':
     'Custom nudge injected as a user message. Leave unset to keep the built-in wording.',
+  // depth-color: session-card address subtitle tree-depth coloring (Visual → depthColor group).
+  'settings.group.depthColor': 'Depth color',
+  'settings.item.depthColorEnabled.title': 'Color by tree depth',
+  'settings.item.depthColorEnabled.desc':
+    'Rotate the hue of the session-card address subtitle (name@node:team) by agent tree depth (root=0, +1 per level); off = all back to the theme accent. Retired bodies / primary badges stay grey (state semantics first).',
+  'settings.item.depthColorRootHue.title': 'Root hue',
+  'settings.item.depthColorRootHue.desc':
+    'Hue of the root (depth 0) address, degrees [0, 360). Default 172.6 = current brand accent hue (zero regression in light).',
+  'settings.item.depthColorHueStep.title': 'Hue step per level',
+  'settings.item.depthColorHueStep.desc':
+    'Hue increment per deeper level, degrees [0, 360]. Default 137.508 ≈ golden angle (360/φ²): irrational rotation never repeats exactly, endless rotation without saturation; 0/360 = no rotation (monochrome).',
+  'settings.item.depthColorLightnessLight.title': 'Light lightness (OKLCH L)',
+  'settings.item.depthColorLightnessLight.desc':
+    'Light-theme perceptual lightness [0.30, 0.51]; upper bound locked by WCAG contrast evidence (all hues ≥4.5:1). Default 0.4714 = exact L of the current accent.',
+  'settings.item.depthColorChromaLight.title': 'Light chroma (OKLCH C)',
+  'settings.item.depthColorChromaLight.desc':
+    'Light-theme chroma [0, 0.37]; out-of-gamut hues are automatically desaturated by the browser (L/H preserved). Default 0.0887 = exact C of the current accent.',
+  'settings.item.depthColorLightnessDark.title': 'Dark lightness (OKLCH L)',
+  'settings.item.depthColorLightnessDark.desc':
+    'Dark-theme perceptual lightness [0.73, 0.95]; lower bound locked by full-chroma WCAG contrast evidence (≥4.5:1). Default 0.85 (distinctiveness first).',
+  'settings.item.depthColorChromaDark.title': 'Dark chroma (OKLCH C)',
+  'settings.item.depthColorChromaDark.desc':
+    'Dark-theme chroma [0, 0.37]; default 0.13. Higher chroma = more vivid rotation; out-of-gamut hues are automatically desaturated.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',
@@ -2257,6 +2280,17 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'Left to right: send plane (16px), paperclip (14px, same ink area), disabled send. Hover the enabled ones to see the hover tone — the box never changes, only the icon color.',
   'designLab.preview.composerIcon.sampleLabel': 'Sample {tone} icon button',
   'designLab.preview.composerIcon.title': 'Composer icon button',
+  'designLab.preview.depthColor.title': 'Depth palette',
+  'designLab.preview.depthColor.desc':
+    'Tree-depth coloring for the session-card address subtitle: hue = (root hue + depth × step) mod 360 (golden-angle rotation, endless without saturation), OKLCH fixed L/C with native browser gamut mapping. Reads current settings; the two rows are light/dark (depth 0–9) for before/after comparison while tuning.',
+  'designLab.preview.depthColor.lightRow': 'Light',
+  'designLab.preview.depthColor.darkRow': 'Dark',
+  'designLab.preview.depthColor.depthLabel': 'depth {depth}',
+  'designLab.preview.depthColor.params':
+    'root hue {rootHue}° · step {hueStep}° · L/C light {lLight}/{cLight} · dark {lDark}/{cDark}',
+  'designLab.preview.depthColor.disabled':
+    'Depth color is off (address slots all use the theme accent)',
+  'designLab.preview.depthColor.swatchLabel': 'depth {depth}, hue {hue}°',
   'designLab.preview.confirm.body': 'Sample copy: confirming only closes the dialog.',
   'designLab.preview.confirm.dangerBody':
     'Sample copy: a danger primary button that needs an explicit confirmation.',

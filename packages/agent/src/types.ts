@@ -127,6 +127,11 @@ export interface MemberStatus {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：parent 链解析的服务端真值（根 = 0）。
+   * 单一事实源 = `registry.ts#memberDepths`；旧快照 / 老 gateway 缺省时消费方回落。
+   */
+  depth?: number;
   /** 成员角色（v3；由持久化记录派生） */
   role: AgentRole;
   /**
@@ -1880,6 +1885,11 @@ export interface AgentService {
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
   /**
+   * 成员树深度（depth-color D1）：parent 链单一事实源（根 = 0），与 `list` 投影同口径。
+   * 供装配层注入执行内核 self-card 的 `depthFor`；未知成员 → undefined。同步只读。
+   */
+  memberDepth(memberId: string): number | undefined;
+  /**
    * 历史视图（0.53）：**只读**列出已释放成员（`membership='left'` 或 `state='closed'`）。
    *
    * 单独立一个方法而不是给 `list` 加开关，是因为两条路线的语义正相反：`list` 是
@@ -2122,6 +2132,11 @@ export interface TeamMemberSummary {
   session_id: string;
   /** 所属 Team（unbound 时缺省） */
   team_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：与 `MemberStatus.depth` 同值透传
+   * （parent 链服务端真值，根 = 0）；roster 反查档的 depth 源。
+   */
+  depth?: number;
   membership: MemberMembership;
   presence: MemberPresence;
   /** 成员角色（roster 只展示 member / temporary） */

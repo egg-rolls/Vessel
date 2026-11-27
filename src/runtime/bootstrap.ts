@@ -2318,10 +2318,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const permissionsControl = {
     list: async (): Promise<string[]> => listAutoApproveRules({ configPath: permissionConfigPath }),
     add: async (toolName: string): Promise<void> => {
-      addAutoApproveRule(toolName, { configPath: permissionConfigPath });
+      await addAutoApproveRule(toolName, { configPath: permissionConfigPath });
     },
     remove: async (toolName: string): Promise<void> => {
-      removeAutoApproveRule(toolName, { configPath: permissionConfigPath });
+      await removeAutoApproveRule(toolName, { configPath: permissionConfigPath });
     },
     path: (): string => permissionConfigPath,
   };
@@ -2355,15 +2355,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       if (requestId !== undefined) pendingTools.delete(requestId);
       if (tool === undefined || data.remember !== true) return;
 
-      try {
-        addAutoApproveRule(tool, { configPath: permissionConfigPath });
-      } catch (error) {
+      // q-env-card-visibility-fix：写盘改走 withConfigLock（async）。事件回调是同步的，
+      // 失败用 .catch 收口（原 try/catch 只能接同步抛错，async 化后会漏成 unhandled rejection）。
+      addAutoApproveRule(tool, { configPath: permissionConfigPath }).catch((error) => {
         console.warn(
           `⚠ Failed to persist permission rule for "${tool}": ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
-      }
+      });
     });
   }
 

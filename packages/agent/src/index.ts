@@ -79,6 +79,7 @@ export {
   canTransition,
   type MemberRecord,
   MemberRegistry,
+  memberDepths,
   toMemberStatus,
   toPersistedRecord,
   toRuntimeMember,

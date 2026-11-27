@@ -86,6 +86,11 @@ export interface AgentSummary {
    * `domains/pending/attribution.ts`。
    */
   parent_id?: string;
+  /**
+   * Additive (depth-color D1)：成员树深度（parent 链服务端真值，根 = 0）。
+   * agents.list publicMember 下发（修硬编码 0）；roster 反查档的 depth 源。
+   */
+  depth?: number;
 }
 
 export interface AgentCreateInput {
