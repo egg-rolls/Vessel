@@ -4,8 +4,10 @@
  * 目标只有一条：**进程退出前，已收下的活全部自然跑完，不白跑、不打断**。
  * 顺序是硬要求，不能换：
  *
- *   1. fence 准入  —— 先关闸：新的 runs.start 立刻被拒（gateway_restarting），
- *                     人类输入拒绝、agent→agent 投递只进 durable inbox（语义 queued）；
+ *   1. fence 准入  —— 先关闸：新的投递（人类 runs.start 与 agent→agent）只进
+ *                     durable inbox（语义 deferred(draining)，q-inbox-ux-fix：不再
+ *                     拒绝人类输入，正文持久化、node 回来重投）；无 durable inbox
+ *                     才拒（gateway_restarting）。
  *                     fence 之后 live run 集合只减不增（没有任何路径再起新 run）。
  *   2. quiesce 等待 —— **不限时**等所有活跃 run 自然到达终态（completed/failed/cancelled）：
  *                     判定集 = 执行面 activeRunSnapshot ∪ scheduler 的 queued+running

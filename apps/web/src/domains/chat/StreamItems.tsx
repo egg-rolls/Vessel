@@ -918,10 +918,18 @@ export function QueuedNotice({
       meta={identity === undefined ? undefined : <span className="text-amber">{identity}:</span>}
     >
       {/* 正文是用户自己写的那条消息，压在琥珀底上也要读得清：用 ink，不用 muted。
-          内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。 */}
-      <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-ink">
-        {item.input}
-      </p>
+          内衬由 `.notice-block > .event-block-body` 给，这里不再补 px。
+          q-inbox-ux-fix（展开态固定高度 + 滚动）：展开本意是看**完整**正文，不能截断，
+          但也不能让一条长消息把卡片撑到几百像素高、挤爆会话布局。所以正文套一个
+          `max-h-[240px] overflow-y-auto` 的滚动容器：短消息自然高（<240px 不出滚动条），
+          长消息封顶 240px、纵向滚动看全文（overscroll-contain 防止滚到底后把外层会话
+          滚动链带着走）。动作键在容器**外**下方，始终可见、不随正文滚走。收起态仍是
+          卡头单行预览（summary），不受影响。 */}
+      <div className="max-h-[240px] min-w-0 overflow-y-auto overscroll-contain">
+        <p className="m-0 min-w-0 break-words whitespace-pre-wrap wrap-anywhere text-sm text-ink">
+          {item.input}
+        </p>
+      </div>
       {/* 两颗键**在正文之后**（用户裁决：工具栏属于「对这条消息的操作」，读它的人先看字
           再动手）。不进卡头、也不走 StreamCard 的 `actions` 槽 —— 那个槽渲染在卡头与展开体
           之间，键就跑到正文上方去了。折叠态 `<details>` 只渲染 `<summary>`，`actions` 槽与
