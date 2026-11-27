@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useOptionalToast } from '../../components/ToastProvider';
-import { Badge, Button, Select } from '../../components/ui';
+import { Badge, Button, KeyValueList, Section, Select } from '../../components/ui';
 import type { AgentUpdateInput, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import { teamListData, useTeamStore } from '../../stores/teamStore';
@@ -86,58 +86,74 @@ export function RoleConversionSection({
   };
 
   return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-md font-semibold text-ink">{t('team.role.convert')}</h2>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-muted">{t('team.role.label')}</span>
-        <Badge>{t(roleLabelKey(role))}</Badge>
-      </div>
-      {needsTeam && (
-        <label
-          className="flex flex-wrap items-center gap-2 text-sm text-muted"
-          htmlFor="member-role-team"
-        >
-          <span>{t('team.role.memberTeam')}</span>
-          <Select
-            id="member-role-team"
-            value={targetTeamId}
-            onChange={(event) => setTargetTeamId(event.target.value)}
-            aria-label={t('team.role.memberTeam')}
-            disabled={!canWrite || busy !== null}
+    <Section
+      title={t('team.role.convert')}
+      actions={
+        <div className="ml-auto flex flex-wrap gap-2">
+          {actions.map((target) => (
+            <Button
+              key={target}
+              size="small"
+              disabled={!canWrite || busy !== null}
+              onClick={() => {
+                void convert(target);
+              }}
+            >
+              {busy === target ? t('team.role.busy') : t(CONVERSION_LABEL_KEYS[target])}
+            </Button>
+          ))}
+        </div>
+      }
+    >
+      <div className="flex flex-col gap-2.5">
+        <KeyValueList
+          className="mt-0 gap-y-2.5"
+          items={[
+            {
+              key: 'role',
+              label: t('team.role.label'),
+              value: <Badge>{t(roleLabelKey(role))}</Badge>,
+            },
+            ...(needsTeam
+              ? [
+                  {
+                    key: 'team',
+                    label: t('team.role.memberTeam'),
+                    value: (
+                      <Select
+                        id="member-role-team"
+                        value={targetTeamId}
+                        onChange={(event) => setTargetTeamId(event.target.value)}
+                        aria-label={t('team.role.memberTeam')}
+                        disabled={!canWrite || busy !== null}
+                      >
+                        {teamOptions.length === 0 && (
+                          <option value={teamId}>
+                            {teams.find((team) => team.team_id === teamId)?.name || teamId}
+                          </option>
+                        )}
+                        {teamOptions.map((team) => (
+                          <option key={team.team_id} value={team.team_id}>
+                            {team.name || team.team_id}
+                          </option>
+                        ))}
+                      </Select>
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
+        {!hasToken && <p className="m-0 text-xs text-muted">{t('common.writesDisabled')}</p>}
+        {error && (
+          <p
+            className="m-0 rounded-sm bg-danger-soft px-2.5 py-1.5 text-xs text-danger"
+            role="alert"
           >
-            {teamOptions.length === 0 && (
-              <option value={teamId}>
-                {teams.find((team) => team.team_id === teamId)?.name || teamId}
-              </option>
-            )}
-            {teamOptions.map((team) => (
-              <option key={team.team_id} value={team.team_id}>
-                {team.name || team.team_id}
-              </option>
-            ))}
-          </Select>
-        </label>
-      )}
-      <div className="flex flex-wrap gap-2">
-        {actions.map((target) => (
-          <Button
-            key={target}
-            size="small"
-            disabled={!canWrite || busy !== null}
-            onClick={() => {
-              void convert(target);
-            }}
-          >
-            {busy === target ? t('team.role.busy') : t(CONVERSION_LABEL_KEYS[target])}
-          </Button>
-        ))}
+            {error}
+          </p>
+        )}
       </div>
-      {!hasToken && <p className="m-0 text-xs text-muted">{t('common.writesDisabled')}</p>}
-      {error && (
-        <p className="m-0 rounded-sm bg-danger-soft px-2.5 py-1.5 text-xs text-danger" role="alert">
-          {error}
-        </p>
-      )}
-    </section>
+    </Section>
   );
 }

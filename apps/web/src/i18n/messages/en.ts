@@ -847,7 +847,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.member.primaryBadge': 'primary',
   'team.member.openBody': 'Open this session',
   'team.member.retiredBodies': 'Past sessions',
-  'team.member.sessionNumber': 'Session',
+  'team.member.sessionNumber': 'Session #',
   'team.member.sessionIndex': 'Session {n}',
   'team.member.startedAt': 'Started {time}',
   'team.member.retiredAt': 'Retired {time}',
