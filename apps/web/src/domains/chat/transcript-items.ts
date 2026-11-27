@@ -1600,292 +1600,311 @@ function liveItemTs(item: ChatRenderItem): number | undefined {
   return undefined;
 }
 
-/** run 分组 → live item（只依赖 group 对象，未变化的 group 可被调用侧 memo 命中）。 */
+/**
+ * run 分组 → live item（按 group 对象 memo，与 `FACT_CACHE` 同构）。
+ *
+ * `RunGroup` 是不可变快照（`LiveItemStore.materialize` 只在该 run 脏时换新对象），
+ * 所以流式期间只有正在跑的那几个 run 需要重建 item，其余 run 直接命中缓存 ——
+ * 装配面每帧的 live 侧成本与「脏 run 数」成正比，与历史轮数无关。
+ * 缓存同时稳定了 item 引用：未变化 run 的 item 跨帧是同一批对象，
+ * 下游的行级 memo（Transcript）据此跳过整行重渲染。
+ */
+const LIVE_ITEMS_CACHE = new WeakMap<RunGroup, TranscriptItem[]>();
+
 export function buildLiveItems(groups: readonly RunGroup[]): TranscriptItem[] {
   const items: TranscriptItem[] = [];
   for (const group of groups) {
-    const folded = foldToolItems(group.items);
-    // 组的定位时间：优先 run 起始；缺失时（事件被边界回放裁掉、只剩部分条目）
-    // **用组内最早一个带时间的 item 兜底**，否则整组没有 ts → 排序规则「缺 ts 排最后」
-    // 会把旧工具卡挂到比它们更新的内容后面（用户看到的「卡沉底」）。
-    let baseTs = group.startedAt ?? group.firstTs;
-    if (baseTs === undefined) {
-      for (const item of folded) {
-        const ts = liveItemTs(item);
-        if (ts !== undefined && (baseTs === undefined || ts < baseTs)) baseTs = ts;
-      }
+    let ofGroup = LIVE_ITEMS_CACHE.get(group);
+    if (ofGroup === undefined) {
+      ofGroup = buildLiveItemsOfGroup(group);
+      LIVE_ITEMS_CACHE.set(group, ofGroup);
     }
-    // 每个 item 用**自己的事件时间**（真实发生时刻），不是组起始时间：
-    // 统一披组起始 ts 会在历史回填时把整段 live 内容拽到 turn 开头，与历史侧
-    // 的真实 ts 一对比就整段重排（用户看到的「上面一张卡、中间正文、下面更早的卡」）。
-    const seqMeta = group.firstSeq !== undefined ? { seq: group.firstSeq } : {};
-    // 段锚点表：`foldToolItems` 的输出是 `ChatRenderItem`（不带 anchorSeq），但 key 原样
-    // 透传 —— 从 `group.items` 建一张 key → 首个 delta 的 seq 的表，段身份仍按 seq 走。
-    const anchors = new Map<string, number>();
-    // 段序表（同上理由：`ChatRenderItem` 可能不带 `segmentIndex`，但 key 透传）：
-    // 身份认领要用「本 run 内第几段正文」，见 `ClaimSegment.segmentIndex`。
-    const segmentsOf = new Map<string, number>();
-    for (const item of group.items) {
-      if (item.anchorSeq !== undefined) anchors.set(item.key, item.anchorSeq);
-      if (item.kind === 'text' && item.segmentIndex !== undefined) {
-        segmentsOf.set(item.key, item.segmentIndex);
-      }
-    }
-    // 组内时间**单调**：每个 item 用自己事件时间，但不允许比前一个 item 更早
-    // （时钟同毫秒/事件时间相同时用插入序，绝不因为 ts 抖动把顺序倒过来）。
-    let monotonic: number | undefined;
-    const itemTs = (own: number | undefined): number | undefined => {
-      const candidate = own ?? baseTs;
-      if (candidate === undefined) return monotonic;
-      monotonic = monotonic === undefined ? candidate : Math.max(monotonic, candidate);
-      return monotonic;
-    };
-    // run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
-    // 身份随首个事件一起到（`run.started.input_name`）：agent 投递 = `agent:<alias>`
-    // → agent 卡；工具来源投递 = `tool:<name>`（如异步 bash 完成）→「来自 <name>」卡；
-    // 运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
-    // 用户气泡；rotate 交接嘱托 = `rotate:handoff[:<epoch>]` → 交接卡；
-    // 都不是 = 人自己说的话 → 气泡。
-    if (trimText(group.input).length > 0) {
-      const text = group.input as string;
-      const ts = itemTs(undefined);
-      const tsPart = ts !== undefined ? { ts } : {};
-      // rotate 交接嘱托在运行态就已知道身份（input_name = rotate:handoff:<epoch>），
-      // 首帧就渲成交接卡，不会先闪一帧用户气泡。
-      const handoff = rotateHandoffOf(group.inputName);
-      // 0.52：async ask 的答案在运行态就已知道身份（input_name = ask:answer），
-      // 首帧就渲成「待批答复」卡，不会先闪一帧用户气泡。
-      const askAnswer =
-        group.inputName === ASK_ANSWER_MESSAGE_NAME ? askAnswerCard(text) : undefined;
-      // 运行时合成输入（idle 唤醒等）带 vessel:* 身份：渲成运行时提示卡（环境信息卡），
-      // 绝不画成用户气泡。
-      const noticeKind = runtimeContextKindOfName(group.inputName);
-      // 稳定 id（0.56）：与服务端落盘那条消息同一个字符串，装配面按它让位（见
-      // `HistoryIndex.messageIds`）。缺省 = 旧数据 / 旧 gateway ⇒ 退回 0.51 的判据。
-      const messageIdPart =
-        group.inputMessageId !== undefined ? { messageId: group.inputMessageId } : {};
-      if (handoff !== undefined) {
-        items.push({
-          kind: 'rotate-handoff',
-          key: `run:${group.runId}:input`,
-          runId: group.runId,
-          text,
-          ...handoff,
-          ...messageIdPart,
-          ...tsPart,
-          ...seqMeta,
-        });
-      } else if (askAnswer !== undefined) {
-        items.push({
-          kind: 'ask-answer',
-          key: `run:${group.runId}:input`,
-          runId: group.runId,
-          text,
-          card: askAnswer,
-          ...messageIdPart,
-          ...tsPart,
-          ...seqMeta,
-        });
-      } else if (noticeKind !== undefined) {
-        const env = runtimeEnvCard(noticeKind, text);
-        items.push({
-          kind: 'runtime-notice',
-          key: `run:${group.runId}:input`,
-          // runId 让它在历史落盘后让位（同一条输入不出现第二张卡，见 assemble）。
-          runId: group.runId,
-          noticeKind,
-          text,
-          ...(env !== undefined ? { env } : {}),
-          ...messageIdPart,
-          ...tsPart,
-          ...seqMeta,
-        });
-      } else {
-        const sender = senderOfName(group.inputName);
-        items.push({
-          kind: 'run-input',
-          key: `run:${group.runId}:input`,
-          runId: group.runId,
-          text,
-          ...(sender !== undefined ? { sender: sender.alias, senderKind: sender.kind } : {}),
-          // 运行态气泡上方的 chip：与历史侧同一行组件，refs 到了就渲染。
-          ...(group.inputRefs !== undefined ? { refs: group.inputRefs } : {}),
-          ...messageIdPart,
-          ...tsPart,
-          ...seqMeta,
-        });
-      }
-    }
-    let textIndex = 0;
-    let reasoningIndex = 0;
+    for (const item of ofGroup) items.push(item);
+  }
+  return items;
+}
+
+/** 单个 run 分组的 live item（纯函数；缓存接缝见 `buildLiveItems`）。 */
+function buildLiveItemsOfGroup(group: RunGroup): TranscriptItem[] {
+  const items: TranscriptItem[] = [];
+  const folded = foldToolItems(group.items);
+  // 组的定位时间：优先 run 起始；缺失时（事件被边界回放裁掉、只剩部分条目）
+  // **用组内最早一个带时间的 item 兜底**，否则整组没有 ts → 排序规则「缺 ts 排最后」
+  // 会把旧工具卡挂到比它们更新的内容后面（用户看到的「卡沉底」）。
+  let baseTs = group.startedAt ?? group.firstTs;
+  if (baseTs === undefined) {
     for (const item of folded) {
-      if (item.kind === 'text') {
-        const anchor = anchors.get(item.key);
-        const segmentIndex = segmentsOf.get(item.key);
-        items.push({
-          kind: 'run-text',
-          // 段身份 = 该段首个 delta 的 seq；没有锚点的手工分组退回段序（测试 / 子 agent 用）。
-          key: `run:${group.runId}:text:${anchor ?? textIndex}`,
-          runId: group.runId,
-          text: item.text,
-          streaming: false,
-          // 段锚点：认领让位与交棒删除都按它认这一段（见 `ItemMeta.anchorSeq`）。
-          ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
-          // 段序：与落盘消息的 `run_segment` 对身份用（0.51）。没有它的手工分组
-          // （测试 / 子 agent）落回下面的局部 `textIndex`，行为与之前一致。
-          segmentIndex: segmentIndex ?? textIndex,
-          // 正文段用最后一个 delta 的时间（该段结束时刻）。
-          ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
-            ? { ts: itemTs(item.endedAt ?? item.startedAt) }
-            : {}),
-          ...seqMeta,
-        });
-        textIndex += 1;
-        continue;
-      }
-      if (item.kind === 'reasoning') {
-        const anchor = anchors.get(item.key);
-        items.push({
-          kind: 'run-reasoning',
-          key: `run:${group.runId}:reasoning:${anchor ?? reasoningIndex}`,
-          runId: group.runId,
-          text: item.text,
-          streaming: false,
-          // 段锚点（同上：让位与交棒按它认这一段）。
-          ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
-          ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
-          ...(item.endedAt !== undefined ? { endedAt: item.endedAt } : {}),
-          // 思考段用最后一个 reasoning_delta 的时间（该段结束时刻）。
-          ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
-            ? { ts: itemTs(item.endedAt ?? item.startedAt) }
-            : {}),
-          ...seqMeta,
-        });
-        reasoningIndex += 1;
-        continue;
-      }
-      if (item.kind === 'tool') {
-        items.push({
-          kind: 'tool',
-          key:
-            item.callId !== undefined
-              ? `tool:${item.callId}`
-              : `tool:run:${group.runId}:${item.key}`,
-          ...(item.callId !== undefined ? { callId: item.callId } : {}),
-          runId: group.runId,
-          name: item.name,
-          ...(item.args !== undefined ? { args: item.args } : {}),
-          ...(item.result !== undefined ? { output: item.result } : {}),
-          status: item.status,
-          ...(item.error !== undefined ? { error: item.error } : {}),
-          ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
-          ...(item.truncated === true ? { truncated: true } : {}),
-          startedAt: item.startedAt,
-          paired: item.status !== 'running',
-          // 卡片的锚点（交棒时按 callId 删，这里留一份便于诊断与门禁对拍）。
-          ...(item.anchorSeq !== undefined ? { anchorSeq: item.anchorSeq } : {}),
-          // 工具卡用自己的 tool.call.started 时间（真事件时间）。
-          ...(itemTs(item.startedAt) !== undefined ? { ts: itemTs(item.startedAt) } : {}),
-          ...seqMeta,
-        });
-        continue;
-      }
-      // `prompt.system_context`：「模型这一轮看到了什么系统消息」的专用卡（默认折叠）。
-      // 这是**唯一**把该事件变成一张卡的地方 —— live 与回放（含刷新后的订阅回填）都走
-      // 这条 `buildLiveItems`，所以两路出的是同一个 item、同一个 key。
-      // 载荷不成形（旧日志 / 第三方改写）时退回普通 notice 行：宁可少一张卡，不吞事件。
-      if (item.event.type === 'prompt.system_context') {
-        const prompt = promptContextOfEvent(item.event);
-        if (prompt !== undefined) {
-          const promptTs = itemTs(item.event.ts);
-          items.push({
-            kind: 'prompt-context',
-            // key 锚事件 seq（`item.key` = `ev-<seq>` / `notice-<seq>`）：回放重放同一事件
-            // 不会换 key，卡片不重挂、动画不重播。
-            key: `prompt:${item.key}`,
-            runId: group.runId,
-            ...prompt,
-            ...(promptTs !== undefined ? { ts: promptTs } : {}),
-            ...seqMeta,
-          });
-          continue;
-        }
-      }
-      // run 中途注入的运行时上下文（工具面 / 模型 / 上下文增量 / 投射来源，owner 与成员
-      // 同一通道）：与历史侧同一个 runtimeEnvCard 入口、同一种 runtime-notice item，
-      // 运行中即可见。携 message_id 让位：历史落盘后由历史那条渲染，不出现第二张卡
-      // （见 assemble）。不带 runId —— 它不是 run 的输入，不能走 claimedUserByRun 的输入认领口径。
-      const injectedNotice = injectedNoticeOfEvent(item.event);
-      if (injectedNotice !== undefined) {
-        const { message, noticeKind } = injectedNotice;
-        const env = runtimeEnvCard(noticeKind, message.content);
-        const messageId = messageIdOf(message);
-        const injectedTs = itemTs(item.event.ts);
-        items.push({
-          kind: 'runtime-notice',
-          // key 锚事件 seq（同 prompt-context）：回放重放同一事件不换 key、不重挂。
-          key: `inject:${item.key}`,
-          noticeKind,
-          text: message.content,
-          ...(env !== undefined ? { env } : {}),
-          ...(messageId !== undefined ? { messageId } : {}),
-          ...(injectedTs !== undefined ? { ts: injectedTs } : {}),
-          ...seqMeta,
-        });
-        continue;
-      }
-      // notice / 原始事件：逐条一个 item，不参与分组。
+      const ts = liveItemTs(item);
+      if (ts !== undefined && (baseTs === undefined || ts < baseTs)) baseTs = ts;
+    }
+  }
+  // 每个 item 用**自己的事件时间**（真实发生时刻），不是组起始时间：
+  // 统一披组起始 ts 会在历史回填时把整段 live 内容拽到 turn 开头，与历史侧
+  // 的真实 ts 一对比就整段重排（用户看到的「上面一张卡、中间正文、下面更早的卡」）。
+  const seqMeta = group.firstSeq !== undefined ? { seq: group.firstSeq } : {};
+  // 段锚点表：`foldToolItems` 的输出是 `ChatRenderItem`（不带 anchorSeq），但 key 原样
+  // 透传 —— 从 `group.items` 建一张 key → 首个 delta 的 seq 的表，段身份仍按 seq 走。
+  const anchors = new Map<string, number>();
+  // 段序表（同上理由：`ChatRenderItem` 可能不带 `segmentIndex`，但 key 透传）：
+  // 身份认领要用「本 run 内第几段正文」，见 `ClaimSegment.segmentIndex`。
+  const segmentsOf = new Map<string, number>();
+  for (const item of group.items) {
+    if (item.anchorSeq !== undefined) anchors.set(item.key, item.anchorSeq);
+    if (item.kind === 'text' && item.segmentIndex !== undefined) {
+      segmentsOf.set(item.key, item.segmentIndex);
+    }
+  }
+  // 组内时间**单调**：每个 item 用自己事件时间，但不允许比前一个 item 更早
+  // （时钟同毫秒/事件时间相同时用插入序，绝不因为 ts 抖动把顺序倒过来）。
+  let monotonic: number | undefined;
+  const itemTs = (own: number | undefined): number | undefined => {
+    const candidate = own ?? baseTs;
+    if (candidate === undefined) return monotonic;
+    monotonic = monotonic === undefined ? candidate : Math.max(monotonic, candidate);
+    return monotonic;
+  };
+  // run 的输入：历史里还没落盘时由它显示气泡；被历史消息认领后由 assemble 丢掉。
+  // 身份随首个事件一起到（`run.started.input_name`）：agent 投递 = `agent:<alias>`
+  // → agent 卡；工具来源投递 = `tool:<name>`（如异步 bash 完成）→「来自 <name>」卡；
+  // 运行时合成输入 = `vessel:*` → 运行时提示卡（环境信息），绝不画成
+  // 用户气泡；rotate 交接嘱托 = `rotate:handoff[:<epoch>]` → 交接卡；
+  // 都不是 = 人自己说的话 → 气泡。
+  if (trimText(group.input).length > 0) {
+    const text = group.input as string;
+    const ts = itemTs(undefined);
+    const tsPart = ts !== undefined ? { ts } : {};
+    // rotate 交接嘱托在运行态就已知道身份（input_name = rotate:handoff:<epoch>），
+    // 首帧就渲成交接卡，不会先闪一帧用户气泡。
+    const handoff = rotateHandoffOf(group.inputName);
+    // 0.52：async ask 的答案在运行态就已知道身份（input_name = ask:answer），
+    // 首帧就渲成「待批答复」卡，不会先闪一帧用户气泡。
+    const askAnswer = group.inputName === ASK_ANSWER_MESSAGE_NAME ? askAnswerCard(text) : undefined;
+    // 运行时合成输入（idle 唤醒等）带 vessel:* 身份：渲成运行时提示卡（环境信息卡），
+    // 绝不画成用户气泡。
+    const noticeKind = runtimeContextKindOfName(group.inputName);
+    // 稳定 id（0.56）：与服务端落盘那条消息同一个字符串，装配面按它让位（见
+    // `HistoryIndex.messageIds`）。缺省 = 旧数据 / 旧 gateway ⇒ 退回 0.51 的判据。
+    const messageIdPart =
+      group.inputMessageId !== undefined ? { messageId: group.inputMessageId } : {};
+    if (handoff !== undefined) {
       items.push({
-        kind: 'notice',
-        key: `notice:${item.key}`,
-        event: item.event,
-        ts: item.event.ts,
-        ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
+        kind: 'rotate-handoff',
+        key: `run:${group.runId}:input`,
+        runId: group.runId,
+        text,
+        ...handoff,
+        ...messageIdPart,
+        ...tsPart,
+        ...seqMeta,
+      });
+    } else if (askAnswer !== undefined) {
+      items.push({
+        kind: 'ask-answer',
+        key: `run:${group.runId}:input`,
+        runId: group.runId,
+        text,
+        card: askAnswer,
+        ...messageIdPart,
+        ...tsPart,
+        ...seqMeta,
+      });
+    } else if (noticeKind !== undefined) {
+      const env = runtimeEnvCard(noticeKind, text);
+      items.push({
+        kind: 'runtime-notice',
+        key: `run:${group.runId}:input`,
+        // runId 让它在历史落盘后让位（同一条输入不出现第二张卡，见 assemble）。
+        runId: group.runId,
+        noticeKind,
+        text,
+        ...(env !== undefined ? { env } : {}),
+        ...messageIdPart,
+        ...tsPart,
+        ...seqMeta,
+      });
+    } else {
+      const sender = senderOfName(group.inputName);
+      items.push({
+        kind: 'run-input',
+        key: `run:${group.runId}:input`,
+        runId: group.runId,
+        text,
+        ...(sender !== undefined ? { sender: sender.alias, senderKind: sender.kind } : {}),
+        // 运行态气泡上方的 chip：与历史侧同一行组件，refs 到了就渲染。
+        ...(group.inputRefs !== undefined ? { refs: group.inputRefs } : {}),
+        ...messageIdPart,
+        ...tsPart,
+        ...seqMeta,
       });
     }
-    // 尾部未闭合段：key 用**它自己首个 delta 的 seq**（与 flush 后的同一段共用 key，
-    // 见 check-transcript-items 的 F2）。没有锚点的手工分组退回段序。
-    if (group.liveText !== undefined && group.liveText.length > 0) {
+  }
+  let textIndex = 0;
+  let reasoningIndex = 0;
+  for (const item of folded) {
+    if (item.kind === 'text') {
+      const anchor = anchors.get(item.key);
+      const segmentIndex = segmentsOf.get(item.key);
       items.push({
         kind: 'run-text',
-        key: `run:${group.runId}:text:${group.liveTextAnchorSeq ?? textIndex}`,
+        // 段身份 = 该段首个 delta 的 seq；没有锚点的手工分组退回段序（测试 / 子 agent 用）。
+        key: `run:${group.runId}:text:${anchor ?? textIndex}`,
         runId: group.runId,
-        text: group.liveText,
-        streaming: true,
-        ...(group.liveTextAnchorSeq !== undefined ? { anchorSeq: group.liveTextAnchorSeq } : {}),
-        ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
+        text: item.text,
+        streaming: false,
+        // 段锚点：认领让位与交棒删除都按它认这一段（见 `ItemMeta.anchorSeq`）。
+        ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
+        // 段序：与落盘消息的 `run_segment` 对身份用（0.51）。没有它的手工分组
+        // （测试 / 子 agent）落回下面的局部 `textIndex`，行为与之前一致。
+        segmentIndex: segmentIndex ?? textIndex,
+        // 正文段用最后一个 delta 的时间（该段结束时刻）。
+        ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
+          ? { ts: itemTs(item.endedAt ?? item.startedAt) }
+          : {}),
         ...seqMeta,
       });
+      textIndex += 1;
+      continue;
     }
-    if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
+    if (item.kind === 'reasoning') {
+      const anchor = anchors.get(item.key);
       items.push({
         kind: 'run-reasoning',
-        key: `run:${group.runId}:reasoning:${group.liveReasoningAnchorSeq ?? reasoningIndex}`,
+        key: `run:${group.runId}:reasoning:${anchor ?? reasoningIndex}`,
         runId: group.runId,
-        text: group.liveReasoning,
-        streaming: true,
-        ...(group.liveReasoningAnchorSeq !== undefined
-          ? { anchorSeq: group.liveReasoningAnchorSeq }
+        text: item.text,
+        streaming: false,
+        // 段锚点（同上：让位与交棒按它认这一段）。
+        ...(anchor !== undefined ? { anchorSeq: anchor } : {}),
+        ...(item.startedAt !== undefined ? { startedAt: item.startedAt } : {}),
+        ...(item.endedAt !== undefined ? { endedAt: item.endedAt } : {}),
+        // 思考段用最后一个 reasoning_delta 的时间（该段结束时刻）。
+        ...(itemTs(item.endedAt ?? item.startedAt) !== undefined
+          ? { ts: itemTs(item.endedAt ?? item.startedAt) }
           : {}),
-        ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
         ...seqMeta,
       });
+      reasoningIndex += 1;
+      continue;
     }
-    // 失败卡：一条 run 只会有一张（key 与快照路径共用 `run:<runId>:failure`）。
-    // 位置 = `run.failed` 自己的事件时间（终态时刻），走 itemTs 的单调钳制，因此必然
-    // 落在该 run 最后一个 item 之后，而同一条 **真实 ts** 又不会把它拽到整个会话底部
-    // （「缺 ts 排最后」只在 completedAt 也没有时才发生，那时最后一格就是正确位置）。
-    const failure = runFailureOfGroup(group);
-    if (failure !== undefined) {
-      const failureTs = itemTs(failure.completedAt);
+    if (item.kind === 'tool') {
       items.push({
-        kind: 'run-failure',
-        key: `run:${group.runId}:failure`,
-        ...failure,
-        ...(failureTs !== undefined ? { ts: failureTs } : {}),
+        kind: 'tool',
+        key:
+          item.callId !== undefined ? `tool:${item.callId}` : `tool:run:${group.runId}:${item.key}`,
+        ...(item.callId !== undefined ? { callId: item.callId } : {}),
+        runId: group.runId,
+        name: item.name,
+        ...(item.args !== undefined ? { args: item.args } : {}),
+        ...(item.result !== undefined ? { output: item.result } : {}),
+        status: item.status,
+        ...(item.error !== undefined ? { error: item.error } : {}),
+        ...(item.durationMs !== undefined ? { durationMs: item.durationMs } : {}),
+        ...(item.truncated === true ? { truncated: true } : {}),
+        startedAt: item.startedAt,
+        paired: item.status !== 'running',
+        // 卡片的锚点（交棒时按 callId 删，这里留一份便于诊断与门禁对拍）。
+        ...(item.anchorSeq !== undefined ? { anchorSeq: item.anchorSeq } : {}),
+        // 工具卡用自己的 tool.call.started 时间（真事件时间）。
+        ...(itemTs(item.startedAt) !== undefined ? { ts: itemTs(item.startedAt) } : {}),
         ...seqMeta,
       });
+      continue;
     }
+    // `prompt.system_context`：「模型这一轮看到了什么系统消息」的专用卡（默认折叠）。
+    // 这是**唯一**把该事件变成一张卡的地方 —— live 与回放（含刷新后的订阅回填）都走
+    // 这条 `buildLiveItems`，所以两路出的是同一个 item、同一个 key。
+    // 载荷不成形（旧日志 / 第三方改写）时退回普通 notice 行：宁可少一张卡，不吞事件。
+    if (item.event.type === 'prompt.system_context') {
+      const prompt = promptContextOfEvent(item.event);
+      if (prompt !== undefined) {
+        const promptTs = itemTs(item.event.ts);
+        items.push({
+          kind: 'prompt-context',
+          // key 锚事件 seq（`item.key` = `ev-<seq>` / `notice-<seq>`）：回放重放同一事件
+          // 不会换 key，卡片不重挂、动画不重播。
+          key: `prompt:${item.key}`,
+          runId: group.runId,
+          ...prompt,
+          ...(promptTs !== undefined ? { ts: promptTs } : {}),
+          ...seqMeta,
+        });
+        continue;
+      }
+    }
+    // run 中途注入的运行时上下文（工具面 / 模型 / 上下文增量 / 投射来源，owner 与成员
+    // 同一通道）：与历史侧同一个 runtimeEnvCard 入口、同一种 runtime-notice item，
+    // 运行中即可见。携 message_id 让位：历史落盘后由历史那条渲染，不出现第二张卡
+    // （见 assemble）。不带 runId —— 它不是 run 的输入，不能走 claimedUserByRun 的输入认领口径。
+    const injectedNotice = injectedNoticeOfEvent(item.event);
+    if (injectedNotice !== undefined) {
+      const { message, noticeKind } = injectedNotice;
+      const env = runtimeEnvCard(noticeKind, message.content);
+      const messageId = messageIdOf(message);
+      const injectedTs = itemTs(item.event.ts);
+      items.push({
+        kind: 'runtime-notice',
+        // key 锚事件 seq（同 prompt-context）：回放重放同一事件不换 key、不重挂。
+        key: `inject:${item.key}`,
+        noticeKind,
+        text: message.content,
+        ...(env !== undefined ? { env } : {}),
+        ...(messageId !== undefined ? { messageId } : {}),
+        ...(injectedTs !== undefined ? { ts: injectedTs } : {}),
+        ...seqMeta,
+      });
+      continue;
+    }
+    // notice / 原始事件：逐条一个 item，不参与分组。
+    items.push({
+      kind: 'notice',
+      key: `notice:${item.key}`,
+      event: item.event,
+      ts: item.event.ts,
+      ...(group.firstSeq !== undefined ? { seq: group.firstSeq } : {}),
+    });
+  }
+  // 尾部未闭合段：key 用**它自己首个 delta 的 seq**（与 flush 后的同一段共用 key，
+  // 见 check-transcript-items 的 F2）。没有锚点的手工分组退回段序。
+  if (group.liveText !== undefined && group.liveText.length > 0) {
+    items.push({
+      kind: 'run-text',
+      key: `run:${group.runId}:text:${group.liveTextAnchorSeq ?? textIndex}`,
+      runId: group.runId,
+      text: group.liveText,
+      streaming: true,
+      ...(group.liveTextAnchorSeq !== undefined ? { anchorSeq: group.liveTextAnchorSeq } : {}),
+      ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
+      ...seqMeta,
+    });
+  }
+  if (group.liveReasoning !== undefined && group.liveReasoning.length > 0) {
+    items.push({
+      kind: 'run-reasoning',
+      key: `run:${group.runId}:reasoning:${group.liveReasoningAnchorSeq ?? reasoningIndex}`,
+      runId: group.runId,
+      text: group.liveReasoning,
+      streaming: true,
+      ...(group.liveReasoningAnchorSeq !== undefined
+        ? { anchorSeq: group.liveReasoningAnchorSeq }
+        : {}),
+      ...(itemTs(group.lastTs) !== undefined ? { ts: itemTs(group.lastTs) } : {}),
+      ...seqMeta,
+    });
+  }
+  // 失败卡：一条 run 只会有一张（key 与快照路径共用 `run:<runId>:failure`）。
+  // 位置 = `run.failed` 自己的事件时间（终态时刻），走 itemTs 的单调钳制，因此必然
+  // 落在该 run 最后一个 item 之后，而同一条 **真实 ts** 又不会把它拽到整个会话底部
+  // （「缺 ts 排最后」只在 completedAt 也没有时才发生，那时最后一格就是正确位置）。
+  const failure = runFailureOfGroup(group);
+  if (failure !== undefined) {
+    const failureTs = itemTs(failure.completedAt);
+    items.push({
+      kind: 'run-failure',
+      key: `run:${group.runId}:failure`,
+      ...failure,
+      ...(failureTs !== undefined ? { ts: failureTs } : {}),
+      ...seqMeta,
+    });
   }
   // **位置由自己的事件 seq 决定**（0.54 order-bug：T3「集体锚到 run 起点」）。
   //
@@ -2463,13 +2482,49 @@ function unionClaimDecisions(previous: ClaimDecision, fresh: ClaimDecision): Cla
   };
 }
 
-/** 这一段 live 正文 / 思考是否已经让位给历史（锚点优先，缺锚点时回落内容）。 */
+/**
+ * 这一段 live 正文 / 思考是否已经让位给历史（锚点优先，缺锚点时回落内容）。
+ *
+ * 内容回落的 `normalizeText` 是全文归一化（逐行 trim + 空行折叠），长正文段单次
+ * 可达数十微秒；流式期每帧对每个未让位段重算一遍正是装配面最大的隐藏成本
+ * （实测 78 段 / 77 万字符 ≈ 1.9ms/帧）。两道省法，判据一个字不变：
+ * - `yieldedTexts` 为空时直接 false（空集 has 恒 false，归一化纯属浪费）；
+ * - 归一化结果按 item 对象缓存（item 是不可变快照，text 恒定；未变化 run 的
+ *   item 跨帧同引用 —— 见 `LIVE_ITEMS_CACHE`），只有脏 run 的新段才真算。
+ */
+const NORMALIZED_TEXT_CACHE = new WeakMap<object, string>();
+
 function isYielded(
   decision: ClaimDecision,
   item: { kind: string; text: string; anchorSeq?: number },
 ): boolean {
   if (item.anchorSeq !== undefined && decision.yieldedAnchors.has(item.anchorSeq)) return true;
-  return decision.yieldedTexts.has(normalizeText(item.text));
+  if (decision.yieldedTexts.size === 0) return false;
+  let normalized = NORMALIZED_TEXT_CACHE.get(item);
+  if (normalized === undefined) {
+    normalized = normalizeText(item.text);
+    NORMALIZED_TEXT_CACHE.set(item, normalized);
+  }
+  return decision.yieldedTexts.has(normalized);
+}
+
+/**
+ * 历史前缀之后的 item（live + 补充）是否与历史 key 相撞或彼此相撞。
+ * 历史前缀自身的唯一性由 `HistoryDerived.historyKeysUnique` 一次性保证。
+ */
+function hasKeyCollision(
+  items: readonly TranscriptItem[],
+  historyLength: number,
+  historyKeys: ReadonlySet<string>,
+): boolean {
+  const seen = new Set<string>();
+  for (let index = historyLength; index < items.length; index += 1) {
+    const item = items[index];
+    if (item === undefined) continue;
+    if (historyKeys.has(item.key) || seen.has(item.key)) return true;
+    seen.add(item.key);
+  }
+  return false;
 }
 
 /**
@@ -2507,6 +2562,22 @@ function mergeByKey(
 /** 工具名「不知道」时的兜底值（`history-tools.ts` / `tool-cards.ts` 都用它填空）。 */
 const TOOL_NAME_FALLBACK = 'tool';
 
+/**
+ * item 字段浅比较（字段全是原始值或不可变快照引用）：相等 ⇒ 复用旧对象。
+ * 合并结果与上一帧相同时保持引用稳定，行级 memo 据此跳过重渲染。
+ */
+function sameItemFields(a: TranscriptItem, b: TranscriptItem): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  const ar = a as unknown as Record<string, unknown>;
+  const br = b as unknown as Record<string, unknown>;
+  for (const key of aKeys) {
+    if (ar[key] !== br[key]) return false;
+  }
+  return true;
+}
+
 function mergeItem(
   previous: TranscriptItem,
   next: TranscriptItem,
@@ -2521,7 +2592,7 @@ function mergeItem(
     const name = previous.name === TOOL_NAME_FALLBACK ? next.name : previous.name;
     const args = previous.args !== undefined ? previous.args : next.args;
     const output = previous.output !== undefined ? previous.output : next.output;
-    return {
+    const merged: TranscriptItem = {
       ...previous,
       name,
       ...(next.runId !== undefined ? { runId: next.runId } : {}),
@@ -2542,8 +2613,10 @@ function mergeItem(
       // 「历史没有 ts」也照样沿用 undefined —— 那是「只有历史」时的排序结果，不许被 live 改写。
       ts: previousIsHistory ? previous.ts : (previous.ts ?? next.ts),
     };
+    return sameItemFields(previous, merged) ? previous : merged;
   }
-  return { ...previous, ...next, key: previous.key };
+  const merged = { ...previous, ...next, key: previous.key };
+  return sameItemFields(previous, merged) ? previous : merged;
 }
 
 /**
@@ -2563,30 +2636,21 @@ function mergeItem(
  * 未承接 ⇒ 登记，窗口内的 read 结果不会把它再投影一遍。
  * 工具卡本身照旧受工具可见性开关管辖；承接卡是**消息**不是工具，不受那个开关影响。
  */
-function projectInboxReads(
-  ordered: readonly TranscriptItem[],
-  historyMessageIds: ReadonlySet<string>,
-): TranscriptItem[] {
-  const taken = new Set<string>(historyMessageIds);
-  for (const item of ordered) {
-    if (item.kind === 'run-input' && item.messageId !== undefined) taken.add(item.messageId);
-  }
-  const out: TranscriptItem[] = [];
-  for (const item of ordered) {
-    // 窗口闸门豁免产出的承接卡（见 buildTranscriptItems 的 unloadedBefore 分支）已经
-    // 在时间线里：走同一份 taken 去重 —— 历史消息 / run-input 已承接这条消息 ⇒ 不留卡；
-    // 否则登记进 taken，窗口内 read 结果再含同一 id 也不会重复投影。
-    if (item.kind === 'inbox-read') {
-      if (taken.has(item.messageId)) continue;
-      taken.add(item.messageId);
-      out.push(item);
-      continue;
-    }
-    out.push(item);
-    if (item.kind !== 'tool') continue;
+/**
+ * inbox read 工具卡 → 承接卡（解析 + 投影按卡对象缓存）。
+ *
+ * `inboxReadMessagesOf` 对字符串 output 做 JSON.parse —— 落盘全文可达数 KiB，
+ * 每帧对每张 inbox 卡重解析是纯浪费：卡是不可变快照，解析结果按对象 memo，
+ * 只有内容真变（live 预览 → 历史全文）才重算。投影出的承接卡同样跨帧同引用。
+ */
+const INBOX_READ_CACHE = new WeakMap<object, InboxReadItem[]>();
+
+function inboxReadItemsOf(item: TranscriptItem): InboxReadItem[] {
+  const cached = INBOX_READ_CACHE.get(item);
+  if (cached !== undefined) return cached;
+  const out: InboxReadItem[] = [];
+  if (item.kind === 'tool') {
     for (const message of inboxReadMessagesOf(item.name, item.args, item.output)) {
-      if (taken.has(message.id)) continue;
-      taken.add(message.id);
       out.push({
         kind: 'inbox-read',
         key: `inbox-read:${message.id}`,
@@ -2600,15 +2664,89 @@ function projectInboxReads(
       });
     }
   }
+  INBOX_READ_CACHE.set(item, out);
   return out;
+}
+
+function projectInboxReads(
+  ordered: readonly TranscriptItem[],
+  historyMessageIds: ReadonlySet<string>,
+): TranscriptItem[] {
+  // taken 基底（历史消息 id）是只读大集：不每帧复制，本地只登记增量（run-input /
+  // 已承接的消息 id），判定走「基底 has ∥ 本地 has」—— 与复制后单集判定逐字等价。
+  const taken = new Set<string>();
+  for (const item of ordered) {
+    if (item.kind === 'run-input' && item.messageId !== undefined) taken.add(item.messageId);
+  }
+  const isTaken = (id: string): boolean => historyMessageIds.has(id) || taken.has(id);
+  const out: TranscriptItem[] = [];
+  for (const item of ordered) {
+    // 窗口闸门豁免产出的承接卡（见 buildTranscriptItems 的 unloadedBefore 分支）已经
+    // 在时间线里：走同一份 taken 去重 —— 历史消息 / run-input 已承接这条消息 ⇒ 不留卡；
+    // 否则登记进 taken，窗口内 read 结果再含同一 id 也不会重复投影。
+    if (item.kind === 'inbox-read') {
+      if (isTaken(item.messageId)) continue;
+      taken.add(item.messageId);
+      out.push(item);
+      continue;
+    }
+    out.push(item);
+    if (item.kind !== 'tool') continue;
+    for (const card of inboxReadItemsOf(item)) {
+      if (isTaken(card.messageId)) continue;
+      taken.add(card.messageId);
+      out.push(card);
+    }
+  }
+  return out;
+}
+
+/**
+ * 历史侧派生常量（按 `HistoryIndex` 对象 memo）：它们都是历史窗口的纯函数，
+ * 与 50ms 流式节拍无关 —— 历史引用不变时跨帧复用，不再每帧重建 Set / 全扫消息。
+ * 与 `FACT_CACHE` / `LIVE_ITEMS_CACHE` 同一形态：键是不可变快照对象，弱引用不泄漏。
+ */
+interface HistoryDerived {
+  /** 历史 item key 集（mergeByKey 判「previous 是历史侧」用）。 */
+  historyKeys: Set<string>;
+  /** 历史 key 是否无内部重复（buildHistoryIndex 的去重保证；merge 快路径的前提）。 */
+  historyKeysUnique: boolean;
+  /** 人说的最后一句的 ts（弱下限锚点；runtime 上下文不算，判据见 buildTranscriptItems）。 */
+  lastUserTs: number | undefined;
+  /** 历史里出现过的消息 id 集（inbox-read 去重的 taken 基底）。 */
+  messageIds: Set<string>;
+}
+
+const HISTORY_DERIVED_CACHE = new WeakMap<HistoryIndex, HistoryDerived>();
+
+function historyDerivedOf(history: HistoryIndex): HistoryDerived {
+  const cached = HISTORY_DERIVED_CACHE.get(history);
+  if (cached !== undefined) return cached;
+  let lastUserTs: number | undefined;
+  for (const [, message] of history.messageByIndex) {
+    if (message.role !== 'user' || isRuntimeContextMessage(message)) continue;
+    if (message.timestamp === undefined) continue;
+    if (lastUserTs === undefined || message.timestamp > lastUserTs) lastUserTs = message.timestamp;
+  }
+  const historyKeys = new Set(history.items.map((item) => item.key));
+  const derived: HistoryDerived = {
+    historyKeys,
+    historyKeysUnique: historyKeys.size === history.items.length,
+    lastUserTs,
+    messageIds: new Set(history.messageIds.keys()),
+  };
+  HISTORY_DERIVED_CACHE.set(history, derived);
+  return derived;
 }
 
 /**
  * 单一 item 流（纯函数）。
  *
- * 复杂度：历史侧 item / 反查表由  按  引用 memo；live 侧 item
- * 由  按 group 对象 memo（未变化的 run 直接命中缓存）。每次调用只剩
- * O(认领扫描 + 合并 + 排序)，与 50ms 的流式节拍无关的重建都发生在引用变化时。
+ * 复杂度：历史侧 item / 反查表由 `buildHistoryIndex` 按 messages 引用 memo；live 侧
+ * item 由 `buildLiveItems` 按 group 对象 memo（未变化的 run 直接命中缓存）；历史派生
+ * 常量（key 集 / 末句 ts / 消息 id 集）按 HistoryIndex memo；让位判定 / 发言人标注 /
+ * inbox 解析 / 环境卡折叠都按 item 对象缓存。每次调用只剩 O(live 项扫描 + 合并 +
+ * 排序)，且未变化 item 跨帧保持同一引用（行级 memo 据此跳过重渲染）。
  */
 export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptItem[] {
   const history =
@@ -2630,15 +2768,9 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   // 弱下限的锚点：**人说的最后一句**的 ts。runtime 上下文（`vessel:*`）也是 role 'user'，
   // 但它是模型侧上下文、不是 turn 锚点 —— 算进去会把「运行中且自己没有 ts」的 run 拖到
   // 上下文消息之后（run 其实比那条提示早开始）。判定与 notice 卡 / 可见性同一口径。
-  const lastUserTs = (() => {
-    let last: number | undefined;
-    for (const [, message] of history.messageByIndex) {
-      if (message.role !== 'user' || isRuntimeContextMessage(message)) continue;
-      if (message.timestamp === undefined) continue;
-      if (last === undefined || message.timestamp > last) last = message.timestamp;
-    }
-    return last;
-  })();
+  // 历史窗口的纯函数：按 HistoryIndex memo（见 historyDerivedOf），不每帧全扫。
+  const derived = historyDerivedOf(history);
+  const lastUserTs = derived.lastUserTs;
 
   // 没有「live 已经有这个调用就跳过历史 item」的预过滤：那会让 `mergeItem` 的工具分支
   // 永远不可达（内容只能取 live 的 8KiB 预览），客户端漏掉 `tool.call.completed` 时
@@ -2738,17 +2870,9 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
       // 对消息卡让位。去重与 projectInboxReads 共用同一份 taken（history.messageIds
       // + run-input）：已被承接的消息不出第二张卡（见那里的 inbox-read 分支）。
       if (item.kind === 'tool') {
-        for (const message of inboxReadMessagesOf(item.name, item.args, item.output)) {
-          items.push({
-            kind: 'inbox-read',
-            key: `inbox-read:${message.id}`,
-            messageId: message.id,
-            text: message.text,
-            source: message.source,
-            ...(item.runId !== undefined ? { runId: item.runId } : {}),
-            ts: item.ts,
-          });
-        }
+        // 承接卡与窗口内投影共用同一份缓存（inboxReadItemsOf）：同卡同引用，
+        // 去重仍由 projectInboxReads 的 taken 统一收口（与改前逐字同序）。
+        for (const card of inboxReadItemsOf(item)) items.push(card);
       }
       continue;
     }
@@ -2791,7 +2915,8 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     const floor = strong ?? weak;
     const base =
       floor === undefined ? item.ts : item.ts === undefined ? floor : Math.max(item.ts, floor);
-    items.push({ ...item, ts: base });
+    // ts 没被夹动时保留原引用：未变化 run 的 item 跨帧同对象（行级 memo 的命脉）。
+    items.push(base === item.ts ? item : { ...item, ts: base });
   }
 
   // 会话记录快照里的失败卡：刷新 / 切会话后事件缓冲里可能已经没有 `run.failed`，
@@ -2870,15 +2995,20 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
     }
   }
 
-  const historyKeys = new Set(history.items.map((item) => item.key));
-  const ordered = mergeByKey(items, historyKeys)
+  const historyKeys = derived.historyKeys;
+  // 合并快路径：历史无内部重复 + live/补充项不与历史 key 相撞、彼此也不相撞 ⇒
+  // mergeByKey 是恒等映射，跳过每帧 Map 重建（流式期当前 run 的工具卡尚未落盘，
+  // 这是常态）。判定只扫 live 侧 + 补充项（O(live)），不扫全量历史。
+  const merged =
+    derived.historyKeysUnique && !hasKeyCollision(items, history.items.length, historyKeys)
+      ? items
+      : mergeByKey(items, historyKeys);
+  const ordered = merged
     .map((item, index) => ({ item, index }))
     .sort((a, b) => compareTimelineEntries(a.item, b.item, a.index, b.index))
     .map(({ item }) => item);
 
-  return foldAdjacentEnvNotices(
-    withSpeakerRuns(projectInboxReads(ordered, new Set(history.messageIds.keys()))),
-  );
+  return foldAdjacentEnvNotices(withSpeakerRuns(projectInboxReads(ordered, derived.messageIds)));
 }
 
 /**
@@ -2890,23 +3020,64 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
  *
  * 只折「相邻且同 scope」：中间夹了别的 item（正文 / 工具卡 / 别的 scope）就不合并，
  * 否则会把时间线上的因果顺序讲错（一条配置通知与它之后的回复之间插了别的 scope）。
+ *
+ * 折叠结果按「run 首项对象 + 成员引用」缓存：成员都是不可变快照，引用全同 ⇒
+ * 折叠结果必然相同，跨帧复用同一对象（行级 memo 命中）；单张不折的卡原样直通。
  */
+const ENV_FOLD_CACHE = new WeakMap<
+  TranscriptItem,
+  { members: TranscriptItem[]; result: TranscriptItem }
+>();
+
+function foldEnvRun(run: TranscriptItem[]): TranscriptItem {
+  const head = run[0];
+  if (head === undefined) throw new Error('empty env notice run');
+  const cached = ENV_FOLD_CACHE.get(head);
+  if (
+    cached !== undefined &&
+    cached.members.length === run.length &&
+    cached.members.every((member, index) => member === run[index])
+  ) {
+    return cached.result;
+  }
+  let result = head;
+  for (let index = 1; index < run.length; index += 1) {
+    const item = run[index];
+    if (item === undefined || item.kind !== 'runtime-notice' || item.env === undefined) continue;
+    if (result.kind !== 'runtime-notice' || result.env === undefined) continue;
+    result = { ...result, env: mergeEnvNoticeCards(result.env, item.env) };
+  }
+  ENV_FOLD_CACHE.set(head, { members: [...run], result });
+  return result;
+}
+
 function foldAdjacentEnvNotices(items: readonly TranscriptItem[]): TranscriptItem[] {
   const out: TranscriptItem[] = [];
-  for (const item of items) {
-    const previous = out[out.length - 1];
-    if (
-      item.kind === 'runtime-notice' &&
-      item.env !== undefined &&
-      previous !== undefined &&
-      previous.kind === 'runtime-notice' &&
-      previous.env !== undefined &&
-      previous.env.scope === item.env.scope
-    ) {
-      out[out.length - 1] = { ...previous, env: mergeEnvNoticeCards(previous.env, item.env) };
-      continue;
+  let index = 0;
+  while (index < items.length) {
+    const item = items[index];
+    if (item !== undefined && item.kind === 'runtime-notice' && item.env !== undefined) {
+      let end = index + 1;
+      while (end < items.length) {
+        const next = items[end];
+        if (
+          next === undefined ||
+          next.kind !== 'runtime-notice' ||
+          next.env === undefined ||
+          next.env.scope !== item.env.scope
+        ) {
+          break;
+        }
+        end += 1;
+      }
+      if (end > index + 1) {
+        out.push(foldEnvRun(items.slice(index, end) as TranscriptItem[]));
+        index = end;
+        continue;
+      }
     }
-    out.push(item);
+    if (item !== undefined) out.push(item);
+    index += 1;
   }
   return out;
 }
@@ -2914,7 +3085,16 @@ function foldAdjacentEnvNotices(items: readonly TranscriptItem[]): TranscriptIte
 /**
  * 连续同发言人分组：只由消息类 item 决定（历史消息 / run 正文），
  * tool / notice / reasoning 既不参与也不打断（扫描时跳过）。
+ *
+ * 标注按 item 对象缓存（speaker + groupStart 与现算一致时复用旧标注对象）：
+ * 未变化 item 跨帧同引用 ⇒ 不再每帧对全部消息项 spread 重建（那是装配面
+ * 对象 churn 的大头之一，也是行级 memo 失效的根源）。前缀序列不变时整段命中。
  */
+const SPEAKER_CACHE = new WeakMap<
+  TranscriptItem,
+  { speaker: string; groupStart: boolean; annotated: TranscriptItem }
+>();
+
 export function withSpeakerRuns(items: readonly TranscriptItem[]): TranscriptItem[] {
   let previous: string | undefined;
   return items.map((item) => {
@@ -2922,7 +3102,13 @@ export function withSpeakerRuns(items: readonly TranscriptItem[]): TranscriptIte
     if (speaker === undefined) return item;
     const groupStart = speaker !== previous;
     previous = speaker;
-    return { ...item, speaker, groupStart };
+    const cached = SPEAKER_CACHE.get(item);
+    if (cached !== undefined && cached.speaker === speaker && cached.groupStart === groupStart) {
+      return cached.annotated;
+    }
+    const annotated = { ...item, speaker, groupStart };
+    SPEAKER_CACHE.set(item, { speaker, groupStart, annotated });
+    return annotated;
   });
 }
 
