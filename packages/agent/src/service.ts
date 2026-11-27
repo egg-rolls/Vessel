@@ -3120,7 +3120,8 @@ export class AgentServiceImpl implements AgentService {
       // 跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）声明。缺省不写 —— 人类正文的载荷
       // 与今天逐字节一致。
       ...(internal?.inputName !== undefined ? { input_name: internal.inputName } : {}),
-      // 附件引用：只有路径，随消息进执行内核 → core Message.refs（不落 inbox 副本）。
+      // 附件引用：只有路径 + 元信息，随消息进执行内核 → core Message.refs；
+      // inbox 副本同样保留（trackInbox / rotate quiet 两条落盘路都带），取走时不丢附件。
       ...(refs.length > 0 ? { refs } : {}),
     };
     // rotate 窗口内：旧 body 即将退役，消息只落 inbox（不进旧队列、不提交）。
@@ -3149,6 +3150,12 @@ export class AgentServiceImpl implements AgentService {
             // 显示名同样带进 quiet 条目：rotate 窗口落盘的消息之后也会上条带，
             // 缺了它卡头一样只剩 UUID（本来就知道的名字，没有理由丢掉）。
             ...(senderName !== undefined ? { from_name: senderName } : {}),
+            // 附件引用同样随 quiet 条目落盘：rotate 窗口收到的带图消息之后由新 body
+            // `inbox read` 取走 —— 这里不带 refs，附件就在落盘这一层丢了（与 trackInbox
+            // 同口径：存储保留，取走时随正文一并交出）。
+            ...(message.refs !== undefined && message.refs.length > 0
+              ? { refs: message.refs }
+              : {}),
           },
           { delivery: 'quiet' },
         );
@@ -5416,6 +5423,9 @@ export class AgentServiceImpl implements AgentService {
         ...(message.conversation_id !== undefined
           ? { conversation_id: message.conversation_id }
           : {}),
+        // 附件引用随还原一并带回：这条之后由模型自己 read，丢了 refs 等于把带图
+        // 消息降级成纯文本（与 trackInbox 同口径）。
+        ...(message.refs !== undefined && message.refs.length > 0 ? { refs: message.refs } : {}),
       },
       { delivery: 'quiet' },
     );
