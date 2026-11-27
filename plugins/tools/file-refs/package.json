@@ -1,0 +1,116 @@
+{
+  "name": "@vessel-agent/file-refs",
+  "version": "2.1.23",
+  "description": "File reference UX — drag/paste auto-staging refs, in-composer icon cards, vessel-ref link cards (toggleable/removable)",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "plugins/tools/file-refs"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:ui": "tsc -p tsconfig.web.json --noEmit && vite build --config vite.config.embed.ts",
+    "typecheck:ui": "tsc -p tsconfig.web.json --noEmit"
+  },
+  "dependencies": {
+    "@vessel-agent/core": "workspace:*",
+    "@vessel-agent/plugin-sdk": "workspace:*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.0.0"
+  },
+  "vessel": {
+    "id": "file-refs",
+    "name": "File References",
+    "version": "2.1.23",
+    "description": "文件引用 UX：OS 文件拖拽 / 截图粘贴自动上传暂存并在指针位置插入引用卡片；消息 vessel-ref 链接渲染为卡片。可开关 / 可删除剥离（A7/A9）。",
+    "side": "ui",
+    "ui": {
+      "dir": "web",
+      "embed": {
+        "entry": "embed/index.mjs",
+        "css": "embed/index.css",
+        "runtime": {
+          "react": "^19",
+          "sdk": "^1"
+        }
+      }
+    },
+    "contributes": {
+      "i18n": {
+        "en": {
+          "card.temporary": "temp",
+          "card.expired": "expired",
+          "card.uploading": "Uploading…",
+          "card.failed": "Upload failed",
+          "card.retry": "Retry",
+          "card.remove": "Remove {name}",
+          "card.copy-path": "Copy path",
+          "card.path-copied": "Path copied",
+          "drop.limit": "Reference limit reached (32)",
+          "drop.failed": "Could not upload {name}"
+        },
+        "zh-CN": {
+          "card.temporary": "临时",
+          "card.expired": "已过期",
+          "card.uploading": "上传中…",
+          "card.failed": "上传失败",
+          "card.retry": "重试",
+          "card.remove": "移除 {name}",
+          "card.copy-path": "复制路径",
+          "card.path-copied": "路径已复制",
+          "drop.limit": "引用已达上限（32 条）",
+          "drop.failed": "无法上传 {name}"
+        }
+      },
+      "composer": [
+        {
+          "slot": "refs",
+          "scheme": "vessel-ref",
+          "component": "FileRefCard",
+          "order": 10
+        },
+        {
+          "slot": "drop",
+          "handler": "onFilesDropped",
+          "order": 10
+        },
+        {
+          "slot": "link",
+          "scheme": "vessel-ref",
+          "component": "FileRefLinkCard",
+          "order": 10
+        }
+      ]
+    },
+    "permissions": {
+      "fs": [],
+      "net": [],
+      "process": false,
+      "secrets": false,
+      "events": [],
+      "rpc": [],
+      "ports": []
+    }
+  }
+}

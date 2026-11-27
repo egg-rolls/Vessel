@@ -37,6 +37,7 @@ export {
   imageBlobRoot,
   imageExtOf,
   isSha256,
+  putImageBlob,
   readImageBlob,
   scanImageBlobs,
   sha8Of,
@@ -61,3 +62,12 @@ export {
   summarizeAttachmentPlan,
   visionDisabled,
 } from './plan.js';
+export {
+  attachmentStagingRoot,
+  isInsideStagingRoot,
+  STAGING_GRACE_MS,
+  STAGING_TTL_MS,
+  sanitizeStagedName,
+  stagingBucketDir,
+  stagingPathFor,
+} from './staging.js';

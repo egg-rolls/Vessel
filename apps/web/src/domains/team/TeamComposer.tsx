@@ -13,7 +13,7 @@
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AutoGrowTextarea } from '../../components/ui';
+import { parseSegments, RichComposer, type RichComposerHandle } from '../../components/ui';
 import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AttachBrowseClient } from '../chat/AttachDialog';
@@ -25,8 +25,10 @@ import {
   ComposerSendButton,
   focusComposerInputOnBlankClick,
   refIndexForId,
-  refsToAttachments,
+  refsToAttachmentsFiltered,
 } from '../chat/ComposerChrome';
+import { useComposerEditorPort } from '../chat/useComposerEditorPort';
+import { useComposerExtensions } from '../plugins/composer-extensions';
 import { MentionPopover } from './MentionPopover';
 import {
   detectMention,
@@ -94,14 +96,31 @@ export function TeamComposer({
   client,
   contextUsage,
 }: TeamComposerProps) {
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const inputRef = useRef<RichComposerHandle | null>(null);
   const compositionRef = useRef(false);
   const compositionEndRef = useRef(0);
   const [caret, setCaret] = useState(0);
+  /** mention 选中后请求光标落点（RichComposer 外部 caret 请求）。 */
+  const [caretRequest, setCaretRequest] = useState<{ offset: number; nonce: number } | null>(null);
+  const caretNonceRef = useRef(0);
   const [activeIndex, setActiveIndex] = useState(0);
   /** Esc 关闭后记住触发点；新的 `@` 或换位置会重新打开。 */
   const [dismissedStart, setDismissedStart] = useState<number | null>(null);
   const listId = useId();
+
+  // composer 内嵌扩展 + 编辑端口（与会话页同一份接缝）。
+  const { atomicSchemes, dropHandlers } = useComposerExtensions();
+  const port = useComposerEditorPort({ editorRef: inputRef, refs, onAddRef, onRemoveRef });
+  const dispatchFiles = (files: File[], offset: number | null) => {
+    if (port === undefined || dropHandlers.length === 0) return;
+    for (const handler of dropHandlers) {
+      try {
+        void handler(files, port, { offset });
+      } catch {
+        // 插件处理器异常不阻断输入框。
+      }
+    }
+  };
 
   const trigger = detectMention(value, caret);
   const popoverVisible = trigger !== null && trigger.start !== dismissedStart;
@@ -118,13 +137,12 @@ export function TeamComposer({
   const canSend =
     hasToken && connected && !disabled && !sending && !tooLarge && value.trim().length > 0;
 
-  const syncCaret = () => {
-    const element = inputRef.current;
-    if (element && typeof element.selectionStart === 'number') setCaret(element.selectionStart);
+  const syncCaret = (offset: number) => {
+    setCaret(offset);
   };
 
   const pick = (candidate: MentionCandidate) => {
-    const current = trigger ?? detectMention(value, inputRef.current?.selectionStart ?? caret);
+    const current = trigger ?? detectMention(value, inputRef.current?.getCaretOffset() ?? caret);
     if (!current) return;
     const next = insertMention(value, current, candidate.label);
     onChange(next.value);
@@ -133,12 +151,9 @@ export function TeamComposer({
     }
     setDismissedStart(null);
     setCaret(next.caret);
-    window.setTimeout(() => {
-      const element = inputRef.current;
-      if (!element) return;
-      element.focus();
-      element.setSelectionRange(next.caret, next.caret);
-    }, 0);
+    caretNonceRef.current += 1;
+    setCaretRequest({ offset: next.caret, nonce: caretNonceRef.current });
+    inputRef.current?.focus();
   };
 
   const placeholder = !hasToken
@@ -148,13 +163,23 @@ export function TeamComposer({
       : t('team.composer.input');
 
   // 引用区：@ 提及复用既有 chip 状态，和附件引用（MessageRef）同一条渲染路径。
+  // 正文里已有原子卡片 token 的引用不进 chip 行（与会话页同一口径）。
   const mentionAttachments: ComposerAttachment[] = mentions.map((chip) => ({
     id: `mention:${chip.agentId}`,
     label: chip.label,
     kind: '@',
     note: t('team.mention.title'),
   }));
-  const refItems: ComposerAttachment[] = [...refsToAttachments(refs), ...mentionAttachments];
+  const inlineCounts = new Map<string, number>();
+  for (const segment of parseSegments(value, atomicSchemes)) {
+    if (segment.type === 'atomic') {
+      inlineCounts.set(segment.target, (inlineCounts.get(segment.target) ?? 0) + 1);
+    }
+  }
+  const refItems: ComposerAttachment[] = [
+    ...refsToAttachmentsFiltered(refs, inlineCounts),
+    ...mentionAttachments,
+  ];
 
   // 「引用文件」入口：与会话页同一份绑定（浏览 / 粘贴弹层），只是写到团队的草稿槽。
   const refCount = refs.length;
@@ -177,7 +202,24 @@ export function TeamComposer({
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: 点卡片留白聚焦 textarea 是鼠标便捷入口（卡片不是可点控件）
     // biome-ignore lint/a11y/useKeyWithClickEvents: 键盘流不变：Tab 直接到输入框 / 按钮，留白处不需要键盘等价键
-    <div className="composer team-composer relative" onClick={focusComposerInputOnBlankClick}>
+    <div
+      className="composer team-composer relative"
+      onClick={focusComposerInputOnBlankClick}
+      onDragOver={(event) => {
+        if (port === undefined || dropHandlers.length === 0) return;
+        if (!event.dataTransfer.types.includes('Files')) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      }}
+      onDrop={(event) => {
+        if (event.dataTransfer.files.length === 0) return;
+        if (port === undefined || dropHandlers.length === 0) return;
+        event.preventDefault();
+        const offset = inputRef.current?.caretOffsetFromPoint(event.clientX, event.clientY) ?? null;
+        dispatchFiles(Array.from(event.dataTransfer.files), offset);
+        inputRef.current?.focus();
+      }}
+    >
       <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-faint">
         <span className="min-w-0 truncate font-mono text-xs text-accent" title={targetLabel}>
           {targetLabel}
@@ -239,25 +281,19 @@ export function TeamComposer({
           />
         }
       >
-        <AutoGrowTextarea
+        <RichComposer
           ref={inputRef}
           className="composer-input"
-          rows={1}
           value={value}
-          onChange={(event) => {
-            onChange(event.target.value);
-            setCaret(event.target.selectionStart ?? event.target.value.length);
-          }}
-          onSelect={syncCaret}
-          onClick={syncCaret}
-          onKeyUp={syncCaret}
+          onChange={onChange}
+          onCaretChange={syncCaret}
+          caretRequest={caretRequest}
           onCompositionStart={() => {
             compositionRef.current = true;
           }}
           onCompositionEnd={() => {
             compositionRef.current = false;
             compositionEndRef.current = Date.now();
-            syncCaret();
           }}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing || compositionRef.current) return;
@@ -330,6 +366,11 @@ export function TeamComposer({
             popoverVisible && active >= 0 ? `${listId}-option-${active}` : undefined
           }
           enterKeyHint="send"
+          onPasteFiles={(files) => {
+            dispatchFiles(files, inputRef.current?.getCaretOffset() ?? null);
+          }}
+          atomicSchemes={atomicSchemes}
+          atomicPort={port}
         />
       </ComposerField>
     </div>

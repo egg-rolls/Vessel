@@ -1,7 +1,9 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: parsed markdown is immutable per render; index keys are stable
 import { Fragment, memo, type ReactNode, useMemo, useRef } from 'react';
+import { useLinkEnhancer } from './link-enhancers';
 import {
   type InlineNode,
+  isSafeHref,
   type MarkdownBlock,
   parseInline,
   parseMarkdown,
@@ -9,6 +11,33 @@ import {
   type StreamingParseCache,
 } from './markdown-parse';
 import { useTypewriterText } from './ui/useTypewriterText';
+
+/**
+ * link 渲染三档（file-ref-ux A6/A9）：
+ * 1. 命中插件 link 增强器（scheme 声明式注册）⇒ 插件卡片；
+ * 2. 通用安全 scheme（http/https/mailto/锚点/相对）⇒ 既有 `<a target=_blank>`；
+ * 3. 未知 scheme（含无增强器的 vessel-ref）⇒ 不可点击文本，名称+目标可见
+ *    （通用 markdown 兜底，不是引用功能残留；绝不导航）。
+ */
+function LinkInline({ href, text }: { href: string; text: string }): ReactNode {
+  const enhancer = useLinkEnhancer(href);
+  if (enhancer !== undefined) {
+    const Card = enhancer.component;
+    return <Card href={href} text={text} host={enhancer.host} />;
+  }
+  if (isSafeHref(href)) {
+    return (
+      <a href={href} target={href.startsWith('#') ? undefined : '_blank'} rel="noreferrer noopener">
+        {text}
+      </a>
+    );
+  }
+  return (
+    <span className="markdown-link-plain">
+      {text} ({href})
+    </span>
+  );
+}
 
 function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
   return nodes.map((node, index) => {
@@ -24,16 +53,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
       case 'em':
         return <em key={index}>{node.text}</em>;
       case 'link':
-        return (
-          <a
-            key={index}
-            href={node.href}
-            target={node.href.startsWith('#') ? undefined : '_blank'}
-            rel="noreferrer noopener"
-          >
-            {node.text}
-          </a>
-        );
+        return <LinkInline key={index} href={node.href} text={node.text} />;
       default:
         return <Fragment key={index}>{node.text}</Fragment>;
     }

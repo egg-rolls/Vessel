@@ -99,6 +99,7 @@ import type {
   ToolDefinition,
 } from '@vessel-agent/core';
 import {
+  attachmentStagingRoot,
   boundToolResult,
   createStderrLogger,
   cutToTokenBudget,
@@ -565,8 +566,17 @@ export interface PathBoundary {
  */
 export function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
   const denyEntries = [...DEFAULT_DENY_PATHS, ...(config.denyPaths ?? [])];
+  const allowedRoots = (config.allowedRoots ?? []).map((entry) => canonicalPath(expandHome(entry)));
+  // 附件暂存根（file-ref-ux A2/A3）：用户经浏览器上传的临时副本落在 dataDir 下，
+  // 配置了 allowed_roots 时它通常在根外 —— 追加进允许根，media / ingest /
+  // attachments.list 全部经这一份边界自动放行（deny 仍优先）。空 allowedRoots
+  // 语义是「不限制根」，不能追加（追加会把 unrestricted 收成只剩暂存根）。
+  if (allowedRoots.length > 0) {
+    const staging = canonicalPath(attachmentStagingRoot());
+    if (!allowedRoots.some((root) => isWithin(staging, root))) allowedRoots.push(staging);
+  }
   return {
-    allowedRoots: (config.allowedRoots ?? []).map((entry) => canonicalPath(expandHome(entry))),
+    allowedRoots,
     denyRoots: denyEntries.map((entry) => canonicalPath(expandHome(entry))),
     commandPatterns: buildDeniedCommandPatterns(denyEntries),
   };

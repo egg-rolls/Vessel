@@ -77,12 +77,133 @@ export const ATTACHMENT_LIST_DEFAULT_LIMIT = 200;
 /** `limit` 上限 500：更大的目录请缩小 `dir`（单层 + 有界是这一面安全性的前提）。 */
 export const ATTACHMENT_LIST_MAX_LIMIT = 500;
 
+// ── 暂存上传 / 预览（file-ref-ux A2/A3/A4）──────────────────────────────
+//
+// 浏览器 drop/paste/选择框的 `File` 拿不到用户机绝对路径 ⇒ 字节上传到 node 落
+// 一份带原文件名的临时副本（暂存引用，TTL 约束）；`preview` 读回缩略图字节并
+// 兼作过期探针。边界判定与入池同一份（装配层注入，ask/deny 不读）。
+// 与 `attachments.list` 的分层理由一致：serve 只管形状 / 权限 / 折错误。
+
+/** 单文件上传上限（原始字节）：与视觉入池 `IMAGE_INGEST_MAX_BYTES` 同值（8 MiB）。 */
+export const ATTACHMENT_STAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** 预览返回的 data URL 字节上限（原始字节）：再大回落种类 ICON（诚实降级）。 */
+export const ATTACHMENT_PREVIEW_MAX_BYTES = 4 * 1024 * 1024;
+
+/** 归一后的暂存上传入参（base64 已解码、大小已夹）。 */
+export interface AttachmentStageRequest {
+  /** 原文件名（落盘前由装配层 sanitize；这里只卡形状）。 */
+  name: string;
+  /** 「它以为是啥」的 MIME 提示（只影响种类粗判与 blob 后缀，不参与判定）。 */
+  mime?: string;
+  bytes: Uint8Array;
+}
+
+/** 暂存上传结果：`path` 是 node 上的真实绝对路径（可直接进 `refs[]`）。 */
+export interface AttachmentStageResult {
+  path: string;
+  sha256: string;
+  bytes: number;
+  kind: 'file' | 'image' | 'document';
+  name: string;
+  mime?: string;
+  /** 过期时刻（毫秒 epoch）= 落盘 mtime + TTL；卡片「临时」徽标 / 过期态用。 */
+  expiresAt: number;
+}
+
+export type AttachmentStager = (request: AttachmentStageRequest) => Promise<AttachmentStageResult>;
+
+/** 预览入参：绝对路径（形状与 refs 同口径）。 */
+export interface AttachmentPreviewRequest {
+  path: string;
+}
+
+/**
+ * 预览结果（稳定码闭集）：
+ * - `ok`：可读；图片且 ≤ 上限时带 `dataUrl`（web 侧再缩到缩略图）；
+ * - `gone`：路径不存在（暂存过期 / 文件被删）⇒ 卡片「已过期」态；
+ * - `denied`：边界 ask/deny 或未注入（fail-closed，不读）；
+ * - `too_large`：超过预览上限（回落 ICON）；
+ * - `not_image`：非图片（种类 ICON 即可，不必读字节）。
+ * `staging` / `expiresAt` 仅当路径落在暂存根内时给出（「临时」徽标的数据源）。
+ */
+export interface AttachmentPreviewResult {
+  status: 'ok' | 'gone' | 'denied' | 'too_large' | 'not_image';
+  staging?: boolean;
+  expiresAt?: number;
+  mime?: string;
+  bytes?: number;
+  dataUrl?: string;
+}
+
+export type AttachmentPreviewer = (
+  request: AttachmentPreviewRequest,
+) => Promise<AttachmentPreviewResult>;
+
+/** 绝对路径形状（与 `runs.start` readRefsParam 同一正则，不写第二套）。 */
+const ABSOLUTE_PATH_RE = /^(?:[\\/]|[A-Za-z]:[\\/])/;
+
+/** base64 形状闸：标准字母表 + 至多两个 `=` 收尾（解码前卡，防畸形载荷）。 */
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function readStageParams(params: Record<string, unknown>): AttachmentStageRequest {
+  const name = params.name;
+  if (typeof name !== 'string' || name.trim().length === 0 || name.length > 512) {
+    throw new RpcError('invalid_params', 'name must be a non-empty string (≤512 chars)');
+  }
+  const data = params.data;
+  if (typeof data !== 'string' || data.length === 0) {
+    throw new RpcError('invalid_params', 'data must be a non-empty base64 string');
+  }
+  // base64 长度上限先卡（8 MiB 原始 ≈ 11.2 MiB base64），解码后再卡真实字节。
+  if (data.length > Math.ceil(ATTACHMENT_STAGE_MAX_BYTES / 3) * 4 + 4) {
+    throw new RpcError('quota_exceeded', `attachment exceeds ${ATTACHMENT_STAGE_MAX_BYTES} bytes`, {
+      reason: 'too_large',
+    });
+  }
+  if (!BASE64_RE.test(data)) {
+    throw new RpcError('invalid_params', 'data must be standard base64');
+  }
+  const bytes = new Uint8Array(Buffer.from(data, 'base64'));
+  if (bytes.byteLength === 0) {
+    throw new RpcError('invalid_params', 'data decodes to zero bytes');
+  }
+  if (bytes.byteLength > ATTACHMENT_STAGE_MAX_BYTES) {
+    throw new RpcError('quota_exceeded', `attachment exceeds ${ATTACHMENT_STAGE_MAX_BYTES} bytes`, {
+      reason: 'too_large',
+    });
+  }
+  const mime = params.mime;
+  if (mime !== undefined && (typeof mime !== 'string' || mime.length > 256)) {
+    throw new RpcError('invalid_params', 'mime must be a string (≤256 chars)');
+  }
+  return {
+    name,
+    bytes,
+    ...(typeof mime === 'string' && mime.length > 0 ? { mime } : {}),
+  };
+}
+
+function readPreviewPath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 4096) {
+    throw new RpcError('invalid_params', 'path must be a non-empty string (≤4096 chars)');
+  }
+  if (!ABSOLUTE_PATH_RE.test(value)) {
+    throw new RpcError('invalid_params', 'path must be absolute');
+  }
+  return value;
+}
+
 export interface AttachmentMethodsDeps {
   /**
    * 缺省（装配层没注入，例如只有方法表的本地 dispatcher）= 没有可浏览的根，
    * 返回 `entries: []` + `reason: 'refs_outside_roots'`（fail-closed，不猜路径）。
    */
   list?: AttachmentLister;
+  /** 暂存上传（file-ref-ux A2/A3）；缺省 = `not_supported`（fail-closed）。 */
+  stage?: AttachmentStager;
+  /** 缩略图 / 过期探针（file-ref-ux A4）；缺省 = `status: 'denied'`（fail-closed）。 */
+  preview?: AttachmentPreviewer;
 }
 
 /** 取 `limit`：schema 已卡住 1..500，这里再夹一次（防直接调用 handler 的代码）。 */
@@ -103,7 +224,7 @@ function readDir(value: unknown): string | undefined {
 }
 
 export function createAttachmentMethods(deps: AttachmentMethodsDeps): RpcMethodDefinition[] {
-  const { list } = deps;
+  const { list, stage, preview } = deps;
   return [
     {
       name: 'attachments.list',
@@ -155,6 +276,70 @@ export function createAttachmentMethods(deps: AttachmentMethodsDeps): RpcMethodD
           return { roots: [], entries: [], truncated: false, reason: 'refs_outside_roots' };
         }
         return list(request);
+      },
+    },
+    {
+      name: 'attachments.stage',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['name', 'data'],
+        properties: {
+          name: { type: 'string' },
+          mime: { type: 'string' },
+          data: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['path', 'sha256', 'bytes', 'kind', 'name', 'expiresAt'],
+        properties: {
+          path: { type: 'string' },
+          sha256: { type: 'string' },
+          bytes: { type: 'integer', minimum: 0 },
+          kind: { type: 'string', enum: ['file', 'image', 'document'] },
+          name: { type: 'string' },
+          mime: { type: 'string' },
+          expiresAt: { type: 'integer', minimum: 0 },
+        },
+      },
+      handler: async (params) => {
+        const request = readStageParams(params);
+        if (stage === undefined) {
+          throw new RpcError('not_supported', 'attachment staging is not available on this node');
+        }
+        return stage(request);
+      },
+    },
+    {
+      name: 'attachments.preview',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['path'],
+        properties: {
+          path: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['status'],
+        properties: {
+          status: {
+            type: 'string',
+            enum: ['ok', 'gone', 'denied', 'too_large', 'not_image'],
+          },
+          staging: { type: 'boolean' },
+          expiresAt: { type: 'integer', minimum: 0 },
+          mime: { type: 'string' },
+          bytes: { type: 'integer', minimum: 0 },
+          dataUrl: { type: 'string' },
+        },
+      },
+      handler: async (params) => {
+        const path = readPreviewPath(params.path);
+        if (preview === undefined) return { status: 'denied' };
+        return preview({ path });
       },
     },
   ];

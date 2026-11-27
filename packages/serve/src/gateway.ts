@@ -70,7 +70,12 @@ import {
   type SelfRestartResult,
 } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
-import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
+import {
+  type AttachmentLister,
+  type AttachmentPreviewer,
+  type AttachmentStager,
+  createAttachmentMethods,
+} from './gateway/methods/attachments.js';
 import {
   decideTimelineSubscribe,
   declareEpochChunk,
@@ -535,6 +540,16 @@ export interface GatewayOptions {
    * serve 只认结论 —— 与 `checkRefs` 同一条分层理由。
    */
   listAttachments?: AttachmentLister;
+  /**
+   * file-ref-ux（A2/A3）：`attachments.stage` 暂存上传（write）。
+   * 缺省 = `not_supported`（fail-closed）；落盘 / TTL / 去重在装配层。
+   */
+  stageAttachment?: AttachmentStager;
+  /**
+   * file-ref-ux（A4）：`attachments.preview` 缩略图 + 过期探针（read）。
+   * 缺省 = `status: 'denied'`（fail-closed）；边界与入池同一份。
+   */
+  previewAttachment?: AttachmentPreviewer;
   /**
    * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
    * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
@@ -2827,6 +2842,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 允许根 / deny / realpath 都在装配层，serve 只出形状与稳定码。
     ...createAttachmentMethods({
       ...(opts.listAttachments !== undefined ? { list: opts.listAttachments } : {}),
+      ...(opts.stageAttachment !== undefined ? { stage: opts.stageAttachment } : {}),
+      ...(opts.previewAttachment !== undefined ? { preview: opts.previewAttachment } : {}),
     }),
   ];
 
@@ -4039,7 +4056,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     } catch {
       return rpcFailure('', 'invalid_params', 'Failed to read request body', 400);
     }
-    if (new TextEncoder().encode(text).byteLength > maxBodyBytes) {
+    const bodyBytes = new TextEncoder().encode(text).byteLength;
+    // file-ref-ux：`attachments.stage` 携带文件 base64（8 MiB 原始 ≈ 10.7 MiB），
+    // 单独放宽到 12 MiB；其余方法仍按 maxBodyBytes。先按硬上限读入再按方法判，
+    // 避免为 peek 方法名解析两遍大 JSON。
+    const stageRpcMaxBody = 12 * 1024 * 1024;
+    if (bodyBytes > Math.max(maxBodyBytes, stageRpcMaxBody)) {
       return rpcFailure('', 'payload_too_large', 'Request body too large', 413);
     }
 
@@ -4048,6 +4070,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       body = JSON.parse(text);
     } catch {
       return rpcFailure('', 'invalid_params', 'Invalid JSON', 400);
+    }
+    if (typeof body === 'object' && body !== null && !Array.isArray(body)) {
+      const method = (body as Record<string, unknown>).method;
+      const limit = method === 'attachments.stage' ? stageRpcMaxBody : maxBodyBytes;
+      if (bodyBytes > limit) {
+        return rpcFailure('', 'payload_too_large', 'Request body too large', 413);
+      }
     }
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
       return rpcFailure('', 'invalid_params', 'Request body must be an object', 400);

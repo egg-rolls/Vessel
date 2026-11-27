@@ -145,6 +145,17 @@ function manifestToServeDescriptor(
             })),
           }
         : {}),
+      ...(contributes.composer !== undefined
+        ? {
+            composer: contributes.composer.map((item) => ({
+              slot: item.slot,
+              ...(item.scheme !== undefined ? { scheme: item.scheme } : {}),
+              ...(item.component !== undefined ? { component: item.component } : {}),
+              ...(item.handler !== undefined ? { handler: item.handler } : {}),
+              ...(item.order !== undefined ? { order: item.order } : {}),
+            })),
+          }
+        : {}),
       ...(contributes.commands !== undefined
         ? {
             commands: contributes.commands.map((command) => ({

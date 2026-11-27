@@ -44,6 +44,17 @@ export {
   useMessageCopy,
 } from './MessageActions';
 export { MessageFold } from './MessageFold';
+export {
+  type AtomicCardProps,
+  type AtomicScheme,
+  buildAtomicToken,
+  parseAtomicToken,
+  parseSegments,
+  RichComposer,
+  type RichComposerHandle,
+  type RichComposerProps,
+  type TransientHandle,
+} from './RichComposer';
 export { SearchInput } from './SearchInput';
 export { Section, type SectionProps } from './Section';
 export {

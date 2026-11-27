@@ -1965,12 +1965,23 @@ export function renderContributions(
   // S3 additive：settings spec 原样透传（loader readSettings 已校验形状）。
   const settings = contributes.settings;
   const hasSettings = settings !== undefined && Object.keys(settings).length > 0;
+  // file-ref-ux additive：composer 内嵌贡献原样透传（loader readComposer 已校验形状）。
+  const composer = (contributes.composer ?? [])
+    .map((item) => ({
+      slot: item.slot,
+      ...(item.scheme !== undefined ? { scheme: item.scheme } : {}),
+      ...(item.component !== undefined ? { component: item.component } : {}),
+      ...(item.handler !== undefined ? { handler: item.handler } : {}),
+      order: item.order ?? 100,
+    }))
+    .sort((a, b) => a.order - b.order);
   if (
     pages.length === 0 &&
     panels.length === 0 &&
     toolbar.length === 0 &&
     commands.length === 0 &&
     rpc.length === 0 &&
+    composer.length === 0 &&
     !hasSettings
   ) {
     return undefined;
@@ -1982,6 +1993,7 @@ export function renderContributions(
     toolbar,
     commands,
     rpc,
+    ...(composer.length > 0 ? { composer } : {}),
     ...(contributes.i18n !== undefined ? { i18n: contributes.i18n } : {}),
     ...(hasSettings ? { settings: settings as Record<string, PluginSettingSpec> } : {}),
   };

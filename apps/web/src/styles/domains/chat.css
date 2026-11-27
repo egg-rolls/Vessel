@@ -1265,6 +1265,44 @@
   opacity: 0.55;
 }
 
+/* RichComposer（contenteditable 富编辑，file-ref-ux A8）：与 textarea 同一块
+   `.composer-input` 排版；placeholder 用 data 属性 + ::before（contenteditable
+   没有原生 placeholder）。原子卡片节点是 inline-flex 的 contenteditable=false
+   span，与文本混排；卡片外观由贡献插件的组件自带（宿主只给定位与间距）。 */
+.rich-composer {
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  position: relative;
+}
+
+.rich-composer[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.rich-composer[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.rich-atomic {
+  display: inline-flex;
+  vertical-align: middle;
+  margin: 0 2px;
+  max-width: 100%;
+  user-select: none;
+}
+
+.rich-atomic-fallback {
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--surface-sunken);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
 /* 字段容器：卡片里唯一一块「输入 + 工具栏」的凹槽（`ComposerField`，两页共用）。
    底色就是输入框原来的底色（`--surface-sunken`），圆角 `--radius-md`；容器的内衬
    同时接管了两件事 ——
