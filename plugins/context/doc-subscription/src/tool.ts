@@ -26,6 +26,13 @@ import {
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
 import { type DocSubscriptionConfig, resolveInput } from './config.js';
 import { unifiedDiff } from './diff.js';
+import {
+  describeHealthRev,
+  healthSignature,
+  healthSubscriptionKey,
+  isValidHealthTarget,
+  readHealthSnapshot,
+} from './health.js';
 import { observeEntry } from './hook.js';
 import {
   type ChangeOrigin,
@@ -170,9 +177,11 @@ function formatRemove(
   const id = typeof args.id === 'string' && args.id.trim() !== '' ? args.id.trim() : undefined;
   const rawPath =
     typeof args.path === 'string' && args.path.trim() !== '' ? args.path.trim() : undefined;
+  const rawNode =
+    typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
 
-  if (id === undefined && rawPath === undefined) {
-    return '错误：remove 需要 path 或 id。';
+  if (id === undefined && rawPath === undefined && rawNode === undefined) {
+    return '错误：remove 需要 path、node 或 id。';
   }
 
   let key: string | undefined;
@@ -181,12 +190,14 @@ function formatRemove(
       (candidate) => state.subscriptions[candidate]?.id === id,
     );
     if (key === undefined) return `not_found: id=${id}`;
+  } else if (rawNode !== undefined) {
+    key = healthSubscriptionKey(rawNode);
   } else if (rawPath !== undefined) {
     key = canonicalPath(resolve(rawPath));
   }
 
   if (key === undefined || state.subscriptions[key] === undefined) {
-    return `not_found: ${rawPath ?? id}`;
+    return `not_found: ${rawPath ?? rawNode ?? id}`;
   }
   delete state.subscriptions[key];
   return `removed: ${key}`;
@@ -212,6 +223,13 @@ function formatList(state: SessionSubscriptionState): string {
   for (const entry of entries) {
     const changeLabel =
       entry.rev === '' ? 'pending' : entry.rev !== entry.notified_rev ? 'changed' : 'notified';
+    // health 条目（additive）：独立展示行；file 条目输出逐字节不变（零回归）。
+    if (entry.source === 'health') {
+      lines.push(
+        `  ${entry.path} id=${entry.id} source=health rev=${describeHealthRev(entry.rev)} ${changeLabel}`,
+      );
+      continue;
+    }
     const unread = entry.seen_rev === '' || entry.seen_rev !== entry.rev;
     lines.push(
       `  ${entry.path} id=${entry.id} rev=${describeRev(entry.rev)} ` +
@@ -222,7 +240,7 @@ function formatList(state: SessionSubscriptionState): string {
   return lines.join('\n');
 }
 
-/** 找到 inspect 的条目 key；id 优先于 path */
+/** 找到 inspect 的条目 key；id 优先于 node / path */
 function resolveKey(
   state: SessionSubscriptionState,
   args: Record<string, unknown>,
@@ -234,6 +252,9 @@ function resolveKey(
       (candidate) => state.subscriptions[candidate]?.id === id,
     );
   }
+  const rawNode =
+    typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
+  if (rawNode !== undefined) return healthSubscriptionKey(rawNode);
   const rawPath =
     typeof args.path === 'string' && args.path.trim() !== '' ? args.path.trim() : undefined;
   if (rawPath === undefined) return undefined;
@@ -440,15 +461,155 @@ async function inspectSubscription(
   };
 }
 
+/** 解析 health add 的输入目标列表（node + nodes，保持顺序） */
+function collectNodeInputs(args: Record<string, unknown>): string[] {
+  const inputs: string[] = [];
+  const single = args.node;
+  if (typeof single === 'string' && single.trim() !== '') inputs.push(single);
+  const multiple = args.nodes;
+  if (Array.isArray(multiple)) {
+    for (const item of multiple) {
+      if (typeof item === 'string') inputs.push(item);
+    }
+  }
+  return inputs;
+}
+
+/**
+ * 校验并构造 health 条目（q-health-subscription）。
+ * 基线：快照文件已在 ⇒ rev = notified_rev = 当前签名（订阅时的状态不出卡，与文件
+ * manual add 同语义）；快照缺失（watcher 尚未探测）⇒ rev=''，首次观察通知当前状态
+ * （health 的「首次通知」是基线确立，文件的首次全文在 inspect，口径差异有意）。
+ * 重复 add 保留已有游标（避免无谓重通知）。
+ */
+async function prepareHealthEntry(
+  input: string,
+  deps: SubscribeToolDeps,
+  existing: SubscriptionEntry | undefined,
+): Promise<AddOutcome> {
+  const trimmed = input.trim();
+  if (trimmed === '') return { input, reason: 'empty' };
+  if (!isValidHealthTarget(trimmed)) return { input, reason: 'invalid_node_target' };
+
+  const snapshot = await readHealthSnapshot(deps.config.stateDir, trimmed);
+  const baseline = snapshot !== undefined ? healthSignature(snapshot) : '';
+  return {
+    input: trimmed,
+    entry: {
+      id: subscriptionId(trimmed),
+      path: trimmed,
+      input: trimmed,
+      source: 'health',
+      rev: existing?.rev ?? baseline,
+      notified_rev: existing?.notified_rev ?? baseline,
+      seen_rev: existing?.seen_rev ?? '',
+      size: 0,
+      mtime_ms: snapshot?.checked_at ?? 0,
+      notified_at: existing?.notified_at ?? 0,
+      seen_at: existing?.seen_at ?? 0,
+      origin: 'manual',
+      reads: [],
+    },
+  };
+}
+
+/** health inspect 的 XML 信封（与文件 inspect 同族；target 替代 path 属性） */
+function healthInspectEnvelope(
+  entry: SubscriptionEntry,
+  attrs: Record<string, string>,
+  body: string,
+): string {
+  const attrText = [
+    `node="${escapeXmlAttr(entry.path)}"`,
+    `id="${escapeXmlAttr(entry.id)}"`,
+    ...Object.entries(attrs).map(([key, value]) => `${key}="${escapeXmlAttr(value)}"`),
+  ].join(' ');
+  return `<subscription-inspect ${attrText}>\n${body}\n</subscription-inspect>`;
+}
+
+/**
+ * 显式读取 health 订阅快照：返回宿主最近一次探测的事实（reachable / version /
+ * started_at / node_id / name / checked_at / error）。成功返回才推进 seen_rev
+ * （与文件 inspect 同口径）；快照缺失不推进任何游标。
+ */
+async function inspectHealth(
+  state: SessionSubscriptionState,
+  args: Record<string, unknown>,
+  deps: SubscribeToolDeps,
+  now: number,
+): Promise<InspectOutcome> {
+  const key = resolveKey(state, args, deps);
+  if (key === undefined || state.subscriptions[key] === undefined) {
+    return { output: 'not_found: inspect 需要已订阅的 node 或 id。', changed: false };
+  }
+  const entry = state.subscriptions[key];
+  if (entry === undefined) return { output: 'not_found', changed: false };
+
+  const snapshot = await readHealthSnapshot(deps.config.stateDir, entry.path);
+  if (snapshot === undefined) {
+    return {
+      output: healthInspectEnvelope(
+        entry,
+        { status: 'no_snapshot' },
+        'No health snapshot yet; the host health watcher has not probed this node.',
+      ),
+      changed: false,
+    };
+  }
+
+  const rev = healthSignature(snapshot);
+  const attrs: Record<string, string> = {
+    rev,
+    status: snapshot.reachable ? 'up' : 'down',
+    change: entry.seen_rev === rev ? 'none' : 'full',
+  };
+  if (snapshot.version !== undefined) attrs.version = snapshot.version;
+  if (snapshot.started_at !== undefined) attrs.started_at = String(snapshot.started_at);
+  if (snapshot.node_id !== undefined) attrs.node_id = snapshot.node_id;
+  if (snapshot.name !== undefined) attrs.name = snapshot.name;
+  if (snapshot.error !== undefined) attrs.error = snapshot.error;
+
+  const lines: string[] = [
+    `target: ${snapshot.target}`,
+    `reachable: ${snapshot.reachable ? 'yes' : 'no'}`,
+  ];
+  if (snapshot.node_id !== undefined) lines.push(`node_id: ${snapshot.node_id}`);
+  if (snapshot.name !== undefined) lines.push(`name: ${snapshot.name}`);
+  if (snapshot.version !== undefined) lines.push(`version: ${snapshot.version}`);
+  if (snapshot.started_at !== undefined) {
+    lines.push(
+      `started_at: ${snapshot.started_at} (${new Date(snapshot.started_at).toISOString()})`,
+    );
+  }
+  if (snapshot.pid !== undefined) lines.push(`pid: ${snapshot.pid}`);
+  if (snapshot.via !== undefined) lines.push(`via: ${snapshot.via}`);
+  lines.push(`checked_at: ${snapshot.checked_at} (${new Date(snapshot.checked_at).toISOString()})`);
+  if (snapshot.error !== undefined) lines.push(`error: ${snapshot.error}`);
+
+  state.subscriptions[key] = {
+    ...entry,
+    rev,
+    notified_rev: rev,
+    seen_rev: rev,
+    mtime_ms: snapshot.checked_at,
+    seen_at: now,
+    notified_at: entry.notified_rev === rev ? entry.notified_at : now,
+  };
+  return { output: healthInspectEnvelope(entry, attrs, lines.join('\n')), changed: true };
+}
+
 /** 构造 subscribe 工具 */
 export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
   return {
     name: 'subscribe',
     description:
-      'Manage per-session file subscriptions. add/remove/list/inspect concrete files; ' +
+      'Manage per-session subscriptions. add/remove/list/inspect concrete files; ' +
       'changes produce a short notice, and inspect returns the diff (full content on first read). ' +
       'edit/write auto-subscribe the files they touch (subscribe:false on those tools opts out); ' +
       'read auto-subscribes the line ranges it reads (subscribe:false on read opts out). ' +
+      'source:"health" subscribes a node\'s health instead of a file: node is a local node_id ' +
+      'or a federation address <principal>@<node_id>:<team_id>; reachability flips, version ' +
+      'changes and restarts (started_at) produce a health notice, inspect returns the snapshot. ' +
       'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
@@ -458,11 +619,26 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
           enum: ['add', 'remove', 'list', 'inspect'],
           description: 'add | remove | list | inspect (default list)',
         },
+        source: {
+          type: 'string',
+          enum: ['file', 'health'],
+          description: 'Subscription source type (add only; default file)',
+        },
         path: { type: 'string', description: 'Single file path (add / remove / inspect)' },
         paths: {
           type: 'array',
           items: { type: 'string' },
           description: 'Multiple file paths (add only)',
+        },
+        node: {
+          type: 'string',
+          description:
+            'Single node target (source:health add / remove / inspect): local node_id or <principal>@<node_id>:<team_id>',
+        },
+        nodes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Multiple node targets (source:health add only)',
         },
         id: { type: 'string', description: 'Subscription id (remove / inspect)' },
       },
@@ -489,7 +665,13 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       if (action === 'list') return formatList(state);
 
       if (action === 'inspect') {
-        const outcome = await inspectSubscription(state, args, deps, Date.now());
+        // health 源（additive）：按条目 source 分派；file 路径逐字节不变。
+        const inspectKey = resolveKey(state, args, deps);
+        const isHealth =
+          inspectKey !== undefined && state.subscriptions[inspectKey]?.source === 'health';
+        const outcome = isHealth
+          ? await inspectHealth(state, args, deps, Date.now())
+          : await inspectSubscription(state, args, deps, Date.now());
         if (outcome.changed) {
           try {
             await deps.store.save(state);
@@ -503,9 +685,10 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       if (action === 'remove') {
         if (
           (typeof args.path !== 'string' || args.path.trim() === '') &&
+          (typeof args.node !== 'string' || args.node.trim() === '') &&
           (typeof args.id !== 'string' || args.id.trim() === '')
         ) {
-          return '错误：remove 需要 path 或 id。';
+          return '错误：remove 需要 path、node 或 id。';
         }
         const result = formatRemove(state, args, (input) => resolveInput(deps.config, input));
         if (result.startsWith('removed:')) {
@@ -518,7 +701,56 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         return result;
       }
 
-      // add
+      // add：source 泛化（q-health-subscription）——缺省 'file'（零回归）；
+      // 'health' 走 node/nodes 目标分支，不碰文件边界 / stat / 敏感名判定。
+      const source = args.source ?? 'file';
+      if (source !== 'file' && source !== 'health') {
+        return '错误：source 必须是 file / health。';
+      }
+
+      if (source === 'health') {
+        const inputs = collectNodeInputs(args);
+        if (inputs.length === 0) return '错误：source:health add 需要 node 或 nodes。';
+        const added: SubscriptionEntry[] = [];
+        const rejected: Array<{ input: string; reason: string }> = [];
+        const seen = new Set<string>();
+        for (const input of inputs) {
+          const target = input.trim();
+          if (seen.has(target)) continue;
+          seen.add(target);
+          const key = healthSubscriptionKey(target);
+          const outcome = await prepareHealthEntry(target, deps, state.subscriptions[key]);
+          if (outcome.entry === undefined) {
+            rejected.push({ input: outcome.input, reason: outcome.reason ?? 'invalid' });
+            continue;
+          }
+          state.subscriptions[key] = outcome.entry;
+          added.push(outcome.entry);
+        }
+        if (added.length > 0) {
+          try {
+            await deps.store.save(state);
+          } catch {
+            return '错误：保存订阅状态失败。';
+          }
+        }
+        const lines: string[] = [];
+        if (added.length > 0) {
+          lines.push(`added ${added.length}:`);
+          for (const entry of added) lines.push(`  ${entry.path} (health)`);
+          lines.push(
+            'Health changes (reachability / version / restart) will produce a short notice; ' +
+              'use action "inspect" to view the snapshot.',
+          );
+        }
+        if (rejected.length > 0) {
+          lines.push(`rejected ${rejected.length}:`);
+          for (const item of rejected) lines.push(`  ${item.reason}: ${item.input}`);
+        }
+        return lines.join('\n');
+      }
+
+      // add（file）
       const inputs = collectAddInputs(args);
       if (inputs.length === 0) return '错误：add 需要 path 或 paths。';
 

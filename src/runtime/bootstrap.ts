@@ -185,6 +185,7 @@ import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/s
 import { callbackRoute } from '../tools-engine/wiring';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { hasBootRegistryKey } from './model-registry-wiring';
+import { createNodeHealthWatch, type NodeHealthWatch } from './node-health-watch';
 import { createRuntimeNoticeBus, type RuntimeNoticeBus } from './runtime-notice';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { sanitizeToolOutputEnv } from './tool-output-env';
@@ -1490,6 +1491,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let noticeBus: RuntimeNoticeBus | undefined;
   /** 成员停下通知的投递面（窗口合并 / 每轮一条 / 定向父 session）。 */
   let peerNotices: PeerNoticeRouter | undefined;
+  /** node 健康订阅 watcher（q-health-subscription；需求驱动周期探测，快照供插件观察）。 */
+  let nodeHealthWatch: NodeHealthWatch | undefined;
   /**
    * 图片 blob 池的 GC 定时器（0.56 P1）。缺省开：孤儿 blob 不清会一直占着 2 GiB 池，
    * 触顶之后新图不再内联（静默降级）。第一趟固定 dry-run（只报「将删 N / 共 M」）。
@@ -1550,6 +1553,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       federation: config.federation,
       logger,
     });
+    // q-health-subscription：node 健康订阅 watcher（doc-subscription health 源的宿主侧）。
+    // 需求驱动：扫到 health 订阅才探测；快照落插件 stateDir，插件 run 边界读快照发通知
+    //（与文件订阅同一投递路径）。federation 关掉也建：本机 node 订阅不依赖 federation。
+    nodeHealthWatch = createNodeHealthWatch({
+      getConfig: () => liveConfigRef.current,
+      dataDir,
+      nodeId,
+      secrets: federationSecrets,
+      logger,
+    });
+    nodeHealthWatch.start();
     const federation =
       config.federation?.enabled !== false
         ? createFederationSendPort({
@@ -2587,6 +2601,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 退订 / 清定时器是 best-effort
     }
     peerNotices = undefined;
+    // q-health-subscription：健康探测节拍器停掉（在飞 tick 自然跑完，不阻塞退出）。
+    try {
+      nodeHealthWatch?.stop();
+    } catch {
+      // 清定时器是 best-effort
+    }
+    nodeHealthWatch = undefined;
     // 0.56 P1：blob GC 定时器（在飞的那一趟照旧跑完，不阻塞退出）。
     imageBlobGc?.stop();
     imageBlobGc = undefined;

@@ -299,11 +299,11 @@ function applySkillsLibraryIsolation(
 }
 
 /**
- * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files，
- * basic-tools → lock / conflict（写协调 producer）。
+ * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files / health
+ *（health 源 q-health-subscription），basic-tools → lock / conflict（写协调 producer）。
  */
 const ENV_GRANULARITY_SCOPES: Readonly<Record<string, readonly string[]>> = {
-  'doc-subscription': ['files'],
+  'doc-subscription': ['files', 'health'],
   'basic-tools': ['lock', 'conflict'],
 };
 
