@@ -467,27 +467,34 @@ export function useChatSessions({
     }, [refreshAll]),
   );
 
-  const retryLoad = () => {
+  // 稳定身份（SessionRail 行级 memo 的依赖，st-F1 拆订阅）：
+  // 流式期 ChatView 每 50ms 重渲染，这些回调不换身份才能让会话栏整棵跳过。
+  const retryLoad = useCallback(() => {
     void loadSessions(client, { epoch, force: true });
-  };
+  }, [client, epoch, loadSessions]);
 
-  const handleRename = async (sessionId: string, title: string): Promise<boolean> => {
-    if (!connected) {
-      toast.error(t('chat.toast.disconnectedRename'));
-      return false;
-    }
-    const previous = sessions;
-    renameSessionLocal(sessionId, title);
-    try {
-      await client.renameSession(sessionId, title);
-      void loadSessions(client, { epoch, force: true });
-      return true;
-    } catch (error) {
-      restoreSessions(previous);
-      toast.error(t('chat.toast.renameFailed', { detail: errorMessage(error) }));
-      return false;
-    }
-  };
+  const handleRename = useCallback(
+    async (sessionId: string, title: string): Promise<boolean> => {
+      if (!connected) {
+        toast.error(t('chat.toast.disconnectedRename'));
+        return false;
+      }
+      const previous = sessions;
+      renameSessionLocal(sessionId, title);
+      try {
+        await client.renameSession(sessionId, title);
+        void loadSessions(client, { epoch, force: true });
+        return true;
+      } catch (error) {
+        restoreSessions(previous);
+        toast.error(t('chat.toast.renameFailed', { detail: errorMessage(error) }));
+        return false;
+      }
+    },
+    [connected, sessions, client, epoch, loadSessions, renameSessionLocal, restoreSessions, toast],
+  );
+
+  const showMore = useCallback(() => setRenderLimit((value) => value + SESSION_PAGE_SIZE), []);
 
   return {
     sessions,
@@ -530,7 +537,7 @@ export function useChatSessions({
     loadSessionDetail,
     refreshSessions,
     retryLoad,
-    showMore: () => setRenderLimit((value) => value + SESSION_PAGE_SIZE),
+    showMore,
     handleRename,
     ...deleteApi,
   };

@@ -1,4 +1,4 @@
-import type { RefObject } from 'react';
+import { memo, type RefObject } from 'react';
 import type { PaneResizeApi } from '../../app/usePaneResize';
 import { ResizeHandle } from '../../components/ResizeHandle';
 import type { SessionInfo } from '../../gateway/types';
@@ -8,8 +8,11 @@ import { SessionList } from './SessionList';
 /**
  * 左侧会话栏：列表 + 分栏拖拽 + compact 抽屉遮罩。
  * 纯展示；查询、选中、重命名、删除等动作由 ChatView 注入。
+ *
+ * **memo**（st-F1 拆订阅）：流式期 ChatView 每 50ms 重渲染，但会话栏的 props
+ * （会话窗口 / 徽标表 / 稳定回调）几乎从不变 —— 整棵跳过，20Hz 节拍不再波及会话列表。
  */
-export function SessionRail({
+export const SessionRail = memo(function SessionRail({
   sessions,
   hiddenCount,
   selectedId,
@@ -157,4 +160,4 @@ export function SessionRail({
       )}
     </>
   );
-}
+});

@@ -12,6 +12,7 @@ import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvide
 import { useNodes } from '../../gateway/NodeProvider';
 import type { AskUserAnswer, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
+import type { StoredEvent } from '../../state/events';
 import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
@@ -52,6 +53,10 @@ const EMPTY_ANSWERED_ASKS: readonly AnsweredAsk[] = [];
 
 /** 子 agent 详情态不画本地待确认气泡：空数组用固定引用（与上一行同一个理由）。 */
 const EMPTY_PENDING_SENDS: readonly PendingSend[] = [];
+
+/** 主会话态不需要原始事件流（只有子 agent 详情读它）：固定空引用，避免 20Hz 的
+ * entries 新引用把 TranscriptWindow 的 props 每帧打穿（st-F1 拆订阅的一部分）。 */
+const EMPTY_ENTRIES: readonly StoredEvent[] = [];
 
 /**
  * 当前会话 body 的成员 id（工具描述目录 / inbox 面板按它拉 agent 级数据）。
@@ -317,15 +322,31 @@ export function ChatView({
     [selectedId, submitApi.setInputForSession],
   );
 
-  const selectSession = (sessionId: string) => {
-    navigate({ domain: 'chat', sessionId });
-    onCloseSessions();
-  };
+  // 稳定身份（SessionRail memo 的依赖，st-F1 拆订阅）：流式期 ChatView 每 50ms
+  // 重渲染，这些回调不换身份才能让会话栏整棵跳过重渲染。
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      navigate({ domain: 'chat', sessionId });
+      onCloseSessions();
+    },
+    [navigate, onCloseSessions],
+  );
 
-  const startNewSession = () => {
+  const startNewSession = useCallback(() => {
     navigate({ domain: 'chat', sessionId: 'new' });
     onCloseSessions();
-  };
+  }, [navigate, onCloseSessions]);
+
+  const openPendingPage = useCallback(() => {
+    navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) });
+  }, [navigate, selectedId]);
+
+  const viewSessionRuns = useCallback(
+    (sessionId: string) => navigate({ domain: 'runs', tab: 'live', sessionId }),
+    [navigate],
+  );
+
+  const openConnectionPage = useCallback(() => navigate({ domain: 'gateway' }), [navigate]);
 
   const handleDecidePermission = useCallback(
     (requestId: string, decision: 'allow' | 'deny', scope: PermissionScope) => {
@@ -353,16 +374,27 @@ export function ChatView({
 
   // 编辑 / 重试不再截断历史：先确认，确认后从源 session 前缀创建新 session
   // （`sessions.create{from_session_id, keep_messages}`），源 session 保留只读。
-  const openCreate = (kind: CreateTarget['kind'], keepMessages: number, text: string) => {
-    if (!selectedId) return;
-    setCreateTarget({ kind, sessionId: selectedId, keepMessages, text });
-  };
-  const handleEditMessage = (keepMessages: number, text: string) => {
-    openCreate('edit', keepMessages, text);
-  };
-  const handleRetryMessage = (keepMessages: number, text: string) => {
-    openCreate('retry', keepMessages, text);
-  };
+  const openCreate = useCallback(
+    (kind: CreateTarget['kind'], keepMessages: number, text: string) => {
+      if (!selectedId) return;
+      setCreateTarget({ kind, sessionId: selectedId, keepMessages, text });
+    },
+    [selectedId],
+  );
+  // 稳定身份：这两个回调一路传到行级 memo 的 TranscriptMessage，
+  // 每渲染换新闭包会让全部历史行的 memo 失效（st-F1）。
+  const handleEditMessage = useCallback(
+    (keepMessages: number, text: string) => {
+      openCreate('edit', keepMessages, text);
+    },
+    [openCreate],
+  );
+  const handleRetryMessage = useCallback(
+    (keepMessages: number, text: string) => {
+      openCreate('retry', keepMessages, text);
+    },
+    [openCreate],
+  );
 
   /**
    * `sessions.create{from_session_id}` 要求源 session 是当前 primary。
@@ -462,9 +494,7 @@ export function ChatView({
           pendingBySession={sessionsApi.pendingBySession}
           inflightBySession={sessionsApi.sessionInflight}
           pendingAskCount={sessionPendingCount}
-          onOpenPending={() =>
-            navigate({ domain: 'pending', ...(selectedId ? { sessionId: selectedId } : {}) })
-          }
+          onOpenPending={openPendingPage}
           agentAddresses={sessionsApi.agentAddresses}
           agentAddressesById={sessionsApi.agentAddressesById}
           agentDepths={sessionsApi.agentDepths}
@@ -483,11 +513,11 @@ export function ChatView({
           onNew={startNewSession}
           onRename={sessionsApi.handleRename}
           onDelete={sessionsApi.openDelete}
-          onViewRuns={(sessionId) => navigate({ domain: 'runs', tab: 'live', sessionId })}
+          onViewRuns={viewSessionRuns}
           onShowMore={sessionsApi.showMore}
           compact={compact}
           onCloseDrawer={onCloseSessions}
-          onOpenConnection={() => navigate({ domain: 'gateway' })}
+          onOpenConnection={openConnectionPage}
           writesDisabled={!connected}
           renameSignal={sessionsApi.renameSignal}
           sessionsOpen={sessionsOpen}
@@ -588,7 +618,7 @@ export function ChatView({
                     verbosity={transcriptApi.visibility.verbosity}
                     cardsDefaultOpen={transcriptApi.cardsDefaultOpen}
                     errorLevel={transcriptApi.errorLevel}
-                    entries={snapshot.entries}
+                    entries={transcriptApi.activeAgent ? snapshot.entries : EMPTY_ENTRIES}
                     snapshotVersion={snapshot.version}
                     detailSessionId={sessionsApi.sessionDetail?.session_id}
                     sendTick={submitApi.sendTick}
