@@ -1251,6 +1251,9 @@
   border-radius: 0;
   background: transparent;
   font-size: 14px;
+  /* 用户补充（q-shadow-elevation）：聊天框输入字重调大提升可读性（400 → 500）。
+     composer 其余外观保持既有微调原样（本批未改其阴影/背景）。 */
+  font-weight: 500;
   line-height: 1.6;
   color: var(--ink);
   resize: none;
