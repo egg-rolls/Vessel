@@ -506,6 +506,22 @@ export function TranscriptWindow({
   // principal 地址解析成名字，解析不到退短 id —— 查表不是造名（§5.2 纪律）。
   const agentNames = useAgentNames();
 
+  // 「条带真覆盖」判定（q-inbox-notice-visibility-fix，收窄 0.55.1 的抑制）：
+  // 只有当 PendingStrip **此刻正在画**本会话 human 源的未消费 inbox 条目时，纯 pending
+  // 的 `[inbox] N pending` 通知才算被条带承接，才允许不出卡。判据用客户端 pending 的
+  // `queued` / `deferred` 两态 —— 它们正是条带会画成行、且消息确实还在服务端 inbox 里
+  // （held，会被 notice 计数）的状态（见 pending-placement.ts#inPendingStrip）：
+  // - `failed` 不算：那是「未发送」，消息根本不在 inbox 里，条带那行承接不了「N pending」；
+  // - `sending` 不算：它在会话流里画，不在条带上；
+  // - agent 投递（wake/quiet、成员 send）没有客户端 pending ⇒ 恒不覆盖 ⇒ 通知照常出卡。
+  // 消费即解除：run 取走消息后 pending 被回显 / 对账摘除，本判定翻 false，被抑制过的
+  // 通知卡在下一帧恢复渲染 —— 条带行消失后时间线里仍留有持久痕迹（0.55.1 抑制 +
+  // 条带消费即消失曾让这张卡在生产 56/56 场景里彻底不可见，见 probe-inbox-notice 报告）。
+  // pendingSends 已按当前会话过滤（usePendingSends）；子 agent 详情页宿主传空表 ⇒ 不抑制。
+  const stripCoversInboxPending = pendingSends.some(
+    (pending) => pending.state === 'queued' || pending.state === 'deferred',
+  );
+
   const renderItem = (item: TranscriptItem): ReactNode => {
     switch (item.kind) {
       case 'run-input':
@@ -706,10 +722,13 @@ export function TranscriptWindow({
       case 'runtime-notice': {
         const env = item.env;
         if (env !== undefined) {
-          // 0.55.1：`[inbox] N pending` 这类通知**只给模型看**——人类侧已有输入框上方的
-          // 待处理条带（带收回/取消/删除），同一事实渲染两次就是多余。详见
-          // `env-notice.ts#isStripCoveredInboxNotice` 的注释（含 unread 的行仍然要留）。
-          if (isStripCoveredInboxNotice(env)) return null;
+          // 0.55.1 的抑制收窄（q-inbox-notice-visibility-fix）：纯 pending 的 `[inbox] N pending`
+          // 只在**条带真覆盖**时不出卡 —— 本会话 human 源排队、条带此刻正画着那条未消费条目
+          // （stripCoversInboxPending，判据与理由见其定义处）。agent 投递的纯 pending 通知
+          // （wake/quiet / 成员 send，无客户端 pending）与消费后的历史一律照常渲染：
+          // 条带消费即消失，抑制若不看覆盖就是永久吞卡（probe-inbox-notice 实锤）。
+          // 形态判据（只认纯 pending、含 unread 的行仍必出卡）见 env-notice.ts#isStripCoveredInboxNotice。
+          if (stripCoversInboxPending && isStripCoveredInboxNotice(env)) return null;
           // 环境信息卡（vessel:notice）：与「来自 agent X」卡同一张卡、同一套展开机制。
           // 卡头 scope 标签 + 条数、summary 首行、展开看全部原文（见 EnvCard.tsx）。
           return <EnvCard env={env} ts={item.ts} defaultOpen={cardsDefaultOpen} />;
