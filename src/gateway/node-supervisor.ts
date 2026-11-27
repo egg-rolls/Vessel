@@ -11,9 +11,9 @@
  *   平台据此立刻监听；`settle()` 在后台并发等待就绪。每个节点是独立状态机
  *   （`starting` / `ready` / `failed` / `adopted` / `external`），一个节点慢、
  *   起不来或崩溃**只标它自己**（状态 + 原因 + 时刻），不回滚平台、不阻塞别人；
- * - Windows 无 POSIX 信号语义：`process.kill(pid)` 后 `taskkill /PID <pid> /T /F`
- *   兜底；`gateway stop`（另一进程）通过平台写下的 runtime manifest 找到这些
- *   PID，逐条复核 `gateway.pid` 归属后才终止。
+ * - Windows 无 POSIX 信号语义：`taskkill /PID <pid> /T /F` 无条件整棵子树
+ *   （TP-1，对齐 web-dist killBuildTreeByPid）；`gateway stop`（另一进程）通过
+ *   平台写下的 runtime manifest 找到这些 PID，逐条复核 `gateway.pid` 归属后才终止。
  *
  * Manifest 是运行时状态（不是 registry、不含 token），平台退出时删除。
  *
@@ -22,11 +22,13 @@
 
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
-import { DATA_DIR_CLI_MARKER_ENV } from '@vessel-agent/config';
+import { DATA_DIR_CLI_MARKER_ENV, loadConfig, type VesselConfig } from '@vessel-agent/config';
 import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
+import { effectiveNodeToken } from '../node/token-derive';
 import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
 import { buildDaemonArgv } from './daemon';
+import { loadNodeRegistry } from './node-registry';
 import {
   type CommandRunner,
   createCommandRunner,
@@ -452,6 +454,65 @@ export interface DrainSkippedInfo {
 }
 
 /**
+ * F1/SD-2 链A+C：停止方凭据以**目标 node 自己的 config/dataDir** 为权威。
+ *
+ * 旧口径硬编码 `token: ''`（回环匿名）：显式 token 部署下匿名被拒 → 优雅关闭
+ * 必 401 → 静默强杀。这里按 node 侧同一优先级（显式 > 注入 > 派生）现算停止凭据：
+ *
+ * 1. `specToken`（进程内监督器已知的生效 token）最优先 —— 它就是 spawn 注入值；
+ * 2. registry 里该 node 的 `config_path` → 加载**node 自己的 config**（与
+ *    `resolveLocalNodes` 同口径：registry data_dir 走 CLI 标记）现算；
+ * 3. 隐式 node（dataDir == 平台数据根、无 registry config_path）→ 平台 config
+ *    就是它的 config（`implicitConfig`，由停止 CLI 传入）；
+ * 4. 其余 → 空 config 纯派生（`<dataDir>/root-secret` + node_id，零配置舰队 node）。
+ *
+ * 解析失败返回 `''`（回环匿名兜底，旧语义）；返回值只用于请求头，不打印、不落盘。
+ */
+export async function resolveNodeStopToken(options: {
+  nodeId: string;
+  dataDir: string;
+  /** registry 所在数据根（平台 dataDir）；缺省 = 不查 registry。 */
+  registryDataDir?: string;
+  env?: Record<string, string | undefined>;
+  /** 进程内已知的 spec 生效 token（最高优先级）。 */
+  specToken?: string;
+  /** 平台自身 config：仅用于隐式 node（dataDir == registryDataDir）。 */
+  implicitConfig?: VesselConfig;
+}): Promise<string> {
+  if (options.specToken !== undefined && options.specToken !== '') return options.specToken;
+  if (options.nodeId === '') return '';
+  const env = options.env ?? process.env;
+  let config: VesselConfig | undefined;
+  if (options.registryDataDir !== undefined) {
+    const registry = await loadNodeRegistry(options.registryDataDir).catch(() => undefined);
+    const entry =
+      registry?.kind === 'ready'
+        ? registry.registry.nodes.find((node) => node.node_id === options.nodeId)
+        : undefined;
+    if (entry?.config_path !== undefined) {
+      const loaded = await loadConfig({
+        configPath: entry.config_path,
+        // registry data_dir 是 CLI 级权威（与 supervisor spawn / resolveLocalNodes 同口径）。
+        env: { ...env, VESSEL_DATA_DIR: options.dataDir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
+      }).catch(() => undefined);
+      if (loaded !== undefined && loaded.validation.errors.length === 0) config = loaded.config;
+    } else if (
+      options.implicitConfig !== undefined &&
+      path.relative(path.resolve(options.dataDir), path.resolve(options.registryDataDir)) === ''
+    ) {
+      config = options.implicitConfig;
+    }
+  }
+  const resolution = effectiveNodeToken({
+    config: config ?? {},
+    dataDir: options.dataDir,
+    nodeId: options.nodeId,
+    env,
+  });
+  return resolution.ok ? (resolution.value.token ?? '') : '';
+}
+
+/**
  * 终止 node 子进程前先试优雅关闭（P0-run-stops P1）。
  *
  * Windows 上外部 `process.kill` 是无条件终止，进程内 drain（drain-to-quiesce：
@@ -460,8 +521,11 @@ export interface DrainSkippedInfo {
  * 其余一律交回调用方走既有强杀回退（失败模式是「停不掉」，不是「没杀成」）。
  *
  * 寻址用子进程自己 dataDir 的 `gateway.pid`（host/port，归属已由调用方复核）；
- * token 用回环匿名口径（与 `gateway reload` 一致）；本机 spawn 的 node 恒回环 http，
- * 显式 token / TLS 部署下请求被拒 → 回退强杀，不假装成功。hub 没有 run 面，不试。
+ * token 用调用方解析的**目标 node 生效凭据**（F1/SD-2 链C：spec token / 自身
+ * config 派生，见 resolveNodeStopToken）；缺省 '' = 旧回环匿名口径。凭据错配
+ * （401）时先试一次匿名优雅再回退强杀 —— 零配置 node 的回环匿名可能仍开着。
+ * 本机 spawn 的 node 恒回环 http；TLS 部署下请求被拒 → 回退强杀，不假装成功。
+ * hub 没有 run 面，不试。
  */
 async function tryGracefulNodeShutdown(
   child: SpawnedChildRecord,
@@ -470,15 +534,32 @@ async function tryGracefulNodeShutdown(
     /** 可选显式上限（缺省不限时）；到点返回 reason:'timeout'，调用方不强杀。 */
     timeoutMs?: number;
     onProgress?: (info: DrainProgressInfo) => void;
+    /** 目标 node 生效凭据（F1/SD-2 链C）；缺省 '' = 回环匿名。 */
+    token?: string;
   },
 ): Promise<{ dead: boolean; reason?: string }> {
   const record = await readGatewayPidRecord(child.data_dir);
   if (record === null || record.pid !== child.pid) return { dead: false, reason: 'no_record' };
-  const result = await shutdownGateway({
+  const token = opts?.token ?? '';
+  let result = await shutdownGateway({
     record,
-    token: '',
+    token,
     requestTimeoutMs: GRACEFUL_SHUTDOWN_REQUEST_MS,
   });
+  let samplerToken = token;
+  if (!result.ok && result.code === 'unauthorized' && token !== '') {
+    // F1/SD-2：401 ≠ drain 不可达 —— 凭据错配时零配置 node 的回环匿名可能仍开着。
+    // 回退强杀前先试一次匿名优雅（避免「凭据错配 → 静默强杀」）。
+    const anonymous = await shutdownGateway({
+      record,
+      token: '',
+      requestTimeoutMs: GRACEFUL_SHUTDOWN_REQUEST_MS,
+    });
+    if (anonymous.ok) {
+      result = anonymous;
+      samplerToken = '';
+    }
+  }
   if (!result.ok) return { dead: false, reason: result.code ?? 'error' };
   // 默认不限时等死 + 5s 进度（用户裁定 #5）；显式 --timeout 到点 reason:'timeout'。
   // DR15-1：等死段有界兜底 —— quiesce 后 30s 未自死 → reason:'quiesce_timeout'，
@@ -488,7 +569,7 @@ async function tryGracefulNodeShutdown(
     ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
     ...(opts?.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
-    sampleRuns: nodeRunSampler(record, ''),
+    sampleRuns: nodeRunSampler(record, samplerToken),
   });
   if (wait.dead) return { dead: true };
   return { dead: false, reason: wait.quiesceTimedOut ? 'quiesce_timeout' : 'timeout' };
@@ -508,11 +589,17 @@ async function waitUntilDead(
 }
 
 /**
- * 终止一个子进程。POSIX `SIGTERM`；Windows `process.kill` 后
- * `taskkill /PID <pid> /T /F` 兜底（不做按端口/进程名的批量杀）。
+ * 终止一个子进程。POSIX `SIGTERM`；Windows **无条件** `taskkill /PID <pid> /T /F`
+ * 整棵子树（对齐 web-dist `killBuildTreeByPid` 同仓口径；不做按端口/进程名批量杀）。
+ *
+ * TP-1：Windows `process.kill` 是无条件 TerminateProcess，只杀主进程 —— 旧实现
+ * 「先 process.kill 再 waitUntilDead(500) 兜底 taskkill /T」里主进程必死、等待必
+ * 提前 return，taskkill /T 永不执行（死代码，注释宣称的树杀与实际不符），
+ * tools-engine/codegraph 子进程成孤儿持 SQLite 锁。故 win32 直接树杀。
  *
  * 0.58：`force: true` = 僵死路径 —— 主线程停摆的进程收不到、也不会处理 SIGTERM，
- * 所以 POSIX 直接 `SIGKILL`（Windows 上 `process.kill` 本身就是强制终止）。
+ * 所以 POSIX 直接 `SIGKILL`（Windows 上 taskkill /F 本身就是强制终止，force 与
+ * 非 force 同口径）。
  */
 async function terminateChild(
   pid: number,
@@ -524,18 +611,17 @@ async function terminateChild(
     force?: boolean;
   },
 ): Promise<boolean> {
+  if (options.platform === 'win32') {
+    // TP-1：无条件 taskkill /T /F 整棵子树（runCommand 不抛错；进程已不在时
+    // taskkill 非零退出，由下面的等死确认兜底 —— 与旧 ESRCH 语义同效）。
+    await options.runCommand(['taskkill', '/PID', String(pid), '/T', '/F']);
+    return waitUntilDead(pid, options.timeoutMs, options.sleep);
+  }
   try {
-    if (options.platform === 'win32') process.kill(pid);
-    else process.kill(pid, options.force === true ? 'SIGKILL' : 'SIGTERM');
+    process.kill(pid, options.force === true ? 'SIGKILL' : 'SIGTERM');
   } catch (error) {
     if (!isErrno(error, 'ESRCH')) return false;
     return true;
-  }
-
-  if (options.platform === 'win32') {
-    // process.kill 已发出终止；短暂等待后用 taskkill 兜底整棵子树。
-    if (await waitUntilDead(pid, 500, options.sleep)) return true;
-    await options.runCommand(['taskkill', '/PID', String(pid), '/T', '/F']);
   }
   return waitUntilDead(pid, options.timeoutMs, options.sleep);
 }
@@ -549,6 +635,13 @@ export interface StopSpawnedChildrenOptions {
   timeoutMs?: number;
   sleep?: (ms: number) => Promise<void>;
   runCommand?: CommandRunner;
+  /** F1/SD-2 链C：凭据解析用 env（缺省 process.env）。 */
+  env?: Record<string, string | undefined>;
+  /**
+   * F1/SD-2 链C：平台自身 config —— 隐式 node（dataDir == gatewayDataDir、无
+   * registry config_path）的生效 config 就是它。缺省 = 隐式 node 走纯派生。
+   */
+  config?: VesselConfig;
   /** 测试 seam：覆盖单进程终止；返回 false 表示未确认停止（manifest 保留）。 */
   terminate?: (pid: number) => Promise<boolean>;
   /**
@@ -690,6 +783,17 @@ export async function stopSpawnedChildren(
       // 用户裁定 #5：force = 显式非正常退出（快照 + 强杀 + 审计）；
       // 缺省 = 优雅不限时 drain + 进度（node 进程内写 resume 标记），hub 无 run 面不试。
       const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
+      // F1/SD-2 链C：停止凭据以目标 node 自己的 config/dataDir 为权威（不再硬编码 ''）。
+      const stopToken =
+        child.kind === 'hub'
+          ? ''
+          : await resolveNodeStopToken({
+              nodeId: child.node_id,
+              dataDir: child.data_dir,
+              registryDataDir: options.gatewayDataDir,
+              ...(options.env !== undefined ? { env: options.env } : {}),
+              ...(options.config !== undefined ? { implicitConfig: options.config } : {}),
+            });
       let ok = false;
       let failReason: string | undefined;
       if (options.force === true) {
@@ -700,7 +804,7 @@ export async function stopSpawnedChildren(
           const record = await readGatewayPidRecord(child.data_dir);
           if (record !== null && record.pid === child.pid) {
             try {
-              runs = await snapshotActiveRuns(record, '');
+              runs = await snapshotActiveRuns(record, stopToken);
             } catch {
               snapshotUnavailable = true;
             }
@@ -730,6 +834,7 @@ export async function stopSpawnedChildren(
         let quiesceTimeout = false;
         if (child.kind !== 'hub') {
           const graceful = await tryGracefulNodeShutdown(child, sleep, {
+            token: stopToken,
             ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
             ...(options.onProgress !== undefined
               ? { onProgress: (info) => options.onProgress?.(child.name, info) }
@@ -746,7 +851,7 @@ export async function stopSpawnedChildren(
             const record = await readGatewayPidRecord(child.data_dir);
             if (record !== null && record.pid === child.pid) {
               try {
-                runs = await snapshotActiveRuns(record, '');
+                runs = await snapshotActiveRuns(record, stopToken);
               } catch {
                 snapshotUnavailable = true;
               }
@@ -1687,6 +1792,14 @@ export class NodeSupervisor {
     // 否则 `gateway restart` 的交接会被自己的看门狗打断。
     this.stopWatchdogs();
     if (!keep) this.stopping = true;
+    // F1/SD-2 链C：进程内已知的 spec 生效 token（spawn 注入值）优先；
+    // carried/adopt 条目没有 spec 时由 resolveNodeStopToken 按自身 config/dataDir 解析。
+    const specTokens = new Map<string, string>();
+    for (const entry of this.pending) {
+      if (entry.spec.token !== undefined && entry.spec.token !== '') {
+        specTokens.set(entry.spec.nodeId, entry.spec.token);
+      }
+    }
     await Promise.all(
       this.spawned.map(async (child) => {
         // 就绪前条目（started_at 空）只在本进程内存中，按 pid 活性回滚；
@@ -1704,8 +1817,21 @@ export class NodeSupervisor {
         // P0-run-stops P1：node 子进程先试优雅关闭（未就绪的通常 no_record → 直接强杀）。
         let gracefulDead = false;
         let quiesceTimeout = false;
+        // F1/SD-2 链C：停止凭据 = spec token（进程内已知）> 目标 node 自身 config/dataDir。
+        const stopToken =
+          child.kind === 'hub'
+            ? ''
+            : await resolveNodeStopToken({
+                nodeId: child.node_id,
+                dataDir: child.data_dir,
+                registryDataDir: this.options.gatewayDataDir,
+                ...(this.options.env !== undefined ? { env: this.options.env } : {}),
+                ...(specTokens.has(child.node_id)
+                  ? { specToken: specTokens.get(child.node_id) }
+                  : {}),
+              });
         if (child.kind !== 'hub') {
-          const graceful = await tryGracefulNodeShutdown(child, this.sleep);
+          const graceful = await tryGracefulNodeShutdown(child, this.sleep, { token: stopToken });
           gracefulDead = graceful.dead;
           quiesceTimeout = graceful.reason === 'quiesce_timeout';
           if (quiesceTimeout) {
@@ -1716,7 +1842,7 @@ export class NodeSupervisor {
             const record = await readGatewayPidRecord(child.data_dir);
             if (record !== null && record.pid === child.pid) {
               try {
-                runs = await snapshotActiveRuns(record, '');
+                runs = await snapshotActiveRuns(record, stopToken);
               } catch {
                 snapshotUnavailable = true;
               }

@@ -2,7 +2,8 @@
  * S7 出站 federation client（asm 层）。
  *
  * - 只走节点直连 `POST <peer.url>/v1/federation/messages`；hub 不在数据面。
- * - allowlist 未命中 / 未启用时**不发网络请求**；无重试、无队列。
+ * - allowlist 未命中 / 未启用时**不发网络请求**；本模块单次投递不重试，
+ *   durable 重试 / 补投归 `federation-outbox`（4.1，经 `deliverFederationMessage`）。
  * - token 只从 `FederationRuntimeOptions.peers[].token` 取，只放进
  *   `Authorization: Bearer`，绝不进入错误消息 / 返回值 / 日志。
  * - wire 形状见 DECISION-036 §3.2；本模块不做入站解析。
@@ -301,43 +302,89 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 /**
+ * 4.1：allowlist / 启用策略检查。命中 outbound peer 时返回该 peer；
+ * 否则返回拒绝结果（构造请求前返回，不产生网络请求）。
+ */
+function resolveOutbound(
+  options: FederationRuntimeOptions,
+  to: Pick<FederationAddress, 'node_id' | 'team_id'>,
+): { ok: true; peer: FederationRuntimePeer } | { ok: false; result: FederationPostResult } {
+  if (options.enabled !== true) {
+    return {
+      ok: false,
+      result: {
+        status: 'rejected',
+        code: 'federation_disabled',
+        reason: 'federation is disabled on this node',
+      },
+    };
+  }
+  const peer = findOutboundPeer(options, to);
+  if (peer !== undefined) return { ok: true, peer };
+  // 地址写错了 node 段 vs 策略不允许：分开报，排查方向完全不同。
+  // reason 只回显 `node:team` 两段（有字符集约束），不回显调用方原文。
+  if (!hasKnownPeerNode(options, to.node_id)) {
+    return {
+      ok: false,
+      result: {
+        status: 'rejected',
+        code: 'federation_unknown_node',
+        reason: `no configured federation node ${to.node_id}:${to.team_id}`,
+      },
+    };
+  }
+  return {
+    ok: false,
+    result: {
+      status: 'rejected',
+      code: 'federation_not_allowed',
+      reason: `no outbound federation peer for ${to.node_id}:${to.team_id}`,
+    },
+  };
+}
+
+/**
  * 向 allowlist 中的 peer 投递一条消息。
  *
  * 禁用 / 未命中 allowlist 在构造请求前返回 rejected，不产生网络请求。
- * 配置错误抛 `FederationClientError`；网络 / TLS / 超时不重试。
+ * 配置错误抛 `FederationClientError`；网络 / TLS / 超时不重试
+ * （durable 重试归 outbox：`deliverFederationMessage`，4.1）。
  */
 export async function postFederation(
   options: FederationRuntimeOptions,
   input: FederationPostInput,
   io: FederationClientIo = {},
 ): Promise<FederationPostResult> {
-  if (options.enabled !== true) {
-    return {
-      status: 'rejected',
-      code: 'federation_disabled',
-      reason: 'federation is disabled on this node',
-    };
-  }
-
-  const peer = findOutboundPeer(options, input.to);
-  if (peer === undefined) {
-    // 地址写错了 node 段 vs 策略不允许：分开报，排查方向完全不同。
-    // reason 只回显 `node:team` 两段（有字符集约束），不回显调用方原文。
-    if (!hasKnownPeerNode(options, input.to.node_id)) {
-      return {
-        status: 'rejected',
-        code: 'federation_unknown_node',
-        reason: `no configured federation node ${input.to.node_id}:${input.to.team_id}`,
-      };
-    }
-    return {
-      status: 'rejected',
-      code: 'federation_not_allowed',
-      reason: `no outbound federation peer for ${input.to.node_id}:${input.to.team_id}`,
-    };
-  }
-
+  const outbound = resolveOutbound(options, input.to);
+  if (!outbound.ok) return outbound.result;
   const message = buildFederationMessage(options, input, io);
+  return deliverWithPeer(outbound.peer, message, io);
+}
+
+/**
+ * 4.1：投递一条**已构造**的 wire 消息（outbox 补投接缝）。
+ *
+ * 与 `postFederation` 的区别只在消息来源：这里不重新生成 `message_id` ——
+ * 补投恒用持久化的同一 `message_id`，对端按它幂等去重（`deduplicated`），
+ * 首次尝试「超时但对端其实已收到」也不会造成重复投递。
+ * 策略检查（启用 / allowlist）每次补投仍现查：peer 被热应用移除即 fail-closed。
+ */
+export async function deliverFederationMessage(
+  options: FederationRuntimeOptions,
+  message: FederationMessage,
+  io: FederationClientIo = {},
+): Promise<FederationPostResult> {
+  const outbound = resolveOutbound(options, message.to);
+  if (!outbound.ok) return outbound.result;
+  return deliverWithPeer(outbound.peer, message, io);
+}
+
+/** 单次网络投递（策略已放行）：endpoint + fetch + 响应解析。 */
+async function deliverWithPeer(
+  peer: FederationRuntimePeer,
+  message: FederationMessage,
+  io: FederationClientIo,
+): Promise<FederationPostResult> {
   const endpoint = resolveEndpoint(peer);
   // 0.64：截止时间用 startDeadline（`AbortSignal.timeout` 在 bun 1.3.9 空闲事件循环里
   // 可能不触发），并且每条退出路径都要 dispose。
