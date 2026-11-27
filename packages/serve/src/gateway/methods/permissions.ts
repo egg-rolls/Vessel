@@ -47,8 +47,13 @@ export interface PermissionsControl {
   /**
    * 写用户 YAML 的两个数组（保留其它键、0600 原子写）。
    * tool 已由本模块校验存在性；实现只需落盘并返回写入后的两个数组。
+   * q-env-card-visibility-fix：允许 async 实现（写盘走 withConfigLock，与 config.set
+   * 同一把跨进程单写锁）；同步实现原样兼容。
    */
-  setToolPolicy(input: { tool: string; policy: ToolPolicy }): ToolPolicyWriteResult;
+  setToolPolicy(input: {
+    tool: string;
+    policy: ToolPolicy;
+  }): ToolPolicyWriteResult | Promise<ToolPolicyWriteResult>;
   /**
    * 读面（additive，可选）：当前有效规则。缺省 / 未实现 ⇒ `permissions.show`
    * 回 `not_supported`（与写面同一口径）。只读，不改任何规则。
@@ -160,7 +165,7 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
         assertKnownTool(tool, deps.pluginHost(), commonNames);
         let written: ToolPolicyWriteResult;
         try {
-          written = control.setToolPolicy({ tool, policy });
+          written = await control.setToolPolicy({ tool, policy });
         } catch (error) {
           if (error instanceof RpcError) throw error;
           throw new RpcError(

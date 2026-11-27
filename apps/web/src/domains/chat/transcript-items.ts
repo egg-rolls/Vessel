@@ -56,6 +56,7 @@ import type { SessionDetail } from '../../gateway/types/sessions';
 import type { ErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { HandoverRequest } from '../../state/live-items';
+import { isRuntimeMessageVisible, type RuntimeVisibility } from '../../state/runtime-kinds';
 import { agentSenderOfName, senderOfName } from './agent-sender';
 import {
   ASK_ANSWER_MESSAGE_NAME,
@@ -715,6 +716,21 @@ export interface TranscriptBuildInput {
   isHidden?: (message: Message) => boolean;
   /** 这条消息属于哪种运行时提示（vessel:* 的种类）；返回 undefined = 普通消息。 */
   noticeKindOf?: (message: Message) => string | undefined;
+  /**
+   * live 侧 runtime-notice 的可见性查表（q-env-card-visibility-fix）。
+   *
+   * 历史侧由 `isHidden` 把关，但 live 侧的 `buildLiveItems` 无条件产 runtime-notice
+   * （run 输入 / run 中途注入），装配循环此前只有 messageId 让位 / 窗口闸门 / 输入认领，
+   * 没有可见性过滤 —— toggle 关掉后新到的环境卡照样渲染，直到历史落盘才消失。
+   * 这里补上与历史侧**同口径**的闸门：notice → environment、source → source、
+   * 其余（subscription / limit / compaction / other / 未知后缀）→ system
+   * （`runtimeVisibilityFor` / `isRuntimeMessageVisible`，与 `isHiddenMessage` 同一张表）。
+   *
+   * 缺省 = 不过滤（门禁 / 一次性调用没有配置快照时保持旧行为，与 `isHidden` 缺省同义）。
+   * 只管 runtime-notice：inbox-read 承接卡（消息不是环境卡，第九轮裁定豁免）与
+   * run-failure / 原始 notice 行（失败 / unread 行不藏的既有裁定）不受影响。
+   */
+  runtimeVisibility?: RuntimeVisibility;
   /** 预计算的历史索引（按 messages 引用 memo）；缺省内部现算。 */
   historyIndex?: HistoryIndex;
   /** 预计算的 live item（按 group 引用 memo）；缺省内部现算。 */
@@ -2555,6 +2571,22 @@ export function buildTranscriptItems(input: TranscriptBuildInput): TranscriptIte
   const emittedLiveMessageIds = new Set<string>();
   for (const item of live) {
     const runId = 'runId' in item ? item.runId : undefined;
+
+    // 环境卡可见性（q-env-card-visibility-fix）：live 侧与历史侧 `isHiddenMessage` 同口径。
+    // toggle 关掉时新到的 vessel:notice / vessel:source 环境卡在这里就被滤掉，不再等
+    // 历史落盘让位（隐藏的历史消息不登记 messageIds，让位根本不会发生 —— 这正是
+    // 「关闭环境信息卡显示仍显示」的主因）。noticeKind 是 `vessel:` 之后的后缀原文，
+    // 重建 name 走 `targetKind` 的同一判据：未知后缀 → other → system toggle，
+    // 与历史侧 `runtimeMessageKind(message)` 对同一条消息的结论逐字一致。
+    // 放在身份让位 / 窗口闸门之前：被隐藏的卡不产 item，也不进身份审计与去重登记
+    // （与历史侧「隐藏消息不产 item、不登记 messageIds」对齐）。
+    if (
+      item.kind === 'runtime-notice' &&
+      input.runtimeVisibility !== undefined &&
+      !isRuntimeMessageVisible(input.runtimeVisibility, `vessel:${item.noticeKind}`)
+    ) {
+      continue;
+    }
 
     // 稳定身份（0.56）：历史已经有这条消息（同一个 `message_id`）⇒ live 这份让位。
     //

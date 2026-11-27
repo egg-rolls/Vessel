@@ -310,7 +310,7 @@ export function TranscriptWindow({
 }) {
   // q-msg-visibility：消息显示 toggle 读同一份 configStore 快照（与 useChatTranscript
   // 的 visibility 同源）；不经 ChatView props 链，避免与滚动容器改动相互踩踏。
-  const { messageVisibility } = useRuntimeVisibility();
+  const { messageVisibility, visibility: runtimeVisibility } = useRuntimeVisibility();
   const showReasoning = reasoningVisible(verbosity, messageVisibility.reasoning);
 
   // 可见窗口首条消息的 ts：比它更早的 live item 由 buildTranscriptItems 夹到末尾
@@ -329,6 +329,9 @@ export function TranscriptWindow({
         historyIndex,
         isHidden: isHiddenMessage,
         noticeKindOf,
+        // live 侧环境卡可见性（q-env-card-visibility-fix）：与 isHiddenMessage 同一份
+        // configStore 快照（useRuntimeVisibility），toggle 关掉时新到的环境卡 live 侧即滤。
+        runtimeVisibility,
         // 子 agent 详情占位时（liveGroups 被清空）不补主会话的失败卡 / 系统消息卡 / 已答提问：
         // 那一屏讲的是另一个 run。几路补的都按自己的身份去重（见 transcript-items.ts）。
         ...(activeAgent ? {} : { sessionFailure, sessionSystemContext, answeredAsks }),
@@ -342,6 +345,7 @@ export function TranscriptWindow({
       historyIndex,
       isHiddenMessage,
       noticeKindOf,
+      runtimeVisibility,
       sessionFailure,
       sessionSystemContext,
       answeredAsks,
