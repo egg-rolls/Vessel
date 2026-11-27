@@ -60,24 +60,23 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
           </pre>
         </div>
       );
-    case 'list':
-      return block.ordered ? (
-        <ol className="pl-5">
+    case 'list': {
+      // 嵌套子块渲染在 <li> 内部：子列表是独立 <ol>/<ul>，编号/ bullet 由浏览器
+      // 按各自的列表重新开始（顶层 loose list 也已在 parser 里合并成单个列表）。
+      const Tag = (block.ordered ? 'ol' : 'ul') as 'ol';
+      return (
+        <Tag className="pl-5" {...(block.start !== undefined ? { start: block.start } : {})}>
           {block.items.map((item, index) => (
             <li className="my-0.75" key={index}>
-              {renderText(item)}
+              {renderText(item.text)}
+              {item.children?.map((child, childIndex) => (
+                <Block key={childIndex} block={child} />
+              ))}
             </li>
           ))}
-        </ol>
-      ) : (
-        <ul className="pl-5">
-          {block.items.map((item, index) => (
-            <li className="my-0.75" key={index}>
-              {renderText(item)}
-            </li>
-          ))}
-        </ul>
+        </Tag>
       );
+    }
     case 'blockquote':
       return <blockquote className="py-0.5 pl-2.5 text-muted">{renderText(block.text)}</blockquote>;
     case 'table':

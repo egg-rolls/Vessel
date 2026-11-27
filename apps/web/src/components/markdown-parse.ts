@@ -6,11 +6,17 @@
  * 永远不输出原始 HTML；链接由 `isSafeHref` 过滤（拒绝 javascript:/data:）。
  */
 
+/** 列表项：正文 + 可选的嵌套子块（子列表 / 代码块等，按缩进归属）。 */
+export interface MarkdownListItem {
+  text: string;
+  children?: MarkdownBlock[];
+}
+
 export type MarkdownBlock =
   | { type: 'heading'; level: number; text: string }
   | { type: 'paragraph'; text: string }
   | { type: 'code'; lang?: string; text: string }
-  | { type: 'list'; ordered: boolean; items: string[] }
+  | { type: 'list'; ordered: boolean; start?: number; items: MarkdownListItem[] }
   | { type: 'blockquote'; text: string }
   | { type: 'table'; header: string[]; rows: string[][] }
   | { type: 'hr' };
@@ -68,6 +74,11 @@ function startsBlock(lines: string[], index: number): boolean {
   if (LIST_ITEM.test(line) || BLOCKQUOTE.test(line)) return true;
   const next = lines[index + 1];
   return line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next);
+}
+
+/** 行首空白宽度（与 LIST_ITEM 的 `\s` 口径一致：tab 记 1）。 */
+function indentWidth(line: string): number {
+  return (/^\s*/.exec(line)?.[0] ?? '').length;
 }
 
 /** 解析选项（只有流式入口需要；历史 / 落盘渲染保持默认值）。 */
@@ -185,26 +196,100 @@ export function parseMarkdown(source: string, options?: MarkdownParseOptions): M
 
     const listItem = LIST_ITEM.exec(line);
     if (listItem) {
+      // 列表解析分两步：先收集属于本列表的所有行（含缩进子内容与 loose 空行），
+      // 再按「同级标记行」切项、把缩进行递归解析成子块。
+      //
+      // 修掉的两个渲染 bug（用户截图实证）：
+      //   1) 旧实现遇空行即断列表 → loose list（项间空行，模型最常见写法）每项
+      //      各成一个 <ol>，序号全部从 1 重新开始；
+      //   2) 旧 LIST_ITEM 允许 0–3 空格缩进 → 嵌套子项被当成同级项拍平，
+      //      子 bullet 混进父 <ol> 继续编号（2.3.4.5…）。
+      const baseIndent = indentWidth(line);
       const ordered = /^\d/.test(listItem[1] ?? '');
-      const items: string[] = [];
+      const start = ordered ? Number.parseInt(listItem[1] ?? '1', 10) : 1;
+      const isSiblingMarker = (candidate: string): boolean => {
+        if (indentWidth(candidate) >= baseIndent + 2) return false;
+        const match = LIST_ITEM.exec(candidate);
+        return match !== null && /^\d/.test(match[1] ?? '') === ordered;
+      };
+
+      const raw: string[] = [];
       while (index < lines.length) {
         const current = lines[index] ?? '';
-        const match = LIST_ITEM.exec(current);
-        if (match) {
-          items.push(match[2] ?? '');
-          index += 1;
-          continue;
+        if (current.trim() === '') {
+          // 空行后仍是本列表的内容（同级同类标记 / 缩进子内容）→ loose list 延续；
+          // 否则列表到此结束。
+          let ahead = index + 1;
+          while (ahead < lines.length && (lines[ahead] ?? '').trim() === '') ahead += 1;
+          const nextLine = lines[ahead];
+          if (nextLine === undefined) break;
+          if (indentWidth(nextLine) >= baseIndent + 2 || isSiblingMarker(nextLine)) {
+            raw.push(current);
+            index += 1;
+            continue;
+          }
+          break;
         }
-        // 缩进续行并入上一项；空行结束列表。
-        if (current.trim() === '') break;
-        if (/^\s{2,}\S/.test(current) && items.length > 0) {
-          items[items.length - 1] = `${items[items.length - 1]} ${current.trim()}`;
+        if (indentWidth(current) >= baseIndent + 2 || isSiblingMarker(current)) {
+          raw.push(current);
           index += 1;
           continue;
         }
         break;
       }
-      blocks.push({ type: 'list', ordered, items });
+
+      const items: MarkdownListItem[] = [];
+      let text = '';
+      let subs: string[] = [];
+      let started = false;
+      const flushItem = () => {
+        if (!started) return;
+        // 按子行的最小缩进脱进（≥ base+2）：保留相对嵌套结构，同时让
+        // `1. `（内容缩进 3）下的围栏代码不残留多余前导空格。
+        const nonBlank = subs.filter((sub) => sub.trim() !== '');
+        const strip =
+          nonBlank.length > 0
+            ? nonBlank.reduce(
+                (min, sub) => Math.min(min, indentWidth(sub)),
+                Number.POSITIVE_INFINITY,
+              )
+            : 0;
+        const childLines = subs.map((sub) => sub.slice(strip));
+        // 前导的普通缩进续行并入项正文（保持旧行为）；遇到第一个块级语法
+        // （子列表 / 围栏 / 引用…）起，剩余行递归解析为嵌套子块。
+        let cursor = 0;
+        while (cursor < childLines.length) {
+          const childLine = childLines[cursor] ?? '';
+          if (childLine.trim() === '') {
+            cursor += 1;
+            continue;
+          }
+          if (startsBlock(childLines, cursor)) break;
+          text = `${text} ${childLine.trim()}`;
+          cursor += 1;
+        }
+        const rest = childLines.slice(cursor);
+        const children = rest.length > 0 ? parseMarkdown(rest.join('\n'), options) : [];
+        items.push({ text, ...(children.length > 0 ? { children } : {}) });
+      };
+      for (const rawLine of raw) {
+        if (isSiblingMarker(rawLine)) {
+          flushItem();
+          text = LIST_ITEM.exec(rawLine)?.[2] ?? '';
+          subs = [];
+          started = true;
+          continue;
+        }
+        subs.push(rawLine);
+      }
+      flushItem();
+
+      blocks.push({
+        type: 'list',
+        ordered,
+        ...(ordered && start !== 1 ? { start } : {}),
+        items,
+      });
       continue;
     }
 
