@@ -302,10 +302,13 @@ export interface AgentMessage {
    * A2A 投递不走这里（`agent:<alias>` 由 `source` + `from_name` 推导，见
    * `runtime.ts` 的 `agentInputName`）。
    *
-   * **不能用 `source: 'system'` 统一推导**：`startup_prompt` 同样来自 system
+   * **不能用 `source: 'system'` 统一推导**：`startup_prompt` 曾一律来自 system
    * principal，但只有 rotate 路径那一条是 agent 写的；create / restart / activate 的
    * `startup_prompt` 是调用方（人）写的开场白，必须继续按正文渲染。谁写的这句话
-   * 只能由生产者声明，不能从来源推断。
+   * 只能由生产者声明，不能从来源推断。q-startup-source-fix：agent 经内置工具
+   * create / hire 写的 startup_prompt，生产者是创建者 —— 投递侧直接 from=创建者
+   * （source='agent'，`agent:<alias>` 由 `agentInputName` 推导），无需标
+   * input_name；人 / RPC 写的开场白仍 from=system、按正文渲染。
    */
   input_name?: string;
   /**

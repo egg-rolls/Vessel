@@ -324,9 +324,11 @@ function rotateHandoffInputName(epoch: number): string {
  * 投影也整体跳过 —— 这条消息是该轮真实的用户输入（turn 锚点）、新进程首轮唯一的
  * 指令，必须可见。
  *
- * create / hire 路径的 startup_prompt 不标身份（那是调用方写的开场任务，按正文
- * 渲染，见 `deliverStartupPrompt`）：谁写的这句话只能由生产者声明，不能从
- * system 来源统一推断（types.ts 的 `input_name` 裁定）。
+ * create / hire 路径的 startup_prompt 不标 input_name：agent 经内置工具创建时
+ * 来源归属创建者（from=创建者，`agent:<alias>` 由 source + from_name 推导）；
+ * 人 / RPC 的开场白保持 from=system、按正文渲染 —— 谁写的这句话由生产者声明，
+ * 不能从 system 来源统一推断（见 `deliverStartupPrompt`、types.ts 的
+ * `input_name` 裁定）。
  */
 export const CONTINUATION_INPUT_NAME = 'tool:system';
 
@@ -1617,7 +1619,10 @@ export class AgentServiceImpl implements AgentService {
     // q-hire-prompt：启动任务在创建提交后投递（首轮 run input）；statusFor 在
     // 投递之后取，调用方看到的 state 已反映首轮（queued / running）。
     if (startupPrompt !== undefined) {
-      await this.deliverStartupPrompt(record, startupPrompt);
+      // q-startup-source-fix：创建者 = spawnedBy（工具层声明）或 parentId
+      // （contractor 的 parent 缺省 owner）；peer 无 parentId，人 RPC 缺省
+      // owner=human ⇒ 未登记 ⇒ deliverStartupPrompt 回落 system。
+      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy ?? parentId);
     }
     return this.statusFor(record);
   }
@@ -1625,19 +1630,38 @@ export class AgentServiceImpl implements AgentService {
   /**
    * q-hire-prompt：create / hire 的可选启动任务投递 —— 与 createSession 的
    * startup_prompt 同一形状（admitInternal `startup: true`：直接作首轮 run input，
-   * 不进 inbox，后续 send 正常排队）。不标 input_name：create 路径的 startup_prompt
-   * 是调用方写的开场任务，按正文渲染（types.ts 裁定：只有 rotate 交接嘱托标
-   * `rotate:handoff`）。best-effort：失败只 warn，不回滚已提交的创建（与
+   * 不进 inbox，后续 send 正常排队）。
+   *
+   * q-startup-source-fix：来源归属创建者。agent 经内置工具 create / hire 时生产者
+   * 就是创建者（tool.ts 写 spawnedBy=caller.id）；创建者是本机登记成员时
+   * from=创建者 ⇒ source='agent' + from_name ⇒ 执行内核推导 `agent:<alias>`
+   * （runtime.ts `agentInputName`），Web 走正常 from-card，来源行被吸收进卡、
+   * 卡上回信地址指向创建者。人 / RPC 创建（无创建者声明，或创建者未在本机登记）
+   * 保持 from=system，开场白按正文渲染（types.ts `input_name` 裁定：谁写的这句话
+   * 由生产者声明，不从 system 来源统一推断）。不标 input_name：身份由
+   * from / source / from_name 承载，与正常 send 同一条推导路。
+   *
+   * best-effort：失败只 warn，不回滚已提交的创建（与
    * `agent.session_create.startup_failed` 同口径）。
    */
-  private async deliverStartupPrompt(record: MemberRecord, startupPrompt: string): Promise<void> {
+  private async deliverStartupPrompt(
+    record: MemberRecord,
+    startupPrompt: string,
+    creatorId?: string,
+  ): Promise<void> {
+    // 只认本机登记的创建者：保留 principal（human / system）、已失效的 id、
+    // 未登记的外部地址一律回落 system —— 宁可保持现状，不冒认 agent。
+    const from =
+      creatorId !== undefined && this.registry.get(creatorId) !== undefined
+        ? creatorId
+        : SYSTEM_PRINCIPAL;
     try {
       await this.admitInternal(
         {
           content: startupPrompt,
           agent_id: record.id,
           session_id: record.sessionId,
-          from: SYSTEM_PRINCIPAL,
+          from,
           channel: 'direct',
           conversation_id: generateConversationId(this.newId),
           strict: false,
@@ -1928,7 +1952,9 @@ export class AgentServiceImpl implements AgentService {
     }
     // q-hire-prompt：与 createOne 同口径 —— 创建提交后投递启动任务（best-effort）。
     if (startupPrompt !== undefined) {
-      await this.deliverStartupPrompt(record, startupPrompt);
+      // q-startup-source-fix：只认 spawnedBy —— seeded 路径的 record.parentId
+      // 是**源**的 parent，不是本次创建的创建者，不能拿来兜底。
+      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy);
     }
     return this.statusFor(record);
   }
