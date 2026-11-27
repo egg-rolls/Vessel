@@ -2,7 +2,7 @@
 title: 工具与权限边界
 kind: current
 triggers: [tool, bash, read, edit, permission, denylist, allowed_roots, agent, ask, mcp tool, vessel, bridge, guardrail, rpc, 工具, 权限, 黑名单, 白名单, 根目录, 提问, 工具集, 工具名, 命名规则, snake_case, 工具名校验, 别名, 弃用提示, pii_reveal, 控制面, 桥, 元工具, engine, pool, tools_engine, child, bridge_deny, transport, 执行位置, 双路]
-paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/runtime/tool-pipeline.ts, packages/core/src/runtime/tool-provenance.ts, packages/core/src/runtime/permission-policy.ts, plugins/tools/**, plugins/context/doc-subscription/**, plugins/mcp/client/src/naming.ts, packages/agent/src/tool.ts, packages/agent/src/inbox.ts, packages/agent/src/service.ts, packages/agent/src/member-cwd.ts, src/runtime/vessel-meta.ts, src/tools-engine/**, src/config/legacy-tool-names.ts, src/runtime/bootstrap.ts, src/cli/commands/gateway/gateway-command.ts, src/plugin/plugin-config.ts, src/cli/ask-channel.ts, src/agent/ask-answer-delivery.ts, packages/serve/src/interactions-registry.ts, apps/web/src/domains/pending/ask-submit-plan.ts, packages/tui/src/renderer/ask-user.ts, src/tools-engine/mcp-engine-wiring.ts]
+paths: [packages/core/src/types/tool.ts, packages/core/src/runtime/tool-name.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/runtime/tool-pipeline.ts, packages/core/src/runtime/tool-provenance.ts, packages/core/src/runtime/permission-policy.ts, plugins/tools/**, plugins/context/doc-subscription/**, plugins/mcp/client/src/naming.ts, packages/agent/src/tool.ts, packages/agent/src/inbox.ts, packages/agent/src/service.ts, packages/agent/src/member-cwd.ts, src/runtime/vessel-meta.ts, src/tools-engine/**, src/config/legacy-tool-names.ts, src/runtime/bootstrap.ts, src/cli/commands/fleet/restart-command.ts, src/cli/commands/gateway/gateway-command.ts, src/plugin/plugin-config.ts, src/cli/ask-channel.ts, src/agent/ask-answer-delivery.ts, packages/serve/src/interactions-registry.ts, apps/web/src/domains/pending/ask-submit-plan.ts, packages/tui/src/renderer/ask-user.ts, src/tools-engine/mcp-engine-wiring.ts]
 ---
 
 # 工具与权限边界
@@ -133,6 +133,13 @@ vessel 一个工具**，不设独立执行器）：让模型在**不改会话 to
 read→allow（RPC 层已脱敏）/ write→ask / admin→deny / 未知方法→deny；另硬禁
 `permission.respond` / `ask.respond` / `permissions.setToolPolicy`（自审批/自改策略禁止，ADR-077/079/091）。
 方法清单经 `op=rpc, method=capabilities.list` 发现。判定对**最终 args** 生效（BeforeTool 改写 op 也逃不过对应门）。
+
+**gateway.restart 身份补注（q-restart-tool）**：`op=rpc, method=gateway.restart` 时 handler 把
+ToolContext 的 `session_id` / `run_id` 补进缺省参数（显式传入优先；与 bash 工具注入
+VESSEL_SESSION_ID / VESSEL_RUN_ID 同口径）——RPC handler 拿不到 ToolContext，触发者身份由桥侧
+additive 补注，只影响本方法，其它 RPC 仍原样透传。self-restart 是平台级操作，故走 vessel RPC 面
+（write→ask 确认卡）而非 agent 工具；`prompt` 可选（缺省 = 请求级续作），见
+[gateway-rpc](gateway-rpc.md) 的 `gateway.restart` 条。
 
 **fail-closed（call_tool）**：vessel 对 call_tool 与未知 op 的 checkPermission=deny、handler 永不转发——
 关闭 guardrail 阶段的入口（EU delegate 等）直达 vessel 时 deny 先挡，任何入口组合都不能绕过桥校验

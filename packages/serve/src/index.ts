@@ -139,6 +139,8 @@ export {
 } from './gateway/auth.js';
 export {
   type GatewayReloadResult,
+  type GatewayRestartInput,
+  type GatewayRestartResult,
   RELOAD_SCOPES,
   type ReloadScope,
   type SelfRestartInput,

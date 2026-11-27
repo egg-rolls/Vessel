@@ -41,6 +41,8 @@ export type RpcErrorCode =
   | 'no_active_run'
   | 'run_mismatch'
   | 'marker_failed'
+  // q-restart-tool（gateway.restart）：预约段失败，与 serve 侧错误码同步。
+  | 'restart_reserve_failed'
   // 0.55：**0.54 之前的旧格式会话不再被支持**（只有 events.ndjson、没有 timeline 标记）。
   // 「只读冻结」这个中间态随 events.ndjson 的读写一起删除；读面报这个码而不是给空会话
   // （与 serve 侧逐字同步，见 packages/serve/src/protocol.ts）。
@@ -118,6 +120,12 @@ const RPC_ERROR_CODES = new Set<RpcErrorCode>([
   'not_supported',
   'expired',
   'run_ended',
+  // 自重启错误码补同步（q-restart-tool）：联合早已收录，信封校验集合此前漏同步，
+  // 导致回环客户端把这些码折成 internal invalid envelope（错误码丢失）。
+  'no_active_run',
+  'run_mismatch',
+  'marker_failed',
+  'restart_reserve_failed',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
