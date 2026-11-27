@@ -80,6 +80,12 @@ const ALLOWED_RPC_NAMESPACES: ReadonlySet<string> = new Set([
   'feishu',
   'gateway',
   'health',
+  // q-images-proxy：media 图片卡（images.blob 读内容寻址 blob 池）经平台代理时缺
+  // 命名空间 ⇒ proxy_method_not_allowed（fail-closed；直连 node 正常）⇒ ToolImageCard
+  // 缩略图恒 unavailable。images.blob 只读（permission:'read'）且 node 侧有 session_id
+  // 归属闸（未命中统一 blob_missing，不泄漏存在性），不涉及进程生死 / 服务安装，
+  // 无需进 DENIED_RPC_METHODS；与 jobs/kanban 先例同口径，后续 images.* 新方法自动覆盖。
+  'images',
   'interactions',
   // q-kanban-proxy：任务看板（kanban.get 读板 / kanban.archive 用户验收归档）。
   // node 侧方法已就位（gateway/methods/kanban.ts），平台侧缺命名空间导致
