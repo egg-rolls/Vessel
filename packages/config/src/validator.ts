@@ -2978,7 +2978,12 @@ export function validateVisionConfig(
       errors.push({ path: `vision.${key}`, message: `vision.${key} must be a boolean`, value });
     }
   }
-  for (const key of ['maxImagesPerRequest', 'orphanGraceHours', 'blobGcIntervalHours'] as const) {
+  for (const key of [
+    'maxImagesPerRequest',
+    'maxImageTokens',
+    'orphanGraceHours',
+    'blobGcIntervalHours',
+  ] as const) {
     const value = vision[key];
     if (value === undefined) continue;
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -2988,6 +2993,18 @@ export function validateVisionConfig(
         value,
       });
     }
+  }
+  // ①B（q-vision-image-budget-fix）：图片 token 预算比例 ∈ [0, 1]（0 = 不内联任何图）。
+  const ratio = vision.imageTokenBudgetRatio;
+  if (
+    ratio !== undefined &&
+    (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio < 0 || ratio > 1)
+  ) {
+    errors.push({
+      path: 'vision.imageTokenBudgetRatio',
+      message: 'vision.imageTokenBudgetRatio must be a finite number in [0, 1]',
+      value: ratio,
+    });
   }
   const ttl = vision.imageBlobTtlDays;
   if (ttl !== undefined && (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl < 1)) {
@@ -4154,6 +4171,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   vision: [
     'disabled',
     'maxImagesPerRequest',
+    'imageTokenBudgetRatio',
+    'maxImageTokens',
     'detail',
     'preprocess',
     'orphanGraceHours',

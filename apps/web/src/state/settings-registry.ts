@@ -331,6 +331,18 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
     fallback: '100',
     keywords: ['成员上限', '团队人数', 'team limit', 'team_full'],
   },
+  // q-vision-image-budget-fix ①B：图片 token 预算占上下文窗口比例（缺省 0.05；[0,1] 浮点）。
+  // EU 构造期读 visionSettings，写后需重启生效（desc 注明）。
+  {
+    key: 'vision.imageTokenBudgetRatio',
+    type: 'number',
+    float: true,
+    min: 0,
+    max: 1,
+    default: '0.05',
+    fallback: '0.05',
+    keywords: ['图片预算', '视觉', '图片上限', 'image budget', 'vision', 'token'],
+  },
 ];
 
 /** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
@@ -349,6 +361,7 @@ function coreCategory(key: string): string {
   if (key.startsWith(LOG_SETTING_PREFIX)) return 'logs';
   if (key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX)) return 'runtime';
   if (key === 'agent.teamMemberLimit') return 'runtime';
+  if (key === 'vision.imageTokenBudgetRatio') return 'runtime';
   return 'display';
 }
 

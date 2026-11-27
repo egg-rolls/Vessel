@@ -271,8 +271,8 @@ export interface EmptyResponseConfig {
  * 视觉配置（0.56，P0；全部可选）。
  *
  * **故意没有 `enable` 这个键**：决策 1 = 「模型支持视觉就直接发」，所以能力问
- * `provider.vision`（插件的 `VisionBackend` 描述符），配置只提供**运行期**的三件事：
- * 出事时一键退回（`disabled`）、预算（张数）、精度意图。`disabled` 是**闸**，不是默认门。
+ * `provider.vision`（插件的 `VisionBackend` 描述符），配置只提供**运行期**的几件事：
+ * 出事时一键退回（`disabled`）、预算（token 预算 / 张数）、精度意图。`disabled` 是**闸**，不是默认门。
  */
 export interface VisionConfig {
   /**
@@ -280,8 +280,22 @@ export interface VisionConfig {
    * 0.55 老文案、记一条 `vision.disabled` 事件（**不是静默**）。默认 `false`。
    */
   disabled?: boolean;
-  /** 单请求最多几张图（与后端描述符取 `min`）；缺省 6。 */
+  /**
+   * 单请求最多几张图（**显式硬上限**，与 token 预算推导值、后端描述符取 `min`）。
+   * 缺省不设 = 由 token 预算推导（①B：`imageTokenBudgetRatio` / `maxImageTokens`）。
+   */
   maxImagesPerRequest?: number;
+  /**
+   * 图片 token 预算占上下文窗口（`context.maxTokens`）的比例（[0, 1]）；缺省 0.05。
+   * 仅在 `maxImageTokens` 未设时生效；0 = 不内联任何图。窗口越大允许图越多，
+   * 最终仍夹在后端描述符安全 cap（32）以下。修改后需重启节点生效。
+   */
+  imageTokenBudgetRatio?: number;
+  /**
+   * 图片 token 预算绝对值（覆盖比例推导）；缺省不设。0 = 不内联任何图。
+   * 预算 ÷ 单图 token（后端描述符，openai-compat 1024）= 张数上限。
+   */
+  maxImageTokens?: number;
   /** 精度意图（必须落在后端 `detailLevels()` 里，否则不带）；缺省不传。 */
   detail?: string;
   /**

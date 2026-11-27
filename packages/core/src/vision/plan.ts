@@ -9,9 +9,12 @@
  * ## 确定性是硬要求（不是风格）
  *
  * 同一份 `messages` + 同一组字节 ⇒ **必须**产出同一份 plan（同一 base64、同一顺序）。
- * 判据在 `runtime/prompt-prefix-guard.ts:75`（逐条 `JSON.stringify(message)` 比字节）：
- * plan 里任何一处「看起来一样但字节不同」（换序、每次重算的 uuid、重编码）都会让它误报
- * `prompt.prefix_changed`。所以这里：
+ * 真正的判据有两处：① 重试链复用同一份 plan（`chatWithOverflowRetry`）——重试换字节
+ * 就是「同一条请求两次内容不同」；② provider 侧前缀缓存按 wire 内容匹配，同一份历史
+ * 的 plan 漂移会白白打掉缓存。注意：`runtime/prompt-prefix-guard.ts` 比对的是**内联前**
+ * 的 messages（string content + refs）——图块在适配器（`provider/providers.ts chat()`）
+ * 里才拼进请求体，守卫看不到 plan 的输出，plan 换序**不会**触发 `prompt.prefix_changed`；
+ * 它守的是「历史消息被改写」，不是 plan 字节。所以这里：
  * - 顺序 = `refs` 里的顺序（不排序、不按大小、不按 mtime）；
  * - 字节 = 只从 blob 读（`readImageBlob`），**永不**回源读 `refs[].path`；
  * - 没有任何时间 / 随机 / 环境相关的字段进 plan（`part` 里也不许有）。
@@ -21,12 +24,18 @@
  * (a) `refs[].sha256` 对应的 blob；(b) 别的什么都不读 —— 不扫目录、不猜路径、不读 URL、
  * 不递归。`refs[].path` 只用来给人的文案（`dropped[].path` / `[refs]` 尾注），不进请求。
  *
- * ## 预算按「先到先得」裁（P0 的取舍，写清）
+ * ## 预算 = token 预算推导的张数上限，按「先到先得」裁（①B，q-vision-image-budget-fix）
  *
- * 超过单请求上限时丢的是**后面**的图（保持已在历史里发过的那些），不是「最近 N 张」：
- * 按 recency 裁会让**早前已发出的消息**在图消失时改写内容 = 段内改写历史 = 前缀变化。
- * 真正的「只保留最近 3 条带图消息」属于压缩（段边界，允许一次带 reason 的前缀变化），
- * 那是 P1 的冻结集合，不在请求期做。
+ * 张数上限不再是固定缺省 6（那让人为瓶颈在长会话里饿死新图）：由图片 token 预算
+ * （`maxImageTokens` 绝对值 ?? 窗口 × `imageTokenBudgetRatio` ?? 窗口未知兜底 6144）
+ * 除以单图 token（后端描述符）推导，再夹后端安全 cap 与用户显式张数上限。
+ *
+ * 超过上限时丢的是**后面**的图（保持已在历史里发过的那些），不是「最近 N 张」：
+ * 按 recency 裁会让**早前已发出的消息**在图消失时改变 wire 内容（图块被拿掉）——
+ * 前缀守卫不会报（它看内联前的 messages，见上），但 provider 侧前缀缓存会从那条消息
+ * 起失效。升序遍历 ⇒ 预算内历史图稳定保留、溢出丢的是最新图（后缀消息，不伤旧前缀，
+ * 丢弃事实由 `vision/notice.ts` 的注记卡讲给模型）。真正的旧图驱逐属于压缩 / 占位
+ * （段边界，允许一次带 reason 的前缀重置），不在请求期做。
  */
 
 import type { Message, MessageRef } from '../types/provider.js';
@@ -41,8 +50,18 @@ import type {
 } from '../types/vision.js';
 import { readImageBlob, sha8Of, sha256Of } from './blobs.js';
 
-/** 单请求张数上限的缺省（design §7.5：6 张 ≈ 6,144 token） */
-export const DEFAULT_MAX_IMAGES_PER_REQUEST = 6;
+/**
+ * 图片 token 预算占上下文窗口比例的缺省（q-vision-image-budget-fix ①B）。
+ * 5%：128k 窗 → 6144 token → 6 张（与旧缺省一致，平滑）；窗口越大允许图越多，
+ * 最终仍夹在后端描述符的安全 cap（openai-compat 32）以下。
+ */
+export const DEFAULT_IMAGE_TOKEN_BUDGET_RATIO = 0.05;
+
+/**
+ * 窗口未知时的图片 token 预算兜底（= 旧缺省 6 张 × 1024，行为与 0.56 逐字节一致）。
+ * 生产模型窗口已知（`workingContext.maxTokens`）时不走这里。
+ */
+export const DEFAULT_IMAGE_TOKEN_BUDGET = 6144;
 
 /** 读 blob 的注入口（**唯一**的 I/O；缺省用 `blobs.ts` 的实现，注入是为了可验证）。 */
 export type ReadImageBlob = (sha256: string) => Promise<Uint8Array | undefined>;
@@ -57,6 +76,12 @@ export interface AttachmentPlanInput {
   settings?: VisionSettings;
   /** 读 blob；缺省 `blobs.ts` */
   readBlob?: ReadImageBlob;
+  /**
+   * 上下文窗口 token 数（EU 传 `workingContext.maxTokens`）；缺省 = 未知。
+   * 只用于推导图片 token 预算（①B）。窗口每段固定 ⇒ 同输入同输出的确定性不受影响；
+   * plan 保持纯函数，不认识「窗口从哪来」。
+   */
+  contextWindowTokens?: number;
 }
 
 /** kill switch 命中（`vision.disabled` 或 `VESSEL_DISABLE_VISION=1`）。 */
@@ -95,7 +120,7 @@ function collectImageRefs(
  * 2. 每条引用：没 sha256 ⇒ `not_ingested`（不回源读 path）；blob 缺失 ⇒ `blob_missing`；
  * 3. magic bytes 嗅探 ⇒ 不认识 `not_an_image`、不在 `formats()` 里 `unsupported_format`；
  * 4. 单图 / 整包字节上限 ⇒ `too_large` / `bytes_budget`；
- * 5. 张数上限 ⇒ `budget`（**丢后面的**，见模块头）。
+ * 5. 张数上限（token 预算推导，见模块头）⇒ `budget`（**丢后面的** = 最新溢出）。
  *
  * 没有任何图片引用时返回空计划（`tokens: 0`），调用方照旧把它显式传给估算器。
  */
@@ -139,9 +164,23 @@ export async function resolveAttachmentPlan(input: AttachmentPlanInput): Promise
     settings?.detail !== undefined && details.includes(settings.detail)
       ? settings.detail
       : undefined;
-  const configuredMax = settings?.maxImagesPerRequest ?? DEFAULT_MAX_IMAGES_PER_REQUEST;
+  // ①B（q-vision-image-budget-fix）：张数上限由 token 预算推导，替代旧缺省 6 的人为瓶颈。
+  // 预算 = 绝对值设置 ?? floor(窗口 × 比例) ?? 窗口未知兜底；张数 = floor(预算 / 单图 token)，
+  // 再与「用户显式张数硬上限（若设）」、后端描述符安全 cap 取 min。遍历顺序不变（升序、
+  // 最旧优先）：预算内历史图稳定保留（wire 前缀稳定），溢出丢的是最新图（后缀，不伤旧前缀）。
+  const configuredMax = settings?.maxImagesPerRequest;
   const descriptorMax = backend.maxImagesPerRequest();
-  const maxImages = Math.max(0, Math.min(configuredMax, descriptorMax > 0 ? descriptorMax : 0));
+  const perImageTokens = backend.tokenCost(1);
+  const tokenBudget = imageTokenBudgetOf(settings, input.contextWindowTokens);
+  const budgetMax = perImageTokens > 0 ? Math.floor(tokenBudget / perImageTokens) : 0;
+  const maxImages = Math.max(
+    0,
+    Math.min(
+      configuredMax ?? Number.POSITIVE_INFINITY,
+      budgetMax,
+      descriptorMax > 0 ? descriptorMax : 0,
+    ),
+  );
   const maxBytesPerImage = backend.maxBytesPerImage();
   const maxBytesPerRequest = backend.maxBytesPerRequest();
   const readBlob = input.readBlob ?? ((sha256: string) => readImageBlob(sha256));
@@ -216,6 +255,35 @@ export async function resolveAttachmentPlan(input: AttachmentPlanInput): Promise
     dropped,
     backend: backendTag(backend),
   };
+}
+
+/**
+ * 图片 token 预算（①B）：绝对值设置优先；否则窗口已知 ⇒ floor(窗口 × 比例)；
+ * 窗口未知 ⇒ 兜底 {@link DEFAULT_IMAGE_TOKEN_BUDGET}（= 旧 6 张的行为）。
+ * 比例缺省 {@link DEFAULT_IMAGE_TOKEN_BUDGET_RATIO}；0 是合法值（预算为零 = 不内联）。
+ * 纯函数：同输入同输出，无时间 / 环境字段。
+ */
+function imageTokenBudgetOf(
+  settings: VisionSettings | undefined,
+  contextWindowTokens: number | undefined,
+): number {
+  const absolute = settings?.maxImageTokens;
+  if (typeof absolute === 'number' && Number.isFinite(absolute) && absolute >= 0) {
+    return Math.floor(absolute);
+  }
+  const ratioSetting = settings?.imageTokenBudgetRatio;
+  const ratio =
+    typeof ratioSetting === 'number' && Number.isFinite(ratioSetting) && ratioSetting >= 0
+      ? ratioSetting
+      : DEFAULT_IMAGE_TOKEN_BUDGET_RATIO;
+  if (
+    typeof contextWindowTokens === 'number' &&
+    Number.isFinite(contextWindowTokens) &&
+    contextWindowTokens > 0
+  ) {
+    return Math.floor(contextWindowTokens * ratio);
+  }
+  return DEFAULT_IMAGE_TOKEN_BUDGET;
 }
 
 function backendTag(backend: VisionBackend): { id: string; kind: VisionBackend['kind'] } {

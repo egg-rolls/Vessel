@@ -238,6 +238,9 @@ export const messages = {
   'settings.item.teamMemberLimit.title': 'Team 成员上限',
   'settings.item.teamMemberLimit.desc':
     '单个 Team 内 present 成员（peer + contractor，含已关闭未离册）的数量上限；正整数 ≥1，缺省 100。超限 spawn 报 team_full。修改后需重启节点生效。',
+  'settings.item.imageTokenBudgetRatio.title': '图片 token 预算比例',
+  'settings.item.imageTokenBudgetRatio.desc':
+    '内联图片占上下文窗口的 token 预算比例（0–1，缺省 0.05）。张数上限 = 预算 ÷ 单图 token，再夹后端安全上限（32）。窗口越大允许图越多；预算溢出丢最新图并向模型注记。修改后需重启节点生效。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',
