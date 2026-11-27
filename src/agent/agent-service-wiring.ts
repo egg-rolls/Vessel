@@ -114,6 +114,8 @@ export interface AgentServiceWiringOptions {
   contextToolResultWhitelist?: readonly ToolResultWhitelistRule[];
   /** 注入粒度框架：装配层传 `config.envInjection`；self-card hook 取最细节奏。 */
   envInjection?: EnvInjectionConfig;
+  /** P2 热加载：活配置 env_injection getter（self-card hook live resolver）；透传 AgentRuntime。 */
+  getEnvInjection?: () => EnvInjectionConfig | undefined;
   /**
    * 0.56：附件入池（上传即落 blob）。装配层传 `createConfigAttachmentIngest`。
    * 缺省 = 不入池（图不内联，但不报错）。
@@ -292,6 +294,7 @@ export function buildMemberExecutionOptions(
       ? { contextToolResultWhitelist: options.contextToolResultWhitelist }
       : {}),
     ...(options.envInjection !== undefined ? { envInjection: options.envInjection } : {}),
+    ...(options.getEnvInjection !== undefined ? { getEnvInjection: options.getEnvInjection } : {}),
     ...(options.summarizer !== undefined ? { summarizer: options.summarizer } : {}),
     ...(options.summarizerForSession !== undefined
       ? { summarizerForSession: options.summarizerForSession }

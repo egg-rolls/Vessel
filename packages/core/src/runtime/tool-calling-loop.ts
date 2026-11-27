@@ -437,6 +437,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
       ...(ctx.providerName !== undefined ? { providerName: ctx.providerName } : {}),
       ...(ctx.cwd !== undefined ? { cwd: ctx.cwd } : {}),
       ...(ctx.agent_id !== undefined ? { agent_id: ctx.agent_id } : {}),
+      // P2 轴 C：事实发射端口（ui-only 环境通知落 message.injected 卡，不进模型上下文）。
+      emitFact: (event) => ctx.events.emit(event),
       ...(inputRefs !== undefined && inputRefs.length > 0 ? { refs: inputRefs } : {}),
     };
     const baseSystemPrompt = ctx.controls.getBaseSystemPrompt();

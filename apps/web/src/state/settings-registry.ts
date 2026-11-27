@@ -383,11 +383,126 @@ function snakeCase(id: string): string {
 }
 
 /**
+ * q-env-granularity（P2 §4.3，D5/D6/D7）：环境信息粒度设置（runtime 分类 envNotice 子分组）。
+ * 纯数据生成：全局 default 行 + 每 scope delivery 行（pinned trim/model 只 run/off）+
+ * 每 scope channel 行（全 16 词）。scope 名复用 chat.env.scope.*；选项/后果文案 settings.env.*。
+ * default/fallback 取内置默认表（与 config DEFAULT_ENV_CADENCE 人工对拍：files/trim=run，其余=request）。
+ */
+const ENV_NOTICE_SCOPES = [
+  'restart',
+  'identity',
+  'fields',
+  'model',
+  'tools',
+  'lock',
+  'conflict',
+  'files',
+  'context',
+  'trim',
+  'pii',
+  'config',
+  'permission',
+  'mcp',
+  'update',
+  'peer',
+] as const;
+
+/** 内置默认节奏表（字面量副本，与 packages/config DEFAULT_ENV_CADENCE 人工对拍）。 */
+const ENV_SCOPE_DEFAULT_CADENCE: Readonly<Record<string, string>> = {
+  files: 'run',
+  trim: 'run',
+};
+
+/** 钉死 run 的 scope（前缀不变量 / EU 生命周期）：UI 只给 run/off，拒 request（D6 允许 off）。 */
+const ENV_PINNED_SCOPES: ReadonlySet<string> = new Set(['trim', 'model']);
+
+const ENV_CADENCE_OPTION_LABELS: Readonly<Record<string, string>> = {
+  request: 'settings.env.cadence.request',
+  run: 'settings.env.cadence.run',
+  off: 'settings.env.cadence.off',
+};
+
+const ENV_CHANNEL_OPTION_LABELS: Readonly<Record<string, string>> = {
+  'model+ui': 'settings.env.channel.modelUi',
+  'ui-only': 'settings.env.channel.uiOnly',
+};
+
+function envNoticeSettings(): SettingDef[] {
+  const defs: SettingDef[] = [
+    {
+      id: 'envInjection.default',
+      key: 'envInjection.default',
+      scope: 'user',
+      type: 'enum',
+      source: 'core',
+      titleKey: 'settings.env.default.title',
+      descriptionKey: 'settings.env.default.desc',
+      category: 'runtime',
+      group: 'envNotice',
+      order: 0,
+      options: ['run', 'request'],
+      optionLabelKeys: ENV_CADENCE_OPTION_LABELS,
+      fallback: 'run',
+      keywords: ['env', '环境', '粒度', 'cadence', 'default', '缺省'],
+    },
+  ];
+  ENV_NOTICE_SCOPES.forEach((scope, index) => {
+    const pinned = ENV_PINNED_SCOPES.has(scope);
+    const cadenceDefault = ENV_SCOPE_DEFAULT_CADENCE[scope] ?? 'request';
+    const descKey =
+      scope === 'files'
+        ? 'settings.env.files.desc'
+        : pinned
+          ? 'settings.env.pinned.desc'
+          : 'settings.env.delivery.desc';
+    // delivery 行：scope 名复用 chat.env.scope.*；pinned 裁剪 options（只 run/off）。
+    defs.push({
+      id: `envInjection.scopes.${scope}`,
+      key: `envInjection.scopes.${scope}`,
+      scope: 'user',
+      type: 'enum',
+      source: 'core',
+      titleKey: `chat.env.scope.${scope}`,
+      descriptionKey: descKey,
+      category: 'runtime',
+      group: 'envNotice',
+      order: 10 + index,
+      options: pinned ? ['run', 'off'] : ['request', 'run', 'off'],
+      optionLabelKeys: ENV_CADENCE_OPTION_LABELS,
+      default: cadenceDefault,
+      fallback: cadenceDefault,
+      keywords: ['env', '环境', '粒度', 'cadence', scope, 'delivery'],
+    });
+    // channel 行（D5 全 16 词）：model+ui / ui-only；scope 名复用 + 通道描述区分。
+    defs.push({
+      id: `envInjection.channels.${scope}`,
+      key: `envInjection.channels.${scope}`,
+      scope: 'user',
+      type: 'enum',
+      source: 'core',
+      titleKey: `chat.env.scope.${scope}`,
+      descriptionKey: 'settings.env.channel.desc',
+      category: 'runtime',
+      group: 'envNotice',
+      order: 100 + index,
+      options: ['model+ui', 'ui-only'],
+      optionLabelKeys: ENV_CHANNEL_OPTION_LABELS,
+      default: 'model+ui',
+      fallback: 'model+ui',
+      keywords: ['env', '环境', '通道', 'channel', scope, 'ui-only'],
+    });
+  });
+  return defs;
+}
+
+const ENV_NOTICE_SETTINGS: readonly SettingDef[] = envNoticeSettings();
+
+/**
  * 核心服务端设置（scope=user，S5 起 project 可覆盖）。
  * descriptionKey 指向 .desc（可能不存在）——渲染侧必须经 i18n hasMessage 判定，
  * 缺失时不渲染描述行（t() 对缺失键回退键名本身）。
  */
-export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec) => {
+const CORE_SETTINGS_BASE: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec) => {
   const shortId = coreShortId(spec.key);
   return {
     id: spec.key,
@@ -412,6 +527,9 @@ export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec
     ...(spec.type === 'array' ? { readOnly: true } : {}),
   };
 });
+
+/** 核心设置全量 = 通用键表 + 环境信息粒度组（q-env-granularity）。 */
+export const CORE_SETTINGS: readonly SettingDef[] = [...CORE_SETTINGS_BASE, ...ENV_NOTICE_SETTINGS];
 
 /**
  * 本地呈现偏好（scope=local，浏览器 localStorage；§7.1 键名全部原名保留）。

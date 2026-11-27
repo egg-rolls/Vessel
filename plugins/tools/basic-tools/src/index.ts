@@ -88,8 +88,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type {
   EnvCadence,
+  EnvChannel,
   Hook,
   HookContext,
+  Message,
   Plugin,
   PluginHost,
   RunEvent,
@@ -325,6 +327,11 @@ export interface BasicToolsConfig {
    */
   envGranularity?: Record<string, EnvCadence>;
   /**
+   * 投递通道（env_injection 框架轴 C，P2）：scope → channel，由装配层按 `env_injection.channels`
+   * 解析后注入（basic-tools 只产 lock / conflict）。缺省 = model+ui（零回归）。
+   */
+  envChannels?: Record<string, EnvChannel>;
+  /**
    * 异步 bash 缺省超时（毫秒）；**0 = 不限时**（缺省）。per-call `timeout_ms` 始终优先。
    * 同步 bash 不受影响（仍 120s 缺省、必须正数）。用户裁定#8：长驻命令不应被缺省死线杀掉。
    */
@@ -362,7 +369,7 @@ function readStringField(
 }
 
 /**
- * 读取 envGranularity 字段（scope → cadence；只认 'request' / 'run'）。
+ * 读取 envGranularity 字段（scope → cadence；认 'request' / 'run' / 'off'，P2）。
  * 非法值 / 未知键忽略 —— 缺省回落到 producer 的内置字面量节奏（零回归）。
  */
 function readEnvGranularity(
@@ -372,9 +379,22 @@ function readEnvGranularity(
   if (!isRecord(value)) return undefined;
   const granularity: Record<string, EnvCadence> = {};
   for (const [scope, cadence] of Object.entries(value)) {
-    if (cadence === 'request' || cadence === 'run') granularity[scope] = cadence;
+    if (cadence === 'request' || cadence === 'run' || cadence === 'off') {
+      granularity[scope] = cadence;
+    }
   }
   return Object.keys(granularity).length > 0 ? granularity : undefined;
+}
+
+/** 读取 envChannels 字段（scope → channel；认 'model+ui' / 'ui-only'，P2 轴 C）。 */
+function readEnvChannels(record: Record<string, unknown>): Record<string, EnvChannel> | undefined {
+  const value = record.envChannels ?? record.env_channels;
+  if (!isRecord(value)) return undefined;
+  const channels: Record<string, EnvChannel> = {};
+  for (const [scope, channel] of Object.entries(value)) {
+    if (channel === 'model+ui' || channel === 'ui-only') channels[scope] = channel;
+  }
+  return Object.keys(channels).length > 0 ? channels : undefined;
 }
 
 /** 把 YAML 里的插件配置解析成已知字段（未知键忽略） */
@@ -384,6 +404,7 @@ export function parseBasicToolsConfig(value: unknown): BasicToolsConfig {
   const denyPaths = readStringArray(value, 'denyPaths', 'deny_paths');
   const cwd = readStringField(value, 'cwd', 'working_dir');
   const envGranularity = readEnvGranularity(value);
+  const envChannels = readEnvChannels(value);
   // 异步预算三键（用户裁定#8）：非法值忽略回落缺省（与 envGranularity 同口径，零回归）。
   const asyncTimeoutRaw = value.asyncTimeoutMs ?? value.async_timeout_ms;
   const asyncTimeoutMs =
@@ -405,6 +426,7 @@ export function parseBasicToolsConfig(value: unknown): BasicToolsConfig {
     ...(denyPaths !== undefined ? { denyPaths } : {}),
     ...(cwd !== undefined ? { cwd } : {}),
     ...(envGranularity !== undefined ? { envGranularity } : {}),
+    ...(envChannels !== undefined ? { envChannels } : {}),
     ...(asyncTimeoutMs !== undefined ? { asyncTimeoutMs } : {}),
     ...(killOnTimeout !== undefined ? { killOnTimeout } : {}),
     ...(maxAsyncJobs !== undefined ? { maxAsyncJobs } : {}),
@@ -2409,7 +2431,7 @@ function takeWriteCoordNotices(
   sessionId: string | undefined,
   granularity: Record<string, EnvCadence> | undefined,
   requestIndex: number,
-): string[] {
+): { scope: string; content: string }[] {
   const entries = pendingCoordNotices.get(coordSessionKey(sessionId));
   if (entries === undefined || entries.length === 0) return [];
   const announcedSignatures = new Set<string>();
@@ -2422,6 +2444,8 @@ function takeWriteCoordNotices(
     const cadence = granularity?.[entry.scope] ?? 'request';
     if (cadence === 'run' && requestIndex > 0) continue;
     entry.announced = true;
+    // off（P2 轴 A）：整段静默——消费掉（announced）但不产卡、不注入。
+    if (cadence === 'off') continue;
     if (announcedSignatures.has(entry.signature)) continue;
     announcedSignatures.add(entry.signature);
     const draft = byScope.get(entry.scope) ?? { summary: entry.summary, details: [], events: 0 };
@@ -2429,7 +2453,7 @@ function takeWriteCoordNotices(
     draft.events += 1;
     byScope.set(entry.scope, draft);
   }
-  const cards: string[] = [];
+  const cards: { scope: string; content: string }[] = [];
   for (const [scope, draft] of byScope) {
     // 首行 `scope: 摘要`（多事件带计数），明细行 `  · `；明细超预算折 `+N more`。
     const head =
@@ -2440,7 +2464,7 @@ function takeWriteCoordNotices(
     const dropped = draft.details.length - kept.length;
     const lines = kept.map((detail) => `${ENV_DETAIL_MARK}${detail}`);
     if (dropped > 0) lines.push(`${ENV_DETAIL_MARK}+${dropped} more`);
-    cards.push([head, ...lines].join('\n'));
+    cards.push({ scope, content: [head, ...lines].join('\n') });
   }
   pruneCoordNotices();
   return cards;
@@ -2452,7 +2476,10 @@ function takeWriteCoordNotices(
  * scope 生效（lock / conflict 可各配不同节奏，整 hook 早退会吞掉另一 scope 的卡）。
  * priority 165：排在 async bash（160）之后 —— 写协调是更近的工具侧事实，更靠近本轮请求。
  */
-export function createWriteCoordNoticeHook(granularity?: Record<string, EnvCadence>): Hook {
+export function createWriteCoordNoticeHook(
+  granularity?: Record<string, EnvCadence>,
+  channels?: Record<string, EnvChannel>,
+): Hook {
   return {
     name: WRITE_COORD_NOTICE_HOOK,
     type: HookType.BeforeLlm,
@@ -2461,15 +2488,37 @@ export function createWriteCoordNoticeHook(granularity?: Record<string, EnvCaden
       const cards = takeWriteCoordNotices(ctx.session_id, granularity, ctx.request_index ?? 0);
       if (cards.length === 0) return;
       const timestamp = Date.now();
-      ctx.messages = [
-        ...(ctx.messages ?? []),
-        ...cards.map((content) => ({
-          role: 'user' as const,
+      const injected: Message[] = [];
+      for (const card of cards) {
+        // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected），不写 ctx.messages。
+        // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退注入（model+ui 现状，additive）。
+        if (channels?.[card.scope] === 'ui-only' && ctx.emitFact !== undefined) {
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: ctx.run_id,
+            data: {
+              run_id: ctx.run_id,
+              session_id: ctx.session_id,
+              message: {
+                role: 'user',
+                name: ASYNC_NOTICE_MESSAGE_NAME,
+                content: card.content,
+                timestamp,
+                message_id: `${ctx.run_id}:notice:${String(timestamp)}:${card.scope}`,
+              },
+            },
+            ts: timestamp,
+          });
+          continue;
+        }
+        injected.push({
+          role: 'user',
           name: ASYNC_NOTICE_MESSAGE_NAME,
-          content,
+          content: card.content,
           timestamp,
-        })),
-      ];
+        });
+      }
+      if (injected.length > 0) ctx.messages = [...(ctx.messages ?? []), ...injected];
     },
   };
 }
@@ -3512,7 +3561,7 @@ export const basicToolsPlugin: Plugin = {
     // 写协调通知（lock/conflict）：cadence 从 install config 的 envGranularity 读，
     // 缺省不注入 ⇒ producer 用内置字面量默认（request）。
     if (!host.getHooks().some((hook) => hook.name === WRITE_COORD_NOTICE_HOOK)) {
-      host.registerHook(createWriteCoordNoticeHook(config.envGranularity));
+      host.registerHook(createWriteCoordNoticeHook(config.envGranularity, config.envChannels));
     }
   },
   /**

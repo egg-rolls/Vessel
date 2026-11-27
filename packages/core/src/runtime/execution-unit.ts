@@ -95,7 +95,7 @@ import {
   type ToolResultWhitelistRule,
   type WorkingContext,
 } from '../types/context.js';
-import type { EnvCadence } from '../types/env-cadence.js';
+import type { EnvCadence, EnvChannel } from '../types/env-cadence.js';
 import type { ErrorEnvelope } from '../types/error.js';
 import type {
   EventStream,
@@ -1048,6 +1048,12 @@ export class ExecutionUnit {
    */
   private readonly envCadence?: (scope: string) => EnvCadence;
   /**
+   * 环境信息投递通道端口（轴 C，P2）：装配层注入，缺省 undefined ⇒ 恒 model+ui
+   * （事实 + 上下文，零回归）。`ui-only` ⇒ notice 只落 message.injected 事实（UI 卡），
+   * 不写入模型上下文。core 不认识 scope 业务词。
+   */
+  private readonly envChannel?: (scope: string) => EnvChannel;
+  /**
    * 工具结果压缩白名单（q-tool-result-whitelist）：原样存注入值（undefined = 未配置）。
    * 消费点（段起点冻结）用 `effectiveToolResultWhitelist` 判定生效规则：
    * 缺省 ⇒ 内置默认（inbox read + agent read）；显式 [] ⇒ 关闭。
@@ -1083,6 +1089,7 @@ export class ExecutionUnit {
     this.bindingLease = opts.bindingLease;
     this.visionSettings = opts.vision;
     this.envCadence = opts.envCadence;
+    this.envChannel = opts.envChannel;
     this.toolResultWhitelist = opts.toolResultWhitelist;
     // 缺省走中枢薄封装：级别跟随进程级配置（不再以 VESSEL_DEBUG 定死 debug/noop）。
     this.logger = opts.logger ?? createStderrLogger();
@@ -1194,6 +1201,26 @@ export class ExecutionUnit {
    */
   appendNotice(text: string): void {
     const execution = this.activeRun;
+    // P2 粒度（轴 A/C）：按首行 scope 词判定。off ⇒ 整段静默；ui-only ⇒ 只落 UI 卡
+    // 事实、不写模型上下文。scope 解析不出 / 端口未注入 ⇒ 走现状（model+ui，零回归）。
+    const scope = this.noticeScopeOf(text);
+    if (scope !== undefined) {
+      if (this.envScopeOff(scope)) return;
+      if (this.envUiOnly(scope)) {
+        if (execution !== undefined) {
+          const timestamp = Date.now();
+          this.emitNoticeFactOnly(execution, execution.runId, {
+            role: 'user',
+            name: 'vessel:notice',
+            content: text,
+            timestamp,
+            message_id: noticeMessageIdOf(execution.runId, timestamp),
+          });
+        }
+        // 无 active run：ui-only 不落上下文快照（那会进模型）；瞬态通知丢弃。
+        return;
+      }
+    }
     const timestamp = Date.now();
     const owner = execution?.runId ?? 'notice';
     const message: Message = {
@@ -1462,17 +1489,22 @@ export class ExecutionUnit {
    * 「注入了卡但没走到发布就终止」由文本键去重兜住（同一过渡只报一次，回滚照报）。
    */
   private appendModelChangeNotice(execution: Run): void {
+    // P2：model 钉死 run（前缀不变量），但 off 允许（D6）；ui-only 只落 UI 卡。
+    if (this.envScopeOff('model')) return;
     const from = this.promptContextFingerprint?.model;
     // 空串与缺省同义：没有可比的旧模型就不发（normalize 允许空串落盘）。
     if (from === undefined || from === '' || from === this.model) return;
     if (modelChangeAlreadyAnnounced(execution.workingContext.messages, from, this.model)) return;
-    this.appendInjectedMessages(execution, execution.runId, [
-      {
-        role: 'user',
-        name: 'vessel:notice',
-        content: renderModelChangeNotice(from, this.model),
-      },
-    ]);
+    const message: Message = {
+      role: 'user',
+      name: 'vessel:notice',
+      content: renderModelChangeNotice(from, this.model),
+    };
+    if (this.envUiOnly('model')) {
+      this.emitNoticeFactOnly(execution, execution.runId, message);
+      return;
+    }
+    this.appendInjectedMessages(execution, execution.runId, [message]);
   }
 
   /**
@@ -1950,7 +1982,12 @@ export class ExecutionUnit {
     // （`tool_call_ids` 的长度），**明细行**（展开后）才给总数 `cleared` / 保留条数 /
     // 新增的 call id。列出的 id 仍然只有新增的那几条 —— 改回全量会把卡本身撑大。
     const notice = renderContextTrimNotice({ cleared: ids.length, kept, tool_call_ids: fresh });
-    this.appendNotice(notice);
+    // P2：trim 钉死 run（前缀不变量），off 允许（D6）。off ⇒ 卡与事件都不发（冻结照常）；
+    // ui-only ⇒ 只走 context.cleared_tool_result 事件卡（observe 档），不 appendNotice
+    // （避免 message.injected 第二张卡），模型上下文不收。
+    const trimOff = this.envScopeOff('trim');
+    if (!trimOff && !this.envUiOnly('trim')) this.appendNotice(notice);
+    if (trimOff) return;
     this.publishEvent({
       type: 'context.cleared_tool_result',
       run_id: execution.runId,
@@ -2016,7 +2053,10 @@ export class ExecutionUnit {
       sessionId: execution.sessionId,
       archived: ids.length,
     });
-    this.appendNotice(notice);
+    // P2：归档卡复用 scope trim。off ⇒ 卡与事件都不发；ui-only ⇒ 只走事件卡，不 appendNotice。
+    const archiveOff = this.envScopeOff('trim');
+    if (!archiveOff && !this.envUiOnly('trim')) this.appendNotice(notice);
+    if (archiveOff) return;
     this.publishEvent({
       type: 'context.archive_notice',
       run_id: execution.runId,
@@ -2322,7 +2362,10 @@ export class ExecutionUnit {
    * model / trim 的自然节奏钉死（前缀不变量 / EU 生命周期），不经此 gate。
    */
   private envCadenceAllows(scope: string, runId: string): boolean {
-    if (this.envCadence?.(scope) !== 'run') return true;
+    const cadence = this.envCadence?.(scope);
+    // off（P2）：整段静默——不观察、不产卡、不记帐（先于 run gate）。
+    if (cadence === 'off') return false;
+    if (cadence !== 'run') return true;
     // runId 未知（无 active run）：无法 per-run 记帐，放行（退化为 request，不吞卡）。
     if (runId === '') return true;
     const RUNS_REMEMBERED_MAX = 64;
@@ -2340,6 +2383,48 @@ export class ExecutionUnit {
     if (seen.has(scope)) return false;
     seen.add(scope);
     return true;
+  }
+
+  /** scope 是否被配成 off（P2 轴 A）：整段静默，不产事件、不注入。端口未注入 ⇒ false。 */
+  private envScopeOff(scope: string): boolean {
+    return this.envCadence?.(scope) === 'off';
+  }
+
+  /** scope 是否 ui-only（P2 轴 C）：只落 UI 卡事实，不写模型上下文。缺省 ⇒ false（model+ui）。 */
+  private envUiOnly(scope: string): boolean {
+    return this.envChannel?.(scope) === 'ui-only';
+  }
+
+  /**
+   * 从一条 env 通知正文的首行解析 scope 词（线格式 `<scope>: …` / `<scope>：…`）。
+   * 只取行首 token（到第一个 `:` / `：` 为止），与 Web `env-notice.ts` 同口径；
+   * 解析不出（无冒号 / 空）⇒ 返回 undefined，消费方按 model+ui 现状处理（零回归）。
+   * core 不认识 scope 业务词表——这里只做线格式切词，判定交给注入的端口函数。
+   */
+  private noticeScopeOf(text: string): string | undefined {
+    const firstLine = text.split('\n', 1)[0] ?? '';
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*[:：]/.exec(firstLine);
+    return match?.[1];
+  }
+
+  /**
+   * ui-only 事实出口（P2 轴 C）：只落 `message.injected` 事实（vessel:notice + 稳定
+   * message_id），**不** addContext ⇒ 模型上下文不收，Web 经既有投影渲染 EnvCard
+   * （live + 刷新回放同源）。与 appendInjectedMessages 的事实段同形，去掉上下文写入。
+   */
+  private emitNoticeFactOnly(execution: Run, runId: string, message: Message): void {
+    const identified = withMessageId(message, injectedHookMessageIdOf(runId, this.injectedHookSeq));
+    this.injectedHookSeq += 1;
+    this.publishEvent({
+      type: 'message.injected',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        session_id: execution.workingContext.getSessionId(),
+        message: identified,
+      },
+      ts: Date.now(),
+    });
   }
 
   /**
@@ -2511,20 +2596,24 @@ export class ExecutionUnit {
     // 先推进再注入（self-card-delta 同族）：同一 run 后续轮 diff 为空，不另存已报签名；
     // 回滚（A→B→A）与相信的集合不同，照样报。timestamp 让同文卡不被注入键去重吞掉。
     this.reportedToolSurface = { sessionId: execution.sessionId, names: liveNames };
-    this.appendInjectedMessages(execution, execution.runId, [
-      {
-        role: 'user',
-        name: 'vessel:notice',
-        content: renderToolSurfaceNotice(
-          added.map((name) => ({
-            name,
-            description: liveTools.find((tool) => tool.name === name)?.description,
-          })),
-          removed,
-        ),
-        timestamp: Date.now(),
-      },
-    ]);
+    const notice: Message = {
+      role: 'user',
+      name: 'vessel:notice',
+      content: renderToolSurfaceNotice(
+        added.map((name) => ({
+          name,
+          description: liveTools.find((tool) => tool.name === name)?.description,
+        })),
+        removed,
+      ),
+      timestamp: Date.now(),
+    };
+    // P2 轴 C：ui-only ⇒ 只落 UI 卡事实，不进模型上下文（off 已由 envCadenceAllows 挡）。
+    if (this.envUiOnly('tools')) {
+      this.emitNoticeFactOnly(execution, execution.runId, notice);
+      return;
+    }
+    this.appendInjectedMessages(execution, execution.runId, [notice]);
   }
 
   /**

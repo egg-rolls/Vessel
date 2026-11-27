@@ -27,7 +27,7 @@
  * @module @vessel-agent/agent
  */
 
-import type { EnvCadence, Hook, HookType, Message } from '@vessel-agent/core';
+import type { EnvCadence, EnvChannel, Hook, HookType, Message } from '@vessel-agent/core';
 import {
   ENV_INFO_DETAIL_MARK,
   ENV_INFO_MESSAGE_NAME,
@@ -327,7 +327,19 @@ export interface SelfCardDeltaHookOptions {
    * 任一 scope 是 request ⇒ 整 hook request。不做 per-kind 分裂（避免 per-kind reported
    * 跟踪复杂度）：混合配置整 hook 取 request，要整体推迟须把五个 scope 全配 run。
    */
-  cadence?: EnvCadence;
+  cadence?: EnvCadence | (() => EnvCadence);
+  /**
+   * 投递通道 resolver（P2 轴 C）：按 scope 判 `ui-only` ⇒ 该 scope 的增量只落 UI 卡事实
+   * （ctx.emitFact），不写 ctx.messages。缺省 ⇒ 全 model+ui（零回归）。
+   * per-scope `off` 由装配层经 cadence resolver / 本 resolver 同源配置判定（见 run）。
+   */
+  channel?: (scope: string) => EnvChannel;
+  /**
+   * per-scope off resolver（P2 轴 A）：返回 true ⇒ 该 scope 整段静默（不产卡）。
+   * 缺省 ⇒ 无 off（零回归）。整 hook 的 finestCadence gate 只处理「全 off」；混合配置里
+   * 个别 scope off 由本 resolver 在分组后过滤。
+   */
+  scopeOff?: (scope: string) => boolean;
 }
 
 /**
@@ -344,8 +356,10 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
     type: BEFORE_LLM,
     async run(ctx): Promise<void> {
       // 节奏 gate 在观察 / diff 之前：否则 reported 已推进而卡被吞 = 变更永丢。
-      // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。
-      if (options.cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
+      // request_index 缺省 0（旧 caller）⇒ 恒放行，零回归。live resolver 每请求求值（P2）。
+      const cadence = typeof options.cadence === 'function' ? options.cadence() : options.cadence;
+      if (cadence === 'off') return;
+      if (cadence === 'run' && (ctx.request_index ?? 0) > 0) return;
       let current: SelfCardIdentity;
       try {
         current = options.current();
@@ -359,13 +373,44 @@ export function createSelfCardDeltaHook(options: SelfCardDeltaHookOptions): Hook
       reported = current;
       // 一条变更种类 = 一条消息（scope 决定卡头标签，混着写就等于标签撒谎）。
       const timestamp = Date.now();
-      const injected: Message[] = formatSelfCardDeltas(changes).map((content) => ({
-        role: 'user',
-        name: SELF_CARD_DELTA_MESSAGE_NAME,
-        content,
-        timestamp,
-      }));
-      ctx.messages = [...(ctx.messages ?? []), ...injected];
+      const injected: Message[] = [];
+      for (const content of formatSelfCardDeltas(changes)) {
+        // 首行 scope 词（线格式 `<scope>: …`）；解析不出按 model+ui 现状（零回归）。
+        const scope = /^([A-Za-z_][A-Za-z0-9_]*)\s*[:：]/.exec(
+          content.split('\n', 1)[0] ?? '',
+        )?.[1];
+        if (scope !== undefined && options.scopeOff?.(scope) === true) continue;
+        const message: Message = {
+          role: 'user',
+          name: SELF_CARD_DELTA_MESSAGE_NAME,
+          content,
+          timestamp,
+        };
+        // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected），不写 ctx.messages。
+        // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退注入（model+ui 现状，additive）。
+        if (
+          scope !== undefined &&
+          options.channel?.(scope) === 'ui-only' &&
+          ctx.emitFact !== undefined
+        ) {
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: ctx.run_id,
+            data: {
+              run_id: ctx.run_id,
+              session_id: ctx.session_id,
+              message: {
+                ...message,
+                message_id: `${ctx.run_id}:notice:${String(timestamp)}:${scope}`,
+              },
+            },
+            ts: timestamp,
+          });
+          continue;
+        }
+        injected.push(message);
+      }
+      if (injected.length > 0) ctx.messages = [...(ctx.messages ?? []), ...injected];
     },
   };
 }
