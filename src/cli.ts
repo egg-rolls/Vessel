@@ -1895,6 +1895,7 @@ async function runWithConfig(result: BootstrapResult) {
       // （per-run seq 的 trace 读法）已删除，见 bootstrap 侧同一处注释。
       timelineRunEvents: createTimelineRunEventsPort({
         sessionsDir: gatewayBundle.tenantPaths.sessions_dir,
+        logger,
         ...(gatewayBundle.runStore !== undefined
           ? {
               resolveSession: async (runId: string) => {

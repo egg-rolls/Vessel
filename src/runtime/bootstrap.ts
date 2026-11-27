@@ -2235,6 +2235,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // timeline 的 run 索引是**会话内**的，所以 run → session 的解析也在端口实现里。
     timelineRunEvents: createTimelineRunEventsPort({
       sessionsDir: tenantPaths.sessions_dir,
+      logger,
       // 快路径：durable 打开的安装能从 RunRecord 一次读到 `session_id`。
       ...(bundle.runStore !== undefined
         ? {
