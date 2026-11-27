@@ -613,6 +613,10 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer | 
     maxMessages: config.context?.maxMessages,
     autoCompact: config.context?.autoCompact,
     compactThreshold: config.context?.compactThreshold,
+    // q-tool-result-whitelist：原样透传（undefined ⇒ core 内置默认；显式 [] ⇒ 关闭）。
+    ...(config.context?.toolResultWhitelist !== undefined
+      ? { toolResultWhitelist: config.context.toolResultWhitelist }
+      : {}),
     ...(summarizer !== undefined ? { summarizer } : {}),
   };
 }
@@ -1105,6 +1109,10 @@ export async function buildTenantRuntime(
       ...(config.context?.maxTokens !== undefined ? { maxTokens: config.context.maxTokens } : {}),
       ...(config.context?.autoCompact !== undefined
         ? { autoCompact: config.context.autoCompact }
+        : {}),
+      // q-tool-result-whitelist：构造期注入（重启生效）；缺省 ⇒ core 内置默认。
+      ...(config.context?.toolResultWhitelist !== undefined
+        ? { toolResultWhitelist: config.context.toolResultWhitelist }
         : {}),
       summarizer,
     },

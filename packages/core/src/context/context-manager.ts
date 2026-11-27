@@ -28,6 +28,10 @@ import {
   NO_ANCHOR_SAFETY_MARGIN,
   REQUEST_MESSAGE_OVERHEAD_TOKENS,
 } from './request-view.js';
+import {
+  effectiveToolResultWhitelist,
+  filterWhitelistedToolResults,
+} from './tool-result-whitelist.js';
 
 /** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
 function placeholderSummary(removed: number): string {
@@ -1144,6 +1148,9 @@ export class MemoryWorkingContext implements WorkingContext {
       compactThreshold: config.compactThreshold ?? DEFAULT_COMPACT_THRESHOLD,
       onCompact: config.onCompact,
       summarizer: config.summarizer,
+      // q-tool-result-whitelist：原样透传（undefined = 未配置 ⇒ 消费点走内置默认；
+      // 显式 [] = 关闭）。不在构造期归一，消费点用 effectiveToolResultWhitelist 判定。
+      toolResultWhitelist: config.toolResultWhitelist,
     };
     this.sessionMessages.set(this.currentSessionId, []);
   }
@@ -1474,9 +1481,15 @@ export class MemoryWorkingContext implements WorkingContext {
       planner = new IncrementalClearedToolResultPlanner();
       this.clearedPlanners.set(sessionId, planner);
     }
-    return planner.plan(
-      this.sessionMessages.get(sessionId) ?? [],
-      this.config.maxTokens ?? 1_000_000,
+    const messages = this.sessionMessages.get(sessionId) ?? [];
+    const planned = planner.plan(messages, this.config.maxTokens ?? 1_000_000);
+    // q-tool-result-whitelist：消费侧纯后过滤（planner 一字不动，增量/确定性合同保留）。
+    // 与 EU 段起点冻结（请求视图）同一过滤器同一规则 ⇒ 压缩审计集合与请求视图口径一致。
+    // 抗 trim 不抗 compaction：这里只影响「哪些算被占位」的审计口径，toSummarize 照常。
+    return filterWhitelistedToolResults(
+      messages,
+      planned,
+      effectiveToolResultWhitelist(this.config.toolResultWhitelist),
     );
   }
 

@@ -46,6 +46,7 @@ import {
   type SessionTitleSource,
   type TerminationPolicy,
   type ToolDefinition,
+  type ToolResultWhitelistRule,
   type Usage,
   type UsageLimits,
   type WorkingContext,
@@ -431,6 +432,12 @@ export interface MemberExecutionHostOptions {
    * 缺省时内层 `MemoryWorkingContext` 用 core 兜底值。
    */
   contextCompactThreshold?: number;
+  /**
+   * 工具结果压缩白名单（q-tool-result-whitelist）。装配层传
+   * `config.context.toolResultWhitelist`；缺省不传 ⇒ 内层窗口走 core 内置默认
+   * （inbox read + agent read）。显式 [] ⇒ 关闭。构造期注入，重启生效。
+   */
+  contextToolResultWhitelist?: readonly ToolResultWhitelistRule[];
   /**
    * 环境信息注入节奏配置（YAML `env_injection`）。装配层传入 `config.envInjection`；
    * self-card-delta hook 的 cadence 取 identity/fields/model/tools/context 的最细值。
@@ -1027,6 +1034,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
   private readonly termination: TerminationPolicy;
   private readonly contextMaxTokens: number;
   private readonly contextCompactThreshold: number | undefined;
+  /** q-tool-result-whitelist：原样存注入值（undefined ⇒ 内层窗口走 core 内置默认）。 */
+  private readonly contextToolResultWhitelist: readonly ToolResultWhitelistRule[] | undefined;
   private readonly envInjection: EnvInjectionConfig | undefined;
   private readonly summarizer: ContextSummarizer | undefined;
   private readonly summarizerForSession: ((sessionId: string) => ContextSummarizer) | undefined;
@@ -1071,6 +1080,7 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.termination = options.termination ?? DEFAULT_TERMINATION;
     this.contextMaxTokens = options.contextMaxTokens ?? DEFAULT_CONTEXT_MAX_TOKENS;
     this.contextCompactThreshold = options.contextCompactThreshold;
+    this.contextToolResultWhitelist = options.contextToolResultWhitelist;
     this.envInjection = options.envInjection;
     this.summarizer = options.summarizer;
     this.summarizerForSession = options.summarizerForSession;
@@ -1249,6 +1259,10 @@ export class MemberExecutionHost implements MemberExecutionPort {
             maxTokens: this.contextMaxTokens,
             autoCompact: false,
             compactThreshold: this.contextCompactThreshold,
+            // q-tool-result-whitelist：与 owner 同一口径（缺省 ⇒ core 内置默认）。
+            ...(this.contextToolResultWhitelist !== undefined
+              ? { toolResultWhitelist: [...this.contextToolResultWhitelist] }
+              : {}),
             ...(summarizer !== undefined ? { summarizer } : {}),
           }),
           contextPolicy.autoCompact,

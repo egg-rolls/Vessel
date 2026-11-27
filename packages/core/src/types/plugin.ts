@@ -352,4 +352,13 @@ export interface ExecutionUnitOptions {
    * 观察（今天行为，零回归）。model / trim 的自然节奏钉死，不经此端口。
    */
   envCadence?: (scope: string) => import('./env-cadence.js').EnvCadence;
+  /**
+   * 工具结果压缩白名单（q-tool-result-whitelist；additive）。
+   *
+   * 命中的工具结果抗 trim 不抗 compaction：段起点冻结占位集合时把命中的
+   * tool_call_id 过滤掉（请求视图保持原文），段边界 compaction 照常收尾。
+   * 缺省不注入 ⇒ 内置默认（inbox read + agent read）；显式 `[]` ⇒ 关闭。
+   * 装配层从 `context.tool_result_whitelist` 映射；构造期注入，重启生效。
+   */
+  toolResultWhitelist?: readonly import('./context.js').ToolResultWhitelistRule[];
 }

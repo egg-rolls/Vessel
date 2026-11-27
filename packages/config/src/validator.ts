@@ -256,7 +256,7 @@ function validateTermination(
 
 /** 校验 context 块（0.34 S2：阈值与窗口配置的字段范围） */
 function validateContext(context: ContextConfig, errors: ConfigValidationError[]): void {
-  const { maxTokens, maxMessages, autoCompact, compactThreshold } = context;
+  const { maxTokens, maxMessages, autoCompact, compactThreshold, toolResultWhitelist } = context;
 
   if (
     maxTokens !== undefined &&
@@ -297,6 +297,46 @@ function validateContext(context: ContextConfig, errors: ConfigValidationError[]
       message: 'context.compactThreshold must be a number between 0 (exclusive) and 1 (inclusive)',
       value: compactThreshold,
     });
+  }
+
+  // q-tool-result-whitelist：数组 of {tool 非空字符串, action? 字符串}。
+  // 显式 [] 合法（= 关闭白名单）；缺省合法（= core 内置默认）。
+  if (toolResultWhitelist !== undefined) {
+    if (!Array.isArray(toolResultWhitelist)) {
+      errors.push({
+        path: 'context.toolResultWhitelist',
+        message: 'context.toolResultWhitelist must be an array of {tool, action?} rules',
+        value: toolResultWhitelist,
+      });
+    } else {
+      for (let index = 0; index < toolResultWhitelist.length; index += 1) {
+        const rule = toolResultWhitelist[index] as unknown;
+        const path = `context.toolResultWhitelist[${index}]`;
+        if (typeof rule !== 'object' || rule === null || Array.isArray(rule)) {
+          errors.push({
+            path,
+            message: `${path} must be an object with a non-empty "tool" string`,
+            value: rule,
+          });
+          continue;
+        }
+        const record = rule as Record<string, unknown>;
+        if (typeof record.tool !== 'string' || record.tool.length === 0) {
+          errors.push({
+            path: `${path}.tool`,
+            message: `${path}.tool must be a non-empty string`,
+            value: record.tool,
+          });
+        }
+        if (record.action !== undefined && typeof record.action !== 'string') {
+          errors.push({
+            path: `${path}.action`,
+            message: `${path}.action must be a string when present`,
+            value: record.action,
+          });
+        }
+      }
+    }
   }
 }
 

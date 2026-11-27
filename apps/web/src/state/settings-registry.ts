@@ -121,7 +121,8 @@ export function coreShortId(key: string): string {
  */
 interface CoreSettingSpec {
   key: string;
-  type: 'boolean' | 'enum' | 'number' | 'string';
+  /** q-tool-result-whitelist 起含 'array'（只读 JSON 展示，照 plugin object/array 先例）。 */
+  type: 'boolean' | 'enum' | 'number' | 'string' | 'array';
   options?: readonly string[];
   min?: number;
   max?: number;
@@ -343,6 +344,17 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
     fallback: '0.05',
     keywords: ['图片预算', '视觉', '图片上限', 'image budget', 'vision', 'token'],
   },
+  // q-tool-result-whitelist：工具结果压缩白名单（YAML `context.tool_result_whitelist`）。
+  // 一期 YAML-only（照 modules 先例）：WebUI 只读 JSON 展示，不走 config.set；
+  // 构造期注入，重启生效（desc 注明）。缺省 = core 内置默认（inbox read + agent read）；
+  // 显式 [] = 关闭；显式列表整体替换。抗 trim 不抗 compaction。
+  {
+    key: 'context.toolResultWhitelist',
+    type: 'array',
+    default: '[{"tool":"inbox","action":"read"},{"tool":"agent","action":"read"}]',
+    fallback: '[{"tool":"inbox","action":"read"},{"tool":"agent","action":"read"}]',
+    keywords: ['白名单', 'whitelist', 'trim', '占位', 'placeholder', 'inbox', '压缩', '豁免'],
+  },
 ];
 
 /** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
@@ -362,6 +374,7 @@ function coreCategory(key: string): string {
   if (key.startsWith(EMPTY_RESPONSE_SETTING_PREFIX)) return 'runtime';
   if (key === 'agent.teamMemberLimit') return 'runtime';
   if (key === 'vision.imageTokenBudgetRatio') return 'runtime';
+  if (key === 'context.toolResultWhitelist') return 'runtime';
   return 'display';
 }
 
@@ -395,6 +408,8 @@ export const CORE_SETTINGS: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec
     default: spec.default,
     fallback: spec.fallback,
     keywords: [shortId, snakeCase(shortId), ...(spec.keywords ?? [])],
+    // array/object：v1 只读 JSON（照 pluginSettingsToDefs 同一口径；YAML-only 键）。
+    ...(spec.type === 'array' ? { readOnly: true } : {}),
   };
 });
 

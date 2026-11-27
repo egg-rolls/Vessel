@@ -241,6 +241,9 @@ export const messages = {
   'settings.item.imageTokenBudgetRatio.title': '图片 token 预算比例',
   'settings.item.imageTokenBudgetRatio.desc':
     '内联图片占上下文窗口的 token 预算比例（0–1，缺省 0.05）。张数上限 = 预算 ÷ 单图 token，再夹后端安全上限（32）。窗口越大允许图越多；预算溢出丢最新图并向模型注记。修改后需重启节点生效。',
+  'settings.item.toolResultWhitelist.title': '工具结果压缩白名单',
+  'settings.item.toolResultWhitelist.desc':
+    '命中规则（{tool, action?}）的工具结果在请求视图中保持原文，不被换成占位符（抗 trim）；段边界 compaction 仍照常摘要收尾。缺省 = 内置默认（inbox read + agent read）；显式 [] = 关闭；显式列表整体替换默认。一期仅 YAML 编辑（context.tool_result_whitelist），此处只读展示。修改后需重启节点生效。',
   'settings.dialog.searchPlaceholder': '搜索设置…（@modified / @plugin:<id> / @local / @user）',
   'settings.dialog.tabUser': '用户',
   'settings.dialog.tabProject': '工作区',

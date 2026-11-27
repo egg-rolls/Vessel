@@ -69,6 +69,12 @@ export interface TenantRuntimeProfile {
     maxTokens?: number;
     autoCompact?: boolean;
     summarizer?: ContextSummarizer;
+    /**
+     * 工具结果压缩白名单（q-tool-result-whitelist；additive）。
+     * 缺省不注入 ⇒ core 内置默认（inbox read + agent read）；显式 [] ⇒ 关闭。
+     * 构造期注入，重启生效（同 agent.teamMemberLimit 先例）。
+     */
+    toolResultWhitelist?: readonly import('../types/context.js').ToolResultWhitelistRule[];
   };
   systemPrompt?: string;
   permission?: RuntimePermissionConfig;
@@ -278,6 +284,10 @@ export class Runtime {
       ...(profile.emptyResponse !== undefined ? { emptyResponse: profile.emptyResponse } : {}),
       // 注入粒度框架：notice producer 的检测节奏端口（缺省不注入 ⇒ 恒 request）。
       ...(profile.envCadence !== undefined ? { envCadence: profile.envCadence } : {}),
+      // q-tool-result-whitelist：构造期注入（重启生效）；缺省不注入 ⇒ core 内置默认。
+      ...(profile.context.toolResultWhitelist !== undefined
+        ? { toolResultWhitelist: [...profile.context.toolResultWhitelist] }
+        : {}),
       ...(overrides?.selfCard !== undefined ? { selfCard: overrides.selfCard } : {}),
       ...(overrides?.contextPressureHint !== undefined
         ? { contextPressureHint: overrides.contextPressureHint }
@@ -301,6 +311,10 @@ export class Runtime {
         ...(config.maxTokens !== undefined ? { maxTokens: config.maxTokens } : {}),
         ...(config.autoCompact !== undefined ? { autoCompact: config.autoCompact } : {}),
         ...(config.summarizer !== undefined ? { summarizer: config.summarizer } : {}),
+        // q-tool-result-whitelist：原样透传（undefined ⇒ 消费点走内置默认）。
+        ...(config.toolResultWhitelist !== undefined
+          ? { toolResultWhitelist: [...config.toolResultWhitelist] }
+          : {}),
       });
       context.setSessionId(sessionId);
       return context;
