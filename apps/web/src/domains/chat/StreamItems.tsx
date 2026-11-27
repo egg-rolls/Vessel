@@ -111,11 +111,12 @@ const NO_ACTIONS: readonly MessageAction[] = [];
  * 无底正文被裁到 400px + 渐隐没有任何视觉锚点，读者看不到「这是一段被收起的话」。
  *
  * 容器里另有一件东西：
- * - `actions`：这一段的工具栏（复制），由调用方给成 `MessageActions`，落在正文
- *   **下方一行、左对齐**（`mt-1` 在调用方那侧，见 `RunItems` 与 `TranscriptWindow`）。
- *   这里只把它摆在正文之后，不包任何定位壳子：没有覆盖层，所以 hover / focus-within
- *   出现时不会遮住正文（高度会变，这是旧形态的既定取舍，见 styles/domains/chat.css
- *   的工具栏说明）。
+ * - `actions`：这一段的工具栏（复制），由调用方给成 `MessageActions`。摆放两档
+ *   （q-message-toolbar）：run 结束的那一段落在正文**下方一行、左对齐**（`mt-1` 在
+ *   调用方那侧）；非 run 结束的中间段用 `placement="side"` 浮在卡右上角内部
+ *   （absolute 壳在 `MessageActions` 里，容器这里的 `relative` 是它的定位锚）。
+ *   两档都不占额外布局高度以外的空间：side 档完全不占下方空间，bottom 档沿用旧取舍
+ *   （见 styles/domains/chat.css 的工具栏说明）。
  */
 export function AssistantText({
   text,
@@ -141,7 +142,7 @@ export function AssistantText({
   return (
     <div
       className={cn(
-        'msg-assistant group max-w-full',
+        'msg-assistant group relative max-w-full',
         reveal === 'enter' && 'msg-enter',
         // 收字结束就摘类：`streaming` 翻转会让 Markdown 换一次解析口径（未闭合围栏 /
         // 半张表格收成正式块），那一帧若有块重建，带着类就会补播一次级联淡入。
@@ -532,6 +533,16 @@ export const RunItems = memo(function RunItems({
     }
     return undefined;
   }, [renderItems]);
+  // 「run 结束的那一段正文」＝最后一个 text item（q-message-toolbar）：它的工具栏
+  // 保持正文下方一行；更早的中间段只有复制，工具栏浮在卡右上角（side 档）。
+  // 与历史侧同一把尺子：中间段落盘后带 tool_calls，最后一段不带（Transcript.tsx）。
+  const lastTextKey = useMemo(() => {
+    for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+      const item = renderItems[index];
+      if (item?.kind === 'text') return item.key;
+    }
+    return undefined;
+  }, [renderItems]);
   // 0.17：流式尾部缓冲单独渲染；minimal 只隐藏思考流，正文仍然可见。
   const liveText = group.status === 'running' ? group.liveText : undefined;
   const liveReasoning =
@@ -584,17 +595,20 @@ export const RunItems = memo(function RunItems({
           );
         }
         if (item.kind === 'text') {
+          // run 结束的那一段（最后一个 text item）工具栏保持正文下方一行（`mt-1`）；
+          // 中间段只有复制，用 side 档浮在卡右上角内部，不占下方空间
+          // （显隐规则在 MessageActions 自己身上）。
+          const isRunEnd = item.key === lastTextKey;
           return (
             <AssistantText
               key={item.key}
               text={item.text}
               streaming={streamingText}
-              // 工具栏在正文**下方一行、左对齐**（`mt-1`）：没有覆盖层，不遮正文
-              // （显隐规则在 MessageActions 自己身上）。
               actions={
                 showActions && item.text.trim().length > 0 ? (
                   <MessageActions
-                    className="mt-1"
+                    className={isRunEnd ? 'mt-1' : undefined}
+                    placement={isRunEnd ? 'bottom' : 'side'}
                     actions={[
                       {
                         id: 'copy',

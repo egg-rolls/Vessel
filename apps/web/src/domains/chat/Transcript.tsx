@@ -177,13 +177,19 @@ const TranscriptMessage = memo(function TranscriptMessage({
       onSelect: () => onRetry(previousUser.index, previousUser.text),
     });
   }
-  // 消息工具栏（复制 / 重试 / 时间）：位置只有一处 —— **正文下方一行、左对齐**。
-  // 思考卡上不挂工具栏（用户明确去掉）；卡头只有一个独立的「复制思考」小按钮
-  // （见 `ReasoningBlock.tsx`）。显隐（hover / focus-within / 触屏常显）在
-  // `MessageActions` 自己身上，这里只给 `mt-1`（`MessageActions` 是 `w-fit`，左起）。
+  // 消息工具栏（复制 / 重试 / 时间）的位置按「是不是 run 结束消息」分两档
+  // （q-message-toolbar，用户提案）：
+  // - **run 结束消息**（无 tool_calls 的那条，带重试）：保持**正文下方一行、左对齐**；
+  // - **非 run 结束消息**（带 tool_calls 的中间段，工具栏只有复制）：`placement="side"`
+  //   浮在卡右上角内部（absolute，不占下方空间），避免正文下方空开一行造成割裂。
+  // 判据与 live 侧同源：live 的「最后一段正文」落盘后就是无 tool_calls 的这条
+  // （见 TranscriptWindow / RunItems 的 lastTextKey）。思考卡上不挂工具栏（用户明确
+  // 去掉）；卡头只有一个独立的「复制思考」小按钮（见 `ReasoningBlock.tsx`）。
+  // 显隐（hover / focus-within / 触屏常显）在 `MessageActions` 自己身上。
   // 时间不在这里的例外只有一个：上面那条 `meta`（有思考卡时为空，时间已上移卡头）。
+  const isRunEnd = calls.length === 0;
   return (
-    <div className="msg-assistant group max-w-full">
+    <div className="msg-assistant group relative max-w-full">
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。
           `time` = 这条消息的时刻：有思考卡时，这一轮的时间只出现在卡头最右。 */}
       {reasoning !== undefined && (
@@ -192,7 +198,12 @@ const TranscriptMessage = memo(function TranscriptMessage({
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
       {message.content && <Markdown className="msg-text" text={message.content} />}
       {meta !== undefined || actions.length > 0 ? (
-        <MessageActions className="mt-1" actions={actions} meta={meta} />
+        <MessageActions
+          className={isRunEnd ? 'mt-1' : undefined}
+          placement={isRunEnd ? 'bottom' : 'side'}
+          actions={actions}
+          meta={meta}
+        />
       ) : null}
     </div>
   );
