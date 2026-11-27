@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/provider-anthropic",
-  "version": "2.1.7",
+  "version": "2.1.8",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
