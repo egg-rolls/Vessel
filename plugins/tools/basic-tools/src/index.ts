@@ -1,12 +1,13 @@
 /**
- * @vessel-agent/basic-tools - 基础工具插件（bash / read / edit / write）
+ * @vessel-agent/basic-tools - 基础工具插件（bash / read / edit / write / grep）
  * @module @vessel-agent/basic-tools
  *
- * 本项目唯一的工具包，只提供四个互不可替代的工具：
- * - `bash`：执行任意 shell 命令（grep / cat / ls / mkdir / curl …… 全部由它承担），权限 ask
+ * 本项目唯一的工具包，只提供五个互不可替代的工具：
+ * - `bash`：执行任意 shell 命令（cat / ls / mkdir / curl …… 全部由它承担），权限 ask
  * - `read`：带行号读文件（支持 offset/limit），权限 allow
  * - `edit`：精确且唯一匹配的字符串替换，权限 ask
  * - `write`：整文件创建 / 整体替换 / 追加（内容逐字节落盘，不经 shell），权限 ask
+ * - `grep`：ripgrep 引擎文本搜索（pattern 当数据收，结构化 file:line:content），权限 allow
  *
  * 为什么 `write` 必须存在（0.56 真机事故）：`edit` 只能替换**已有文件里的精确文本**，
  * 于是「建文件」和「追加」只剩 bash heredoc / 重定向 —— 而那条路**不校验内容**，
@@ -75,6 +76,7 @@ import {
   linkSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
   realpathSync,
@@ -3508,10 +3510,584 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
   };
 }
 
+// ── grep（q-tooling：ripgrep 引擎文本搜索）─────────────────────────────
+//
+// 补 codegraph 符号搜索之外的**文本**搜索：pattern 当数据收（argv 数组直传 rg，
+// 不经 shell，无引号/展开问题），结构化输出 file:line:content（上下文行 file-line-content，
+// rg 同款约定）。引擎优先系统 rg（Bun.which 探测，缓存）；无 rg 时退纯 TS 扫描器
+// （同一套参数语义：glob/context/max_count），结果形状一致。
+// 只读工具：权限与 read 同口径（敏感路径 deny、allowed_roots 越界 ask），concurrencySafe。
+
+/** 缺省总匹配数上限（防一次灌满窗口；超出截断并标注）。 */
+const DEFAULT_GREP_MAX_COUNT = 200;
+/** grep deadline：rg 子进程超时杀；兜底扫描器逐文件 + 文件内每 1024 行查（结果标注 timed out）。 */
+const GREP_TIMEOUT_MS = 30_000;
+/** 兜底扫描器单文件上限（搜索只跳大文件，不拒整次调用）。 */
+const GREP_FALLBACK_MAX_FILE_BYTES = 1024 * 1024;
+/** 兜底扫描器文件数软上限（超出截断 + 标注）。 */
+const GREP_FALLBACK_MAX_FILES = 20_000;
+/** 兜底扫描器跳过的目录（rg 默认 .gitignore 语义的近似；隐藏目录另跳）。 */
+const GREP_IGNORED_DIRS = new Set([
+  'node_modules',
+  '.git',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  '.next',
+  '.nuxt',
+  '.output',
+  '.svelte-kit',
+  'target',
+  '__pycache__',
+  '.venv',
+  'venv',
+  '.cache',
+  '.turbo',
+  '.parcel-cache',
+]);
+
+interface GrepEntry {
+  file: string;
+  line: number;
+  content: string;
+  kind: 'match' | 'context';
+}
+
+interface GrepOptions {
+  pattern: string;
+  ignoreCase: boolean;
+  fixedStrings: boolean;
+  glob?: string;
+  context: number;
+  maxCount: number;
+}
+
+interface GrepResult {
+  entries: GrepEntry[];
+  matchCount: number;
+  fileCount: number;
+  truncated: boolean;
+  engine: 'rg' | 'builtin';
+  timedOut: boolean;
+  error?: string;
+}
+
+/** rg 二进制探测缓存（undefined=未探测；null=没有）。 */
+let rgBinaryCache: string | null | undefined;
+
+function findRgBinary(): string | null {
+  if (rgBinaryCache === undefined) {
+    try {
+      rgBinaryCache = Bun.which('rg') ?? null;
+    } catch {
+      rgBinaryCache = null;
+    }
+  }
+  return rgBinaryCache;
+}
+
+/**
+ * glob → 正则：支持 `**`（跨目录）/ `*`（单层）/ `?` / `{a,b}` alternation。
+ * 不含 `/` 的 glob 按 basename 匹配（rg --glob 同款语义），含 `/` 按相对路径匹配。
+ */
+function globToRegExp(glob: string): RegExp {
+  let re = '';
+  let braceDepth = 0;
+  const normalized = glob.replace(/\\/g, '/').replace(/^\//, '');
+  for (let i = 0; i < normalized.length; i++) {
+    const c = normalized[i] ?? '';
+    if (c === '*') {
+      if (normalized[i + 1] === '*') {
+        re += '.*';
+        i++;
+        if (normalized[i + 1] === '/') i++;
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else if (c === '{') {
+      braceDepth++;
+      re += '(?:';
+    } else if (c === '}' && braceDepth > 0) {
+      braceDepth--;
+      re += ')';
+    } else if (c === ',' && braceDepth > 0) {
+      re += '|';
+    } else {
+      re += escapeRegExp(c);
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
+function globMatches(glob: string, relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, '/');
+  const re = globToRegExp(glob);
+  if (glob.includes('/') || glob.includes('\\')) return re.test(normalized);
+  const base = normalized.split('/').pop() ?? normalized;
+  return re.test(base);
+}
+
+/** rg --json 事件流 → 结构化条目；到 maxCount 即杀进程（总量闸，非 rg -m 的每文件闸）。 */
+async function runRg(
+  rgBinary: string,
+  rootDir: string,
+  target: string,
+  opts: GrepOptions,
+  signal: AbortSignal | undefined,
+): Promise<GrepResult> {
+  const argv = [rgBinary, '--json', '--no-config', '--no-messages'];
+  if (opts.ignoreCase) argv.push('-i');
+  if (opts.fixedStrings) argv.push('-F');
+  if (opts.context > 0) argv.push('-C', String(opts.context));
+  if (opts.glob !== undefined) argv.push('--glob', opts.glob);
+  argv.push('--', opts.pattern, target);
+
+  const result: GrepResult = {
+    entries: [],
+    matchCount: 0,
+    fileCount: 0,
+    truncated: false,
+    engine: 'rg',
+    timedOut: false,
+  };
+  const files = new Set<string>();
+  let proc: ReturnType<typeof Bun.spawn>;
+  try {
+    proc = Bun.spawn({
+      cmd: argv,
+      cwd: rootDir,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      stdin: 'ignore',
+      windowsHide: true,
+    });
+  } catch (error) {
+    return { ...result, error: `rg spawn failed: ${String(error)}` };
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      result.timedOut = true;
+      try {
+        proc.kill();
+      } catch {
+        // 已退出
+      }
+      resolve();
+    }, GREP_TIMEOUT_MS);
+  });
+  const onAbort = (): void => {
+    try {
+      proc.kill();
+    } catch {
+      // 已退出
+    }
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+
+  try {
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let stop = false;
+    const consumeLine = (line: string): boolean => {
+      if (line === '') return false;
+      let event: unknown;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        return false;
+      }
+      if (!isRecord(event)) return false;
+      const type = event.type;
+      if (type !== 'match' && type !== 'context') return false;
+      const data = isRecord(event.data) ? event.data : {};
+      const pathText = isRecord(data.path) ? data.path.text : undefined;
+      const linesText = isRecord(data.lines) ? data.lines.text : undefined;
+      const lineNumber = data.line_number;
+      if (
+        typeof pathText !== 'string' ||
+        typeof linesText !== 'string' ||
+        typeof lineNumber !== 'number'
+      ) {
+        return false;
+      }
+      if (type === 'match') {
+        if (result.matchCount >= opts.maxCount) {
+          result.truncated = true;
+          return true; // 停止信号
+        }
+        result.matchCount++;
+        files.add(pathText);
+      }
+      result.entries.push({
+        file: pathText,
+        line: lineNumber,
+        content: linesText.replace(/\r?\n$/, ''),
+        kind: type,
+      });
+      return false;
+    };
+    while (!stop) {
+      const chunk = await Promise.race([
+        reader.read(),
+        deadline.then(() => ({ done: true as const, value: undefined })),
+      ]);
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let nl = buffer.indexOf('\n');
+      while (nl >= 0) {
+        const line = buffer.slice(0, nl);
+        buffer = buffer.slice(nl + 1);
+        if (consumeLine(line)) {
+          stop = true;
+          break;
+        }
+        nl = buffer.indexOf('\n');
+      }
+      if (signal?.aborted) break;
+    }
+    if (stop || result.timedOut || signal?.aborted) {
+      try {
+        proc.kill();
+      } catch {
+        // 已退出
+      }
+    }
+    const exitCode = await proc.exited;
+    // rg 退出码：0=有匹配，1=无匹配，2=错误（被杀/截断时不视为错误）。
+    if (exitCode === 2 && !result.truncated && !result.timedOut && !signal?.aborted) {
+      let stderrText = '';
+      try {
+        stderrText = await new Response(proc.stderr as ReadableStream<Uint8Array>).text();
+      } catch {
+        // 忽略
+      }
+      result.error = `rg error: ${stderrText.trim().slice(0, 500) || 'exit 2'}`;
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
+  result.fileCount = files.size;
+  return result;
+}
+
+/**
+ * 单文件扫描（兜底引擎）：匹配行 + 前后 context，全局 matchCount 闸。
+ * 返回 true=停止（总量已满或 deadline 到；后者置 result.timedOut）。
+ * deadline 文件内也查（每 1024 行一次，摊薄 Date.now 开销）：
+ * 单文件≤1MiB 但正则回溯慢时不至于整文件扫完才超时。
+ */
+function grepScanFile(
+  relPath: string,
+  absolute: string,
+  regex: RegExp,
+  opts: GrepOptions,
+  result: GrepResult,
+  files: Set<string>,
+  startedAt: number,
+): boolean {
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(absolute);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size > GREP_FALLBACK_MAX_FILE_BYTES) return false;
+  let text: string;
+  try {
+    text = readFileSync(absolute, 'utf-8');
+  } catch {
+    return false;
+  }
+  if (text.includes('\0')) return false;
+  const lines = splitLines(text);
+  let pendingAfter = 0;
+  let emittedUpTo = -1;
+  const ring: Array<{ line: number; content: string }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    if ((i & 1023) === 0 && Date.now() - startedAt > GREP_TIMEOUT_MS) {
+      result.timedOut = true;
+      return true;
+    }
+    const lineNo = i + 1;
+    const content = lines[i] ?? '';
+    if (regex.test(content)) {
+      if (result.matchCount >= opts.maxCount) {
+        result.truncated = true;
+        return true;
+      }
+      for (const item of ring) {
+        if (item.line > emittedUpTo) {
+          result.entries.push({
+            file: relPath,
+            line: item.line,
+            content: item.content,
+            kind: 'context',
+          });
+          emittedUpTo = item.line;
+        }
+      }
+      result.entries.push({ file: relPath, line: lineNo, content, kind: 'match' });
+      emittedUpTo = lineNo;
+      result.matchCount++;
+      files.add(relPath);
+      pendingAfter = opts.context;
+    } else if (pendingAfter > 0 && lineNo > emittedUpTo) {
+      result.entries.push({ file: relPath, line: lineNo, content, kind: 'context' });
+      emittedUpTo = lineNo;
+      pendingAfter--;
+    }
+    if (opts.context > 0) {
+      ring.push({ line: lineNo, content });
+      if (ring.length > opts.context) ring.shift();
+    }
+  }
+  return false;
+}
+
+/** 兜底引擎：递归扫描（跳忽略/隐藏目录与符号链接目录），参数语义与 rg 路径一致。 */
+function grepFallback(
+  rootDir: string,
+  target: string,
+  opts: GrepOptions,
+  signal: AbortSignal | undefined,
+): GrepResult {
+  const result: GrepResult = {
+    entries: [],
+    matchCount: 0,
+    fileCount: 0,
+    truncated: false,
+    engine: 'builtin',
+    timedOut: false,
+  };
+  const files = new Set<string>();
+  let regex: RegExp;
+  try {
+    regex = new RegExp(
+      opts.fixedStrings ? escapeRegExp(opts.pattern) : opts.pattern,
+      opts.ignoreCase ? 'i' : '',
+    );
+  } catch (error) {
+    return { ...result, error: `invalid pattern: ${String(error)}` };
+  }
+  const startedAt = Date.now();
+  let scanned = 0;
+  const scanOne = (relPath: string, absolute: string): boolean => {
+    scanned++;
+    if (scanned > GREP_FALLBACK_MAX_FILES) {
+      result.truncated = true;
+      return true;
+    }
+    if (Date.now() - startedAt > GREP_TIMEOUT_MS) {
+      result.timedOut = true;
+      return true;
+    }
+    return grepScanFile(relPath, absolute, regex, opts, result, files, startedAt);
+  };
+  if (target !== '.') {
+    // 单文件目标：relPath 用 basename（与 rg 路径 cwd=dirname 口径一致）；glob 同样生效。
+    if (opts.glob === undefined || globMatches(opts.glob, target)) {
+      scanOne(target, path.join(rootDir, target));
+    }
+    result.fileCount = files.size;
+    return result;
+  }
+  const walk = (dir: string, rel: string): boolean => {
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const entry of entries) {
+      if (signal?.aborted) return true;
+      const name = entry.name;
+      const childRel = rel === '' ? name : `${rel}/${name}`;
+      const childAbs = path.join(dir, name);
+      if (entry.isDirectory()) {
+        if (GREP_IGNORED_DIRS.has(name) || name.startsWith('.')) continue;
+        if (walk(childAbs, childRel)) return true;
+      } else if (entry.isFile()) {
+        // 与 rg 默认一致：隐藏文件跳过（显式单文件目标不受此限）。
+        if (name.startsWith('.')) continue;
+        if (opts.glob !== undefined && !globMatches(opts.glob, childRel)) continue;
+        if (scanOne(childRel, childAbs)) return true;
+      }
+      // 符号链接一律跳过（防环；rg 默认也不跟随）
+    }
+    return false;
+  };
+  walk(rootDir, '');
+  result.fileCount = files.size;
+  return result;
+}
+
+/** 结构化渲染：match=file:line:content，context=file-line-content；不连续组间 '--'。 */
+function renderGrep(result: GrepResult, rootDisplay: string, opts: GrepOptions): string {
+  if (result.error !== undefined) return `错误：grep 失败：${result.error}`;
+  const lines: string[] = [];
+  let prev: GrepEntry | undefined;
+  for (const entry of result.entries) {
+    if (prev !== undefined && (prev.file !== entry.file || entry.line > prev.line + 1)) {
+      lines.push('--');
+    }
+    const sep = entry.kind === 'match' ? ':' : '-';
+    lines.push(`${entry.file}${sep}${entry.line}${sep}${entry.content}`);
+    prev = entry;
+  }
+  const notes: string[] = [];
+  if (result.truncated) notes.push(`truncated at max_count=${opts.maxCount}`);
+  if (result.timedOut) notes.push(`timed out after ${GREP_TIMEOUT_MS}ms`);
+  const summary =
+    result.matchCount === 0
+      ? `no matches for ${JSON.stringify(opts.pattern)} (root: ${rootDisplay})`
+      : `${result.matchCount} matches in ${result.fileCount} files (root: ${rootDisplay})`;
+  const engineNote = `engine: ${result.engine}${notes.length > 0 ? `; ${notes.join('; ')}` : ''}`;
+  if (lines.length === 0) return `${summary}\n${engineNote}`;
+  return `${lines.join('\n')}\n\n${summary}\n${engineNote}`;
+}
+
+/** grep 入口：参数校验 → 路径边界 → 引擎选择（rg 优先）→ 渲染。 */
+async function runGrep(
+  args: unknown,
+  ctx: ToolContext,
+  boundary: PathBoundary,
+  config: BasicToolsConfig,
+): Promise<string> {
+  const signal = ctx.signal;
+  if (signal?.aborted) return CANCELLED_TEXT;
+  if (!isRecord(args)) return '错误：grep 需要 { pattern: string }';
+  const pattern = readString(args, 'pattern');
+  if (pattern === '') return '错误：pattern 不能为空';
+
+  const context = readNumber(args, 'context') ?? 0;
+  if (!Number.isInteger(context) || context < 0 || context > 50) {
+    return '错误：context 必须是 0-50 的整数';
+  }
+  const maxCount = readNumber(args, 'max_count') ?? DEFAULT_GREP_MAX_COUNT;
+  if (!Number.isInteger(maxCount) || maxCount < 1) {
+    return '错误：max_count 必须是不小于 1 的整数';
+  }
+  const glob = readString(args, 'glob');
+  const opts: GrepOptions = {
+    pattern,
+    ignoreCase: args.ignore_case === true,
+    fixedStrings: args.fixed_strings === true,
+    context,
+    maxCount,
+    ...(glob !== '' ? { glob } : {}),
+  };
+  if (opts.glob !== undefined) {
+    try {
+      globToRegExp(opts.glob);
+    } catch (error) {
+      return `错误：glob 无效：${String(error)}`;
+    }
+  }
+  if (!opts.fixedStrings) {
+    try {
+      new RegExp(opts.pattern);
+    } catch (error) {
+      return `错误：pattern 不是合法正则：${String(error)}（字面搜索传 fixed_strings: true）`;
+    }
+  }
+
+  const inputPath = readString(args, 'path');
+  const baseCwd = resolveCallCwd(config, ctx.cwd);
+  const absolute = resolveToolPath(baseCwd.path, inputPath === '' ? '.' : inputPath);
+  if (evaluatePath(absolute, boundary) === 'deny') return PATH_DENIED_TEXT;
+  if (inputPath !== '' && dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) {
+    return baseCwd.issue;
+  }
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(absolute);
+  } catch {
+    return `错误：路径不存在：${inputPath === '' ? '.' : inputPath}`;
+  }
+  const isDir = stat.isDirectory();
+  if (!isDir && !stat.isFile()) return `错误：${inputPath} 不是文件或目录`;
+  const rootDir = isDir ? absolute : path.dirname(absolute);
+  const target = isDir ? '.' : path.basename(absolute);
+
+  const rgBinary = findRgBinary();
+  const result =
+    rgBinary !== null
+      ? await runRg(rgBinary, rootDir, target, opts, signal)
+      : grepFallback(rootDir, target, opts, signal);
+  if (signal?.aborted) return CANCELLED_TEXT;
+  return renderGrep(result, absolute, opts);
+}
+
+/** 构造 grep 工具（只读；路径边界与 read 同一套）。 */
+function createGrepTool(boundary: PathBoundary, config: BasicToolsConfig): ToolDefinition {
+  return {
+    name: 'grep',
+    description:
+      'Search file contents with a ripgrep engine (pure-TS fallback when rg is absent) and ' +
+      'return structured matches as file:line:content (context lines as file-line-content). ' +
+      'The pattern is passed as data, never through a shell — no quoting or expansion issues. ' +
+      'Use it for text search across files; use codegraph for symbol-level questions and read ' +
+      'for a known file. Respects .gitignore (rg) / skips node_modules, .git, dist, hidden dirs ' +
+      '(fallback). Read-only: sensitive paths are denied like read.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pattern: {
+          type: 'string',
+          description:
+            'Regular expression to search for (or literal text with fixed_strings: true)',
+        },
+        path: {
+          type: 'string',
+          description:
+            'File or directory to search (default: agent cwd, else member cwd, else process cwd)',
+        },
+        glob: {
+          type: 'string',
+          description: 'Only search files matching this glob, e.g. "*.ts" or "src/**/*.{ts,tsx}"',
+        },
+        context: {
+          type: 'number',
+          description: 'Lines of context before and after each match (0-50, default 0)',
+        },
+        max_count: {
+          type: 'number',
+          description: `Stop after this many matches total (default ${DEFAULT_GREP_MAX_COUNT}; output marks truncation)`,
+        },
+        ignore_case: { type: 'boolean', description: 'Case-insensitive search (default false)' },
+        fixed_strings: {
+          type: 'boolean',
+          description: 'Treat pattern as literal text, not a regex (default false)',
+        },
+      },
+      required: ['pattern'],
+    },
+    concurrencySafe: true,
+    checkPermission: async (input, ctx) => {
+      if (!isRecord(input)) return 'allow';
+      const inputPath = readString(input, 'path');
+      return evaluatePath(
+        resolveToolPath(resolveCallCwd(config, ctx.cwd).path, inputPath === '' ? '.' : inputPath),
+        boundary,
+      );
+    },
+    handler: async (args, ctx) =>
+      boundToolOutput(ctx, 'grep', await runGrep(args, ctx, activeBoundary(boundary), config)),
+  };
+}
+
 // ── 插件导出 ──────────────────────────────────────
 
 /**
- * 创建四个基础工具。
+ * 创建五个基础工具。
  * 不传配置时只启用内置 denylist（不限制根）、默认工作目录按调用期解析，与旧行为兼容。
  *
  * 0.51：三个工具都**不再**在 install 期固定工作目录 —— 那是全 tenant 一份的常量，
@@ -3519,7 +4095,8 @@ function createWriteTool(boundary: PathBoundary, config: BasicToolsConfig): Tool
  * `resolveCallCwd` 算出（配置 cwd > `ctx.cwd` > 进程 cwd）。
  *
  * 0.56 加入 `write`：它和 read / edit 共用同一个 `boundary`，所以路径语义（deny_paths /
- * 内置 denylist / allowed_roots / symlink）四件工具是同一套，不新增第二份实现。
+ * 内置 denylist / allowed_roots / symlink）各工具是同一套，不新增第二份实现。
+ * q-tooling 加入 `grep`：只读文本搜索，同一条 boundary（与 read 同口径）。
  */
 export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[] {
   const boundary = buildPathBoundary(config);
@@ -3528,11 +4105,12 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
     createReadTool(boundary, config),
     createEditTool(boundary, config),
     createWriteTool(boundary, config),
+    createGrepTool(boundary, config),
   ];
 }
 
 /**
- * basic-tools 插件——唯一工具包，install 时把四个工具注册进 PluginHost。
+ * basic-tools 插件——唯一工具包，install 时把五个工具注册进 PluginHost。
  *
  * 0.55：install 还要注册 BeforeLlm hook（异步 bash 的完成通知；M3 起又加写协调 lock/conflict
  * 通知）。按名字幂等：热应用的旁路 host 会为算目标工具集反复 install 同一个插件，重复注册
@@ -3541,7 +4119,8 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
 export const basicToolsPlugin: Plugin = {
   name: 'basic-tools',
   version: '0.1.0',
-  description: 'bash / read / edit / write — the minimal tool set everything else composes from',
+  description:
+    'bash / read / edit / write / grep — the minimal tool set everything else composes from',
   install(host: PluginHost, options?: { config?: Record<string, unknown> }) {
     const config = parseBasicToolsConfig(options?.config);
     // 异步预算进程级生效（与作业表同口径）：热应用重装即更新，下一条作业用新值；

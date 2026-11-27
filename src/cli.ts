@@ -181,7 +181,7 @@ import { derivePluginLifecycle, type PluginLifecycle } from './plugin/plugin-lif
 import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
-import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
+import { type BootstrapResult, bootstrap, resolveKanbanBoardPath } from './runtime/bootstrap';
 import { hasBootRegistryKey } from './runtime/model-registry-wiring';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
@@ -1437,9 +1437,8 @@ async function runWithConfig(result: BootstrapResult) {
 
     // q-kanban-proxy：kanban deps 提为可变对象（同一引用进 gatewayOptions.kanban）。
     // kanban.* handler 每次调用读 deps.boardPath → 热应用原地改即活生效。
-    // 解析表达式是启动装配与热应用共用的唯一真相（~ 展开、相对进程 cwd → 缺省板）。
-    const resolveKanbanBoardPath = (kanban: VesselConfig['kanban']): string =>
-      path.resolve(expandHome(kanban?.boardPath?.trim() || 'docs/dev/kanban/board.json'));
+    // 解析表达式 = bootstrap 导出的 resolveKanbanBoardPath（R-6 起启动装配与热应用、
+    // 网络面与 localDispatcher 面共用的唯一真相；~ 展开、相对进程 cwd → 缺省板）。
     const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
 
     const reloadRunner = createGatewayReloadRunner({
@@ -1550,6 +1549,10 @@ async function runWithConfig(result: BootstrapResult) {
         const from = kanbanDeps.boardPath;
         const to = resolveKanbanBoardPath(next.kanban);
         kanbanDeps.boardPath = to;
+        // R-6：localDispatcher（vessel op=rpc 路）的 deps 同步原地更新，两路同一语义。
+        if (result.kanbanDeps !== undefined) {
+          result.kanbanDeps.boardPath = to;
+        }
         return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
       },
       // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
