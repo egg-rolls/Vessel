@@ -16,37 +16,47 @@ export interface RpcRequest {
   params?: unknown;
 }
 
-/** 错误码 */
-export type RpcErrorCode =
-  | 'unauthorized'
-  | 'forbidden'
-  | 'not_found'
-  | 'invalid_params'
-  | 'data_locked'
-  | 'quota_exceeded'
-  | 'conflict'
-  | 'internal'
+/**
+ * 错误码**单源清单**（gw-F2）：联合类型与 `isRpcResponse` 的白名单 Set 都从这一份
+ * 派生 —— 不允许手抄第二份码表（对照 serve rpc.ts manifest 注释的既有纪律）。
+ * 过去白名单是手抄的，漏了 8 个已声明码（gateway_restarting 等），合法错误信封被
+ * `unwrapRpcResponse` 判成 `internal: invalid RPC response envelope`，drain 的
+ * 「可重试」语义在 HTTP 客户端侧断裂。新增错误码只改这一处。
+ */
+const RPC_ERROR_CODE_LIST = [
+  'unauthorized',
+  'forbidden',
+  'not_found',
+  'invalid_params',
+  'data_locked',
+  'quota_exceeded',
+  'conflict',
+  'internal',
   // 0.12：可选能力未注入（DECISION-023 §2.3）。
-  | 'not_supported'
+  'not_supported',
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
-  | 'expired'
+  'expired',
   // 0.13 Addendum A：run 已结束 / 重启后找不到 run。
-  | 'run_ended'
+  'run_ended',
   // 0.34 CONTRACT-0.34-context C7：sessions.compact（与 serve 侧错误码同步）。
-  | 'session_not_found'
-  | 'compact_unavailable'
+  'session_not_found',
+  'compact_unavailable',
   // 0.52 S1a：node 正在 drain（优雅退出），请求应重试；与 serve 侧同步。
-  | 'gateway_restarting'
+  'gateway_restarting',
   // 自重启 Option A（node.restart.self）：与 serve 侧错误码同步。
-  | 'no_active_run'
-  | 'run_mismatch'
-  | 'marker_failed'
+  'no_active_run',
+  'run_mismatch',
+  'marker_failed',
   // 0.55：**0.54 之前的旧格式会话不再被支持**（只有 events.ndjson、没有 timeline 标记）。
   // 「只读冻结」这个中间态随 events.ndjson 的读写一起删除；读面报这个码而不是给空会话
   // （与 serve 侧逐字同步，见 packages/serve/src/protocol.ts）。
-  | 'legacy_session_unsupported'
+  'legacy_session_unsupported',
   // 0.54 B1：时间线读端口未注入（装配层缺件），与「会话坏了」区分开（ADR-105 §6）。
-  | 'timeline_unavailable';
+  'timeline_unavailable',
+] as const;
+
+/** 错误码（从单源清单派生） */
+export type RpcErrorCode = (typeof RPC_ERROR_CODE_LIST)[number];
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
@@ -106,19 +116,8 @@ export interface RpcClient {
 /** web 提供、asm LocalRpcClient 消费 */
 export type RpcDispatcher = (request: RpcRequest) => Promise<RpcResponse>;
 
-const RPC_ERROR_CODES = new Set<RpcErrorCode>([
-  'unauthorized',
-  'forbidden',
-  'not_found',
-  'invalid_params',
-  'data_locked',
-  'quota_exceeded',
-  'conflict',
-  'internal',
-  'not_supported',
-  'expired',
-  'run_ended',
-]);
+/** 白名单从单源清单派生（gw-F2）：与 `RpcErrorCode` 联合永不漂移。 */
+const RPC_ERROR_CODES = new Set<RpcErrorCode>(RPC_ERROR_CODE_LIST);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
