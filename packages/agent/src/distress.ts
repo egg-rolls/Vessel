@@ -125,12 +125,17 @@ export interface DistressContentInput {
   teamId?: string;
   code: string;
   message: string;
+  /**
+   * 受众 = 人类（顶层 fallback 投 Team 日志）：回信指引换成 Web Team 面板 / CLI，
+   * 而非 agent 工具。缺省 = agent 收件人。
+   */
+  human?: boolean;
 }
 
 /**
  * 渲染求救正文：汇报地址（可回信）+ 报错（code + message）+ 建议处置 + 防循环说明。
- * 普通 agent 消息正文（不是系统事件）：收件人可以直接回复，也可以用
- * `agent send to=<memberId>` 主动救援。
+ * 普通消息正文（不是系统事件）：agent 收件人可直接回复或 `agent send to=<memberId>`；
+ * 人类收件人（顶层 fallback）在 Web Team 面板回信。
  */
 export function renderDistressContent(input: DistressContentInput): string {
   const who =
@@ -138,11 +143,19 @@ export function renderDistressContent(input: DistressContentInput): string {
       ? `"${input.memberName}" (${input.memberId})`
       : input.memberId;
   const team = input.teamId !== undefined ? ` team=${input.teamId}` : '';
+  const reply =
+    input.human === true
+      ? `回信/救援: 在本 Team 面板回复并 @ 该成员，或 vessel agent send to=${input.memberId}`
+      : `回信/救援: agent send to=${input.memberId}`;
+  const tail =
+    input.human === true
+      ? '本条为顶层/无 parent agent 的遇难求救（人类兜底）：该 agent 没有可报的成员收件人，故报给本节点人类。每 agent 每 5 分钟至多一条。'
+      : '本消息带 distress:true 标记：你处理这条求救时若也报错，node 不会再替你发求救（防级联）；每 agent 每 5 分钟至多一条求救。';
   return [
     `[distress] agent ${who} 的 run 遇到致命错误，node 以它的身份代发求救。`,
-    `遇难地址: member_id=${input.memberId} session_id=${input.sessionId}${team}（回信/救援: agent send to=${input.memberId}）`,
+    `遇难地址: member_id=${input.memberId} session_id=${input.sessionId}${team}（${reply}）`,
     `错误: ${input.code} — ${singleLineError(input.message)}`,
     `建议处置: ${distressAdvice(input.code)}`,
-    '本消息带 distress:true 标记：你处理这条求救时若也报错，node 不会再替你发求救（防级联）；每 agent 每 5 分钟至多一条求救。',
+    tail,
   ].join('\n');
 }

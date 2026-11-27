@@ -1007,6 +1007,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly distressSentAt = new Map<string, number>();
   /** 成员停下通知端口（装配层注入；缺省不报）。 */
   private readonly peerStops: AgentServiceOptions['peerStops'];
+  /** 人类求救兜底端口（q-distress-message 顶层 fallback；缺省无人类通道）。 */
+  private readonly humanDistress: AgentServiceOptions['humanDistress'];
   /** 显式 model pin 的注册 ref 校验口（第 6 修；装配层注入，缺省不校验）。 */
   private readonly modelRefError: AgentServiceOptions['modelRefError'];
   /**
@@ -1137,6 +1139,7 @@ export class AgentServiceImpl implements AgentService {
         : undefined;
     if (this.inbox !== undefined) this.runtime.attachInbox?.(this.inbox);
     this.peerStops = options.peerStops;
+    this.humanDistress = options.humanDistress;
     this.modelRefError = options.modelRefError;
     this.ready = this.loadSnapshot();
   }
@@ -3894,24 +3897,15 @@ export class AgentServiceImpl implements AgentService {
       return;
     }
     const recipients = this.distressRecipients(record, trigger);
-    if (recipients.length === 0) {
-      // 两者皆无（main 无父级且从未有 agent 给它发过消息）：不发，留诊断日志。
-      this.logger.warn('agent.distress.no_recipient', {
-        member_id: record.id,
-        session_id: entry.bindingId,
-        code: classified.code,
-        error: singleLineReason(classified.message),
-      });
-      return;
-    }
-    const content = renderDistressContent({
+    const baseContent = {
       memberId: record.id,
       ...(record.name !== undefined ? { memberName: record.name } : {}),
       sessionId: entry.bindingId,
       ...(record.teamId !== undefined ? { teamId: record.teamId } : {}),
       code: classified.code,
       message: classified.message,
-    });
+    };
+    const content = renderDistressContent(baseContent);
     for (const recipient of recipients) {
       try {
         await this.admitInternal({
@@ -3939,6 +3933,38 @@ export class AgentServiceImpl implements AgentService {
         });
       }
     }
+    // 成员收件人皆无 / 皆投不进 ⇒ 人类兜底（顶层 / 无 parent / 远程根 agent）。
+    // 人类不跑 run，天然不触发级联求救；投面向人类的本机 Team 日志（零 dispatch）。
+    if (this.humanDistress !== undefined) {
+      try {
+        await this.humanDistress({
+          from: record.id,
+          content: renderDistressContent({ ...baseContent, human: true }),
+          ...(record.teamId !== undefined ? { teamId: record.teamId } : {}),
+        });
+        this.distressSentAt.set(record.id, now);
+        this.logger.info('agent.distress.sent', {
+          member_id: record.id,
+          session_id: entry.bindingId,
+          to: 'human',
+          code: classified.code,
+        });
+        return;
+      } catch (humanError) {
+        this.logger.warn('agent.distress.human_delivery_failed', {
+          member_id: record.id,
+          code: classified.code,
+          error: errorText(humanError),
+        });
+      }
+    }
+    // 成员与人类通道皆无 / 皆失败：不发，留诊断日志。
+    this.logger.warn('agent.distress.no_recipient', {
+      member_id: record.id,
+      session_id: entry.bindingId,
+      code: classified.code,
+      error: singleLineReason(classified.message),
+    });
   }
 
   /**
