@@ -162,7 +162,7 @@ export function ReasoningBlock({
         )}
       </summary>
       <div className="px-2.5 py-2 text-md leading-relaxed whitespace-pre-wrap wrap-anywhere">
-        {clampedVisible ? clamped : text}
+        {clampedVisible ? clamped : revealed}
         {/* 流式光标（D，motion.css `.stream-caret` + pulse-soft）：纯文本尾部内联挂载，
             收字结束 streaming=false 即移除；reduced-motion 下静止常亮（base.css 防线）。 */}
         {streaming && <span className="stream-caret pulse-soft" aria-hidden="true" />}
