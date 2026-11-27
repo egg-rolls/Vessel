@@ -194,8 +194,18 @@ export const EMPTY_ATTACHMENT_PLAN: AttachmentPlan = {
 export interface VisionSettings {
   /** kill switch：`vision.disabled: true` 或 `VESSEL_DISABLE_VISION=1` */
   disabled?: boolean;
-  /** 单请求张数上限（与后端描述符取 `min`）；缺省 6 */
+  /**
+   * 单请求张数的**显式硬上限**（与 token 预算推导值、后端描述符取 `min`）。
+   * 缺省不设 = 由 token 预算推导（q-vision-image-budget-fix ①B：替代旧缺省 6 的人为瓶颈）。
+   */
   maxImagesPerRequest?: number;
+  /**
+   * 图片 token 预算占上下文窗口的比例（[0, 1]）；缺省 0.05。
+   * 仅在 `maxImageTokens` 未设且窗口已知时生效；0 = 不内联任何图（预算为零）。
+   */
+  imageTokenBudgetRatio?: number;
+  /** 图片 token 预算绝对值（覆盖比例推导）；缺省不设。0 = 不内联任何图。 */
+  maxImageTokens?: number;
   /** 精度意图（必须落在后端 `detailLevels()` 里，否则不带） */
   detail?: string;
   /** P0 = `none`（identity）。`fit:1300` 属 P1：产出新字节必须写回 `refs.sha256`。 */

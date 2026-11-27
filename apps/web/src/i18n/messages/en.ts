@@ -245,6 +245,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.teamMemberLimit.title': 'Team member limit',
   'settings.item.teamMemberLimit.desc':
     'Max present members (peers + contractors, including closed-but-not-departed) per team; positive integer ≥ 1, default 100. Spawns beyond the limit fail with team_full. Requires a node restart to apply.',
+  'settings.item.imageTokenBudgetRatio.title': 'Image token budget ratio',
+  'settings.item.imageTokenBudgetRatio.desc':
+    'Share of the context window reserved for inlined images (0–1, default 0.05). The image count cap is derived from this budget divided by per-image tokens, clamped to the backend safety cap (32). Larger windows allow more images; overflow drops the newest images with a notice to the model. Requires a node restart to apply.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',
