@@ -36,6 +36,7 @@ import { statusCommand } from './commands/fleet/status-command';
 import { stopFleetCommand } from './commands/fleet/stop-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from './commands/gateway/gateway-command';
 import { runHubCommand } from './commands/hub-command';
+import { kanbanListCommand, kanbanViewCommand } from './commands/kanban-command';
 import { logsCommand } from './commands/logs-command';
 import { migrateCommand } from './commands/migrate-command';
 import { modelCommand } from './commands/model';
@@ -543,6 +544,34 @@ export const cliCommands: readonly CliCommand[] = [
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
           nodeId: args.nodeTargetArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'kanban',
+    match: (args) => args.kanbanCommand !== null && args.kanbanCommand !== undefined,
+    run: async (args) => {
+      const command = args.kanbanCommand;
+      if (command === null || command === undefined) return 1;
+      const targeting = {
+        connectUrl: args.connectArg,
+        connectToken: args.connectTokenArg,
+        caFile: args.caArg,
+        nodeId: args.nodeTargetArg,
+      };
+      if (command.kind === 'view') {
+        return printCommandResult(
+          await kanbanViewCommand(command.id, { json: command.json, ...targeting }),
+        );
+      }
+      return printCommandResult(
+        await kanbanListCommand({
+          json: command.json,
+          ...targeting,
+          ...(command.column !== undefined ? { column: command.column } : {}),
+          ...(command.owner !== undefined ? { owner: command.owner } : {}),
+          ...(command.status !== undefined ? { status: command.status } : {}),
         }),
       );
     },

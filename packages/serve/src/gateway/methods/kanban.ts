@@ -5,6 +5,11 @@
  * 宽进严出归一化（坏任务不拖垮整板，降级记 warnings）；支持 if_mtime_ms/if_size_bytes
  * 条件轮询（双命中只 stat 不读文件，一次 RPC ≈ 一次 stat）。
  *
+ * 轻量读面（q-tooling）：`kanban.list` 每卡一行摘要（progress 首句截断），支持
+ * column/owner/status 过滤（status 是 column 的别名——板内状态即列）；`kanban.view`
+ * 单卡全字段详情（含全量 progress 与未知键）。两者与 get 同一份归一化/边界实现，
+ * 供 agent 经 vessel op=rpc 轻量扫板，不必 read 原始 JSON。
+ *
  * 写面 `kanban.archive`：**只有用户验收勾选才触发**（Web UI KanbanView 勾选框 →
  * 确认 → 本方法），把 task 从 board.tasks 移除并追加进同目录 archive.json
  * （append-only，条目 = 原始 task 全字段 + archivedAt + cycle?）。绝不自动归档。
@@ -252,6 +257,52 @@ function normalizeBoard(raw: Record<string, unknown>): KanbanBoard {
   return board;
 }
 
+// ── 轻量读面（q-tooling：kanban.list / kanban.view）─────────────────────
+
+/** list 摘要里 progress 首句的长度上限（一卡一行，扫板不灌窗口）。 */
+const PROGRESS_EXCERPT_MAX = 80;
+
+/**
+ * progress → 首句摘要：先取首行，再在第一个句读（。！？!?；;）处收口，
+ * 超过上限硬截断加省略号。空/缺省 → undefined（结果里不带该键）。
+ */
+function progressExcerpt(progress: string | undefined): string | undefined {
+  if (progress === undefined || progress === '') return undefined;
+  const firstLine = progress.split(/\r?\n/, 1)[0] ?? '';
+  const sentence = firstLine.split(/(?<=[。！？!?；;])/u, 1)[0] ?? firstLine;
+  const text = sentence === '' ? firstLine : sentence;
+  return text.length <= PROGRESS_EXCERPT_MAX ? text : `${text.slice(0, PROGRESS_EXCERPT_MAX - 1)}…`;
+}
+
+/** list 行 schema：每卡一行摘要（progress 只带首句截断）。 */
+const kanbanListRowSchema = {
+  type: 'object',
+  required: ['id', 'title', 'column'],
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    column: { type: 'string' },
+    owner: { type: 'string' },
+    branch: { type: 'string' },
+    progress_excerpt: { type: 'string' },
+  },
+};
+
+/** 读板公共路径：stat → 大小闸 → 读文本 → parse → 归一化（get/list/view 同一份）。 */
+async function loadBoard(
+  boardPath: string,
+): Promise<{ board: KanbanBoard; raw: Record<string, unknown>; st: Stats }> {
+  const st = await statBoard(boardPath);
+  if (st.size > MAX_BOARD_BYTES) {
+    throw new RpcError(
+      'quota_exceeded',
+      `kanban board too large: ${st.size} bytes (limit ${MAX_BOARD_BYTES})`,
+    );
+  }
+  const raw = parseBoardRaw(await readBoardText(boardPath), boardPath);
+  return { board: normalizeBoard(raw), raw, st };
+}
+
 /** 进程内读改写串行化（值为永不 reject 的 tail；atomicWrite 只按路径排队，不够）。 */
 let archiveChain: Promise<void> = Promise.resolve();
 function withArchiveLock<T>(fn: () => Promise<T>): Promise<T> {
@@ -305,18 +356,126 @@ export function createKanbanMethods(deps: KanbanMethodsDeps): RpcMethodDefinitio
         ) {
           return { unchanged: true, mtime_ms: st.mtimeMs, size_bytes: st.size };
         }
-        if (st.size > MAX_BOARD_BYTES) {
-          throw new RpcError(
-            'quota_exceeded',
-            `kanban board too large: ${st.size} bytes (limit ${MAX_BOARD_BYTES})`,
-          );
-        }
-        const text = await readBoardText(boardPath);
-        const board = normalizeBoard(parseBoardRaw(text, boardPath));
+        const loaded = await loadBoard(boardPath);
         return {
           unchanged: false,
-          board,
+          board: loaded.board,
           path: boardPath,
+          mtime_ms: loaded.st.mtimeMs,
+          size_bytes: loaded.st.size,
+        };
+      },
+    },
+    {
+      name: 'kanban.list',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          column: { type: 'string', minLength: 1 },
+          owner: { type: 'string', minLength: 1 },
+          status: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['tasks', 'total', 'matched', 'counts', 'mtime_ms', 'size_bytes', 'warnings'],
+        properties: {
+          tasks: { type: 'array', items: kanbanListRowSchema },
+          total: { type: 'integer', minimum: 0 },
+          matched: { type: 'integer', minimum: 0 },
+          counts: { type: 'object', additionalProperties: { type: 'integer', minimum: 0 } },
+          mtime_ms: { type: 'number' },
+          size_bytes: { type: 'integer', minimum: 0 },
+          warnings: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      handler: async (params) => {
+        const boardPath = requireBoardPath(deps.boardPath);
+        const column = optionalStringParam(params, 'column');
+        const owner = optionalStringParam(params, 'owner');
+        // status 是 column 的别名（板内状态即列）；两者同传且不同值 = 矛盾参数。
+        const status = optionalStringParam(params, 'status');
+        if (column !== undefined && status !== undefined && column !== status) {
+          throw new RpcError('invalid_params', 'column and status must agree when both are given');
+        }
+        const wantColumn = column ?? status;
+        const { board, st } = await loadBoard(boardPath);
+        const counts: Record<string, number> = {};
+        for (const task of board.tasks) {
+          counts[task.column] = (counts[task.column] ?? 0) + 1;
+        }
+        const rows = board.tasks
+          .filter(
+            (task) =>
+              (wantColumn === undefined || task.column === wantColumn) &&
+              (owner === undefined || task.owner === owner),
+          )
+          .map((task) => {
+            const row: Record<string, unknown> = {
+              id: task.id,
+              title: task.title,
+              column: task.column,
+            };
+            if (task.owner !== undefined) row.owner = task.owner;
+            if (task.branch !== undefined) row.branch = task.branch;
+            const excerpt = progressExcerpt(task.progress);
+            if (excerpt !== undefined) row.progress_excerpt = excerpt;
+            return row;
+          });
+        return {
+          tasks: rows,
+          total: board.tasks.length,
+          matched: rows.length,
+          counts,
+          mtime_ms: st.mtimeMs,
+          size_bytes: st.size,
+          warnings: board.warnings,
+        };
+      },
+    },
+    {
+      name: 'kanban.view',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', minLength: 1 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['task', 'board', 'mtime_ms', 'size_bytes'],
+        properties: {
+          // 原始 task 全字段（含全量 progress 与未知键）；id/title/column 已由归一化校验。
+          task: { type: 'object', required: ['id', 'title', 'column'] },
+          board: {
+            type: 'object',
+            required: ['board'],
+            properties: {
+              board: { type: 'string' },
+              updated: { type: 'string' },
+            },
+          },
+          mtime_ms: { type: 'number' },
+          size_bytes: { type: 'integer', minimum: 0 },
+        },
+      },
+      handler: async (params) => {
+        const boardPath = requireBoardPath(deps.boardPath);
+        const id = stringParam(params, 'id');
+        const { board, raw, st } = await loadBoard(boardPath);
+        // 归一化判存在（重复 id 取首条，与 get/archive 同口径），返回原始全字段。
+        if (!board.tasks.some((task) => task.id === id)) {
+          throw new RpcError('not_found', `kanban task not on board: ${id}`);
+        }
+        const rawTask = (raw.tasks as unknown[]).find((item) => entryHasId(item, id));
+        const meta: Record<string, unknown> = { board: board.board };
+        if (board.updated !== undefined) meta.updated = board.updated;
+        return {
+          task: isRecord(rawTask) ? rawTask : { id },
+          board: meta,
           mtime_ms: st.mtimeMs,
           size_bytes: st.size,
         };
