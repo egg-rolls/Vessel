@@ -449,16 +449,28 @@ export function createInteractionsRegistry(
   }
 
   /**
-   * 落盘串行链（0.33）。
+   * 落盘串行链（0.33）+ trailing debounce 合并（gw-F1）。
    *
    * `save` 是 fire-and-forget；并发 atomicWrite 可能乱序落盘，
    * 让较早的快照（例如 `suspended` 之前的 ask）覆盖较新的状态。串行化后，
    * 最后一次调用的快照一定最后落盘。
+   *
+   * gw-F1：每次交互变更都全量重写 + durable fsync（112 条时一条 ~2.7 KB 的应答
+   * 触发 300 KB 重写，112×；2000 条上限时 ~14 ms/次）。突发 N 次变更过去 = N 次
+   * 全量写排队；现在 50 ms trailing debounce 合并成**一次**最新快照写。
+   * 快照在定时器触发时取（不是调用时），合并窗口内的中间状态不必落盘。
+   *
+   * durability 口径不变差到可感知：落盘本来就是 fire-and-forget（崩溃可能丢在途
+   * 写）；离线 attention CLI 在 respond 后**自己 await 一次 save**（ask-channel.ts，
+   * 不依赖本链），跨进程 delivered_at 兜底语义是「宁可多投一次」（gateway.ts
+   * alreadyDeliveredOnDisk 注释）。定时器 unref：不拖住进程退出。
    */
   let persistChain: Promise<void> = Promise.resolve();
+  let persistTimer: ReturnType<typeof setTimeout> | undefined;
+  const PERSIST_DEBOUNCE_MS = 50;
 
-  /** 重写交互记录文件；写失败只记 stderr（RPC 不因此失败）。 */
-  function persist(): void {
+  /** 立即把当前内存快照排进串行链（debounce 到期 / 需要必写时调用）。 */
+  function persistNow(): void {
     const store = interactionsStore;
     if (!store) return;
     const records = [...interactionRecords.values()].sort((a, b) => a.created_at - b.created_at);
@@ -467,6 +479,17 @@ export function createInteractionsRegistry(
       .then(() => store.save(singleTenantId, records))
       .catch(() => undefined);
     persistChain = next;
+  }
+
+  /** 重写交互记录文件；写失败只记 stderr（RPC 不因此失败）。 */
+  function persist(): void {
+    if (!interactionsStore) return;
+    if (persistTimer !== undefined) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = undefined;
+      persistNow();
+    }, PERSIST_DEBOUNCE_MS);
+    persistTimer.unref?.();
   }
 
   /**

@@ -212,6 +212,33 @@ const OPEN_TAIL_MAX_EXTENSION_RECORDS = 64 * 1024;
 const MANIFEST_TAIL_FIRST_BYTES = 64 * 1024;
 const MANIFEST_TAIL_MAX_BYTES = 1024 * 1024;
 
+/*
+ * ── 索引落盘节流（jn-F1）──────────────────────────────────────────────────
+ *
+ * 索引是派生物（ADR-105 §5：可删、可重建、open 自洽校验兜底），但过去每次带 settle
+ * 的读（分页 / lastSeq / checkpoint）只要 `indexDirty` 就整份重写 type.idx/run.idx/
+ * session.idx ×3 durable fsync（大会话 ~26–30 ms/次，且排在 append 串行队列上）。
+ * 流式期间 dirty 几乎恒真 ⇒ 每页/每 checkpoint 付一遍 O(会话) 的写，累计 O(n²)。
+ *
+ * 现在 `flush()` 路径按「时间 ≥2 s 或 新增 ≥500 条」合并落盘；`close()` / 洞退役 /
+ * open 恢复仍**无条件**写（调用点直接调 `persistIndex()`，不经过节流判定）。
+ * run 终态事件（completed/failed/cancelled）也强制落盘 —— 终态之后读侧（liveness /
+ * run→session 解析）可能马上依赖盘上索引。
+ *
+ * 正确性兜底不变：节流造成的索引滞后上界 = 2 s 或 500 条，远小于 open 尾窗的
+ * `OPEN_TAIL_MAX_EXTENSION_RECORDS`（64k 条）/ `TAIL_WINDOW_MAX_BYTES`（4 MiB）；
+ * 滞后超限只是退回 fullRecovery，判定不放松。
+ */
+const INDEX_PERSIST_MIN_INTERVAL_MS = 2_000;
+const INDEX_PERSIST_MAX_PENDING_RECORDS = 500;
+
+/** run 终态事件（与 session-liveness / connect-run-wait 的既有事件面一致，不新增）。 */
+const INDEX_FORCE_TERMINAL_TYPES: ReadonlySet<string> = new Set([
+  'run.completed',
+  'run.failed',
+  'run.cancelled',
+]);
+
 /**
  * `open()` 时扫「归档副本有没有重复 seq」的字节预算（**常量上界**，不是 O(会话)）。
  *
@@ -488,6 +515,12 @@ export class TimelineWriter {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
   private indexDirty = false;
+  /** 上次索引落盘时刻（`Date.now()`；0 = 本写者还没写过）。节流判定用，见常量注释。 */
+  private lastIndexPersistAt = 0;
+  /** 上次索引落盘以来新增的记录条数（事实 + 块内 chunk）。 */
+  private indexPendingRecords = 0;
+  /** run 终态事件置位：下一次 flush 无条件落盘索引。 */
+  private indexForcePersist = false;
 
   private constructor(options: TimelineWriterOptions) {
     this.options = options;
@@ -569,12 +602,18 @@ export class TimelineWriter {
     return this.enqueue(() => this.appendManyNow(inputs));
   }
 
-  /** 把已 append 的东西都写成 durable、可枚举；**不封块**（块在 run 存活期间继续追加）。 */
+  /**
+   * 把已 append 的东西都写成 durable、可枚举；**不封块**（块在 run 存活期间继续追加）。
+   *
+   * 事实/chunk 本体的 durability 不受节流影响（wal/块各自 fsync）；节流的只有**派生
+   * 索引**的落盘（jn-F1）：读路径每次 settle 都走到这里，过去每次都整份重写三个索引
+   * 文件，现在按时间/条数阈值合并（见 `INDEX_PERSIST_*` 常量注释）。`close()` 必写。
+   */
   flush(): Promise<void> {
     return this.enqueue(async () => {
       await this.flushPendingChunks();
       await this.blocks.flushManifests();
-      if (this.indexDirty) await this.persistIndex();
+      if (this.indexDirty && this.indexPersistDue()) await this.persistIndex();
     });
   }
 
@@ -1442,6 +1481,9 @@ export class TimelineWriter {
     this.advanceWalHead(record.seq);
     this.published = Math.max(this.published, record.seq);
     this.indexDirty = true;
+    this.indexPendingRecords += 1;
+    // 终态之后读侧可能马上依赖盘上索引（liveness / run→session 解析）⇒ 强制落盘。
+    if (INDEX_FORCE_TERMINAL_TYPES.has(record.type)) this.indexForcePersist = true;
     this.publishRecord(record);
   }
 
@@ -1461,6 +1503,7 @@ export class TimelineWriter {
     }
     this.resolveChunks(seal.entry.start_seq, seal.entry.end_seq);
     this.indexDirty = true;
+    this.indexPendingRecords += seal.records.length;
   }
 
   /**
@@ -1846,10 +1889,25 @@ export class TimelineWriter {
 
   // ---------------------------------------------------------------- index / timer
 
+  /**
+   * 节流判定（只用于 `flush()` 路径；close/洞退役/open 恢复直接调 `persistIndex()`）。
+   * 滞后上界 = 2 s 或 500 条，远小于 open 尾窗上界 ⇒ 正确性由既有自洽校验兜底。
+   */
+  private indexPersistDue(): boolean {
+    return (
+      this.indexForcePersist ||
+      this.indexPendingRecords >= INDEX_PERSIST_MAX_PENDING_RECORDS ||
+      Date.now() - this.lastIndexPersistAt >= INDEX_PERSIST_MIN_INTERVAL_MS
+    );
+  }
+
   private async persistIndex(): Promise<void> {
     const snapshot = this.indexBuilder.snapshot(this.holes.list().length);
     await writeIndexSnapshot(this.sessionDir, snapshot);
     this.indexDirty = false;
+    this.indexPendingRecords = 0;
+    this.indexForcePersist = false;
+    this.lastIndexPersistAt = Date.now();
   }
 
   private scheduleIdleFlush(): void {
