@@ -71,6 +71,7 @@ import {
 } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
 import { type AttachmentLister, createAttachmentMethods } from './gateway/methods/attachments.js';
+import { createImageMethods } from './gateway/methods/images.js';
 import {
   decideTimelineSubscribe,
   declareEpochChunk,
@@ -2828,6 +2829,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createAttachmentMethods({
       ...(opts.listAttachments !== undefined ? { list: opts.listAttachments } : {}),
     }),
+    // q-media-image-card：内容寻址图片 blob 只读出口（GUI 缩略图 / 放大预览）。
+    // 只有 sha256 + session_id 入参，没有路径面；会话可见性闸与 sessions.get 同源
+    // （同一个 sessionFor），归属不命中 fail-closed（见 methods/images.ts）。
+    ...createImageMethods({ sessionFor: () => session }),
   ];
 
   methodTable = defineMethods(rpcMethods);

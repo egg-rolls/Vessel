@@ -14,7 +14,8 @@ import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { isIndexUserMessage } from './conversation-index';
 import { MessageRefs } from './MessageRefs';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
-import { isCardInputMessage, type TranscriptItem } from './transcript-items';
+import { ToolImageCard } from './ToolImageCard';
+import { isCardInputMessage, type TranscriptItem, toolImageRefsOf } from './transcript-items';
 
 /**
  * 这条历史消息自己要显示的思考文本（thinking 模式的 reasoning_content）。
@@ -125,6 +126,19 @@ const TranscriptMessage = memo(function TranscriptMessage({
       );
     }
     const actions: MessageAction[] = [];
+    // 工具图片注入（media view 等）：结构化图片卡替代「[tool image]…」文本 dump
+    // （q-media-image-card）。缩略图 + 元数据 + 投递 chip；原始注记收进卡内折叠区。
+    const toolImageRefs = toolImageRefsOf(message);
+    if (toolImageRefs !== undefined) {
+      return (
+        <ToolImageCard
+          refs={toolImageRefs}
+          imageDelivery={message.image_delivery}
+          note={message.content}
+          ts={message.timestamp}
+        />
+      );
+    }
     if (message.content.trim().length > 0) {
       actions.push({
         id: 'copy',

@@ -5,9 +5,9 @@
  * /v1/events）的客户端”；平台客户端在平台客户端目录，两者互不 import。
  */
 
-import { AttachmentsClient } from './attachments';
+import { ImagesClient } from './images';
 
-export class GatewayClient extends AttachmentsClient {}
+export class GatewayClient extends ImagesClient {}
 
 export type {
   AttachmentListEntry,
@@ -17,6 +17,7 @@ export type {
   AttachmentListResult,
 } from './attachments';
 export { ATTACHMENT_LIST_LIMIT } from './attachments';
+export type { ImageBlobReason, ImageBlobResult } from './images';
 
 export type { ConnectionState, EventMeta } from './protocol';
 export { GatewayHttpError } from './protocol';
