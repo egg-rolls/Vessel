@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/guardrail-pii",
-  "version": "2.1.21",
+  "version": "2.1.22",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
