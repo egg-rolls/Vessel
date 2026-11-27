@@ -43,6 +43,9 @@ export type RpcErrorCode =
   | 'no_active_run'
   | 'run_mismatch'
   | 'marker_failed'
+  // q-restart-tool（gateway.restart）：预约段失败（无运行中 node / 无平台 gateway /
+  // 编排者 spawn 失败等）；message 携 CLI selfRestartReserveCommand 同款原因。
+  | 'restart_reserve_failed'
   // 0.54 B1（ADR-105 §6 / D4）：时间线订阅的两个稳定码。
   // - `legacy_session_unsupported`：**0.54 之前的旧格式会话**（只有 `events.ndjson`、
   //   没有 timeline 标记）。0.55 起「只读冻结」不再是中间态：这种目录读、写、迁移全不支持，

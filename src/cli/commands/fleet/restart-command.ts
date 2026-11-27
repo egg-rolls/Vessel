@@ -305,8 +305,13 @@ async function confirmRestart(
 // 编排者悖论从根上不存在）。编排者不是被杀进程的后代（I1）：POSIX detached
 // 自成进程组、CLI 退出后 reparent；Windows/WSL 在 VM 内，不在 Windows 进程树。
 
-/** 预约受理的输入（restartFleetCommand 解析后转交）。 */
-interface SelfRestartReserveInput {
+/**
+ * 预约受理的输入（restartFleetCommand 解析后转交）。
+ * q-restart-tool：导出供装配层 `gateway.restart` RPC handler 复用
+ * （src/runtime/bootstrap.ts），CLI 与 vessel 工具面同走这一份预约逻辑
+ * （认触发者 → RPC 标记 → 交接文件 → detached 编排者）。
+ */
+export interface SelfRestartReserveInput {
   deps: GatewayCommandDeps;
   env: Record<string, string | undefined>;
   config: VesselConfig;
@@ -318,6 +323,16 @@ interface SelfRestartReserveInput {
   selector?: GatewaySelector;
   print: (line: string) => void;
   printErr: (line: string) => void;
+  /**
+   * q-restart-tool：预约成功后的结构化回执（RPC 结果用；CLI 不传，零影响）。
+   * 在编排者 pid 回填交接文件之后、返回 0 之前调用。
+   */
+  onReserved?: (info: {
+    session_id: string;
+    run_id: string;
+    orchestrator_pid: number;
+    wait_timeout_ms: number;
+  }) => void;
 }
 
 /** node RPC 短客户端（预约 / 编排者共用；回环 http，与 node stop 同口径）。 */
@@ -347,7 +362,7 @@ function nodeTokenFor(
  * → node RPC 写 continuation 标记（RunJournal 单写口）→ 写交接文件 →
  * spawn detached 编排者 → 回填编排者 pid → 返回「正在重启，请收尾本回合」。
  */
-async function selfRestartReserveCommand(input: SelfRestartReserveInput): Promise<number> {
+export async function selfRestartReserveCommand(input: SelfRestartReserveInput): Promise<number> {
   const { deps, env, config, dataDir, print, printErr } = input;
   const sessionId = input.session ?? env.VESSEL_SESSION_ID ?? '';
   const runId = input.run ?? env.VESSEL_RUN_ID;
@@ -468,6 +483,12 @@ async function selfRestartReserveCommand(input: SelfRestartReserveInput): Promis
   }
   await writeSelfRestartHandoff(dataDir, { ...handoff, orchestrator_pid: orchestratorPid });
 
+  input.onReserved?.({
+    session_id: sessionId,
+    run_id: triggeringRunId,
+    orchestrator_pid: orchestratorPid,
+    wait_timeout_ms: handoff.wait_timeout_ms,
+  });
   print(
     ui.ok(
       `restart reserved (orchestrator pid ${orchestratorPid}): it will wait for your run ` +

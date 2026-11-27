@@ -1790,6 +1790,8 @@ async function runWithConfig(result: BootstrapResult) {
       // 自重启 Option A：预约受理（写 continuation 标记后立即返回「正在重启」）。
       // 触发者 run 自然完成后由 detached 编排者执行 stop/start（vessel restart --self）。
       ...(result.selfRestart ? { selfRestart: result.selfRestart } : {}),
+      // q-restart-tool：gateway.restart 的完整预约（vessel op=rpc 可达；prompt 可选）。
+      ...(result.gatewayRestart ? { restart: result.gatewayRestart } : {}),
       // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
       permissions: {
         // AX 自服务 · 自观：permissions.show 的只读规则面（additive）。
