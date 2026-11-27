@@ -12,7 +12,7 @@
  * 本卡不给「取消 / 我已处理」（running 占位不可消费；done/failed 结果由模型读走）。
  */
 import { useEffect, useState } from 'react';
-import { Badge, Button } from '../../components/ui';
+import { Badge, Button, CardShell } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import { t } from '../../i18n';
 import { shortSenderId } from '../chat/pending-strip';
@@ -232,12 +232,14 @@ export function AsyncJobCard({
   const elapsed = running ? liveElapsed : (job.ended_at ?? Date.now()) - job.started_at;
 
   return (
-    <article className="flex flex-col gap-2 rounded-md bg-raised px-4 py-3.5 shadow-elev-1 forced-colors:border">
+    // 表面走共享 CardShell（q-media-image-card 抽出：与工具图片卡 / 未来工具卡同一基座）；
+    // class 串逐字等于原 article 表面，像素不变。
+    <CardShell>
       {job.kind === 'bash' ? (
         <BashJobBody job={job} entry={entry} client={client} elapsed={elapsed} />
       ) : (
         <GenericJobBody job={job} entry={entry} elapsed={elapsed} />
       )}
-    </article>
+    </CardShell>
   );
 }

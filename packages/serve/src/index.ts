@@ -170,6 +170,14 @@ export {
   createAttachmentMethods,
 } from './gateway/methods/attachments.js';
 export {
+  createImageMethods,
+  IMAGE_BLOB_MAX_BYTES,
+  type ImageBlobReader,
+  type ImageBlobReason,
+  type ImageBlobResult,
+  type ImageMethodsDeps,
+} from './gateway/methods/images.js';
+export {
   createInteractionMethods,
   type InteractionMethodsDeps,
   type InteractionSources,

@@ -930,6 +930,29 @@ function identityRunId(message: Message): string | undefined {
 }
 
 /**
+ * 工具图片注入消息的固定前缀（q-media-image-card）。
+ *
+ * 与 core `tool-calling-loop.ts` 的 `toolImageAttachmentNote` 开头逐字一致
+ * （`[tool image] N image(s) from tool …`）。core 不改（模型投递红线）：这条消息
+ * 没有 `name` 字段，UI 侧只能按「固定前缀 + 带图片 refs」双判据认它 —— 前缀是
+ * 运行时生成的稳定 ASCII，不随路径 / 语言变化；人打的字恰好以它开头且带图片引用
+ * 的概率忽略不计（真撞上也只是渲染成卡，正文仍在折叠区逐字可查，不吞内容）。
+ */
+export const TOOL_IMAGE_NOTE_PREFIX = '[tool image] ';
+
+/**
+ * 这条消息是不是 media view 等工具的图片附件注入（`[tool image] …` + image refs）。
+ * 是则返回它的引用（渲染成 ToolImageCard）；不是返回 undefined（照常渲染）。
+ */
+export function toolImageRefsOf(message: Message): readonly MessageRef[] | undefined {
+  if (message.role !== 'user') return undefined;
+  if (!message.content.startsWith(TOOL_IMAGE_NOTE_PREFIX)) return undefined;
+  const refs = message.refs;
+  if (refs === undefined || !refs.some((ref) => ref.kind === 'image')) return undefined;
+  return refs;
+}
+
+/**
  * 这条 user 消息是不是**一张卡**而不是人打的字：A2A 投递（`agent:<alias>` → agent 卡）
  * 与 rotate 交接嘱托（`rotate:handoff[:<epoch>]` → 交接卡）。
  *
@@ -942,10 +965,12 @@ function identityRunId(message: Message): string | undefined {
  * `rotate:handoffx`）不算卡**，与人打的字同等对待：它渲成气泡，也就该有气泡的操作。
  *
  * `vessel:*` 不在这里（它是运行时上下文，由 `runtimeMessageKind` / 可见性开关管）。
+ * 工具图片注入（`toolImageRefsOf`）同理是卡不是人话（q-media-image-card）。
  */
 export function isCardInputMessage(message: Message): boolean {
   if (agentSenderOfName(message.name) !== undefined) return true;
-  return rotateHandoffOf(message.name) !== undefined;
+  if (rotateHandoffOf(message.name) !== undefined) return true;
+  return toolImageRefsOf(message) !== undefined;
 }
 
 /**
@@ -1391,7 +1416,12 @@ export function buildHistoryIndex(
       //
       // `vessel:*` 消息本身**不**从 `userByContent` 摘掉：idle 唤醒这类 run 的输入
       // **就是**一条 `vessel:notice`（`input_name` 带前缀），那条路继续按内容认领。
-      const userRunId = isRuntimeContextMessage(message) ? undefined : identityRunId(message);
+      // 工具图片注入（q-media-image-card）也不是人类输入：它是 loop 在工具结果后
+      // 追加的附件 surfaced 消息，混进来同样会让「该 run 唯一输入」判据失效。
+      const userRunId =
+        isRuntimeContextMessage(message) || toolImageRefsOf(message) !== undefined
+          ? undefined
+          : identityRunId(message);
       if (userRunId !== undefined) {
         const indexes = inputsByRun.get(userRunId);
         if (indexes === undefined) inputsByRun.set(userRunId, [absIndex]);
@@ -2711,7 +2741,7 @@ interface HistoryDerived {
   historyKeys: Set<string>;
   /** 历史 key 是否无内部重复（buildHistoryIndex 的去重保证；merge 快路径的前提）。 */
   historyKeysUnique: boolean;
-  /** 人说的最后一句的 ts（弱下限锚点；runtime 上下文不算，判据见 buildTranscriptItems）。 */
+  /** 人说的最后一句的 ts（弱下限锚点；runtime 上下文 / 工具图片注入不算，判据见 buildTranscriptItems）。 */
   lastUserTs: number | undefined;
   /** 历史里出现过的消息 id 集（inbox-read 去重的 taken 基底）。 */
   messageIds: Set<string>;
@@ -2724,7 +2754,13 @@ function historyDerivedOf(history: HistoryIndex): HistoryDerived {
   if (cached !== undefined) return cached;
   let lastUserTs: number | undefined;
   for (const [, message] of history.messageByIndex) {
-    if (message.role !== 'user' || isRuntimeContextMessage(message)) continue;
+    if (
+      message.role !== 'user' ||
+      isRuntimeContextMessage(message) ||
+      toolImageRefsOf(message) !== undefined
+    ) {
+      continue;
+    }
     if (message.timestamp === undefined) continue;
     if (lastUserTs === undefined || message.timestamp > lastUserTs) lastUserTs = message.timestamp;
   }

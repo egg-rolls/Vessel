@@ -69,6 +69,16 @@ export function formatDuration(ms: number): string {
     : t('duration.hours', { hours });
 }
 
+/** 字节数 → 紧凑文案（次要信息，不追求精度；单位符号不翻译）。 */
+export function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  const kib = bytes / 1024;
+  if (kib < 1024) return `${kib < 10 ? kib.toFixed(1) : Math.round(kib)} KiB`;
+  const mib = kib / 1024;
+  return `${mib < 10 ? mib.toFixed(1) : Math.round(mib)} MiB`;
+}
+
 export type RelativeTimeResult =
   | { key: 'time.justNow' }
   | { key: 'time.minutesAgo'; params: { count: number } }

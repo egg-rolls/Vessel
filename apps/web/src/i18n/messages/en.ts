@@ -1524,6 +1524,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.refs.image.reason.compaction': 'compaction',
   'chat.refs.image.reason.no_delivery_event': 'no delivery record',
   'chat.refs.image.reason.unknown': 'unknown reason',
+  // q-media-image-card: tool image card (structured rendering of media view injections).
+  // Delivery chips reuse the chat.refs.image.* closed set above.
+  'chat.toolImage.group': 'Tool image attachments',
+  'chat.toolImage.title': 'Tool image',
+  'chat.toolImage.count': '{count} images',
+  'chat.toolImage.dimensions': '{width}×{height}',
+  'chat.toolImage.preview': 'Click to enlarge',
+  'chat.toolImage.previewNamed': 'Enlarge {name}',
+  'chat.toolImage.loading': 'Loading image…',
+  'chat.toolImage.unavailable': 'Preview unavailable',
+  'chat.toolImage.raw': 'Raw notice',
+  'chat.toolImage.close': 'Close preview',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': 'Only absolute paths can be referenced: {path}',
   'chat.refs.reject.tooLong': 'The reference path is longer than {max} characters',

@@ -1452,6 +1452,18 @@ export const messages = {
   'chat.refs.image.reason.compaction': '压缩',
   'chat.refs.image.reason.no_delivery_event': '没有投递记录',
   'chat.refs.image.reason.unknown': '未知原因',
+  // q-media-image-card：工具图片卡（media view 注入消息的结构化呈现）。
+  // 投递状态 chip 复用上面 chat.refs.image.* 闭集，不另造一套文案。
+  'chat.toolImage.group': '工具图片附件',
+  'chat.toolImage.title': '工具图片',
+  'chat.toolImage.count': '{count} 张',
+  'chat.toolImage.dimensions': '{width}×{height}',
+  'chat.toolImage.preview': '点击放大',
+  'chat.toolImage.previewNamed': '放大查看 {name}',
+  'chat.toolImage.loading': '加载图片…',
+  'chat.toolImage.unavailable': '预览不可用',
+  'chat.toolImage.raw': '原始通知',
+  'chat.toolImage.close': '关闭预览',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': '只能引用绝对路径：{path}',
   'chat.refs.reject.tooLong': '引用路径超过 {max} 个字符',
