@@ -247,7 +247,14 @@ export function createVesselMetaSurface(options: VesselMetaOptions): VesselMetaS
         },
         tool_name: { type: 'string', description: 'call_tool: name of the target tool.' },
         args: { type: 'object', description: 'call_tool: arguments for the target tool.' },
-        method: { type: 'string', description: 'rpc: RPC method name, e.g. sessions.list.' },
+        method: {
+          type: 'string',
+          description:
+            'rpc: RPC method name, e.g. sessions.list. gateway.restart reserves a graceful ' +
+            'self-restart of this node (params: prompt? — omit it for request-level auto-resume; ' +
+            'wait_timeout_ms?): the orchestrator waits for this run to finish, then restarts the ' +
+            'fleet and delivers the continuation; finish this turn right after it succeeds.',
+        },
         params: { type: 'object', description: 'rpc: method parameters.' },
         key: { type: 'string', description: 'set_config: configuration key.' },
         value: {
@@ -275,11 +282,33 @@ export function createVesselMetaSurface(options: VesselMetaOptions): VesselMetaS
       return 'deny';
     },
     // rpc/set_config 自执行（checkPermission 已按方法判定）；call_tool 永不转发。
-    handler: async (input) => {
+    handler: async (input, ctx) => {
       const args = isRecord(input) ? input : {};
       const op = readString(args.op);
       if (op === 'rpc') {
-        return executeRpc(options.getLocalRpc(), readString(args.method), args.params);
+        const method = readString(args.method);
+        let params = args.params;
+        // q-restart-tool：gateway.restart 触发者身份专项补注——RPC handler 拿不到
+        // ToolContext，这里把 ctx.session_id / run_id 填进缺省参数（与 bash 工具注入
+        // VESSEL_SESSION_ID / VESSEL_RUN_ID 同口径）；显式传入的参数优先。additive，
+        // 只影响本方法，其它 RPC 仍原样透传。
+        if (method === 'gateway.restart') {
+          const record = isRecord(params) ? params : {};
+          params = {
+            ...record,
+            ...(readString(record.session_id) === undefined &&
+            ctx.session_id !== undefined &&
+            ctx.session_id !== ''
+              ? { session_id: ctx.session_id }
+              : {}),
+            ...(readString(record.run_id) === undefined &&
+            ctx.run_id !== undefined &&
+            ctx.run_id !== ''
+              ? { run_id: ctx.run_id }
+              : {}),
+          };
+        }
+        return executeRpc(options.getLocalRpc(), method, params);
       }
       if (op === 'set_config') {
         return executeRpc(options.getLocalRpc(), 'config.set', {

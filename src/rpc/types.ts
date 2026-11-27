@@ -47,6 +47,8 @@ const RPC_ERROR_CODE_LIST = [
   'no_active_run',
   'run_mismatch',
   'marker_failed',
+  // q-restart-tool（gateway.restart）：预约段失败，与 serve 侧错误码同步。
+  'restart_reserve_failed',
   // 0.55：**0.54 之前的旧格式会话不再被支持**（只有 events.ndjson、没有 timeline 标记）。
   // 「只读冻结」这个中间态随 events.ndjson 的读写一起删除；读面报这个码而不是给空会话
   // （与 serve 侧逐字同步，见 packages/serve/src/protocol.ts）。

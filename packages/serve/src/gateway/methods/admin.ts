@@ -53,6 +53,33 @@ export interface SelfRestartResult {
   session_id?: string;
 }
 
+/**
+ * `gateway.restart` 入参（q-restart-tool：self-restart 的 vessel 工具面入口）。
+ *
+ * 与 node.restart.self（admin，CLI 专用）的差别：
+ * - permission 'write' ⇒ 可经 vessel 工具 op=rpc 触达（admin 被桥硬 deny）；
+ * - **prompt 可选**：缺省 = 请求级重启——装配层以系统固定的请求级恢复指令替代
+ *   续作点火（模型无需给自己写启动提示词），走既有 continuation 投递通道；
+ * - 预约受理后由装配层复用 CLI 的 selfRestartReserveCommand 完成
+ *   handoff + detached 编排者 spawn（编排者机制与 CLI 完全一致）。
+ * session_id / run_id 经 vessel 桥调用时由 ToolContext 自动补注（可显式覆盖）。
+ */
+export interface GatewayRestartInput {
+  session_id: string;
+  run_id?: string;
+  prompt?: string;
+  wait_timeout_ms?: number;
+}
+
+/** `gateway.restart` 结果：预约已受理 + 编排者已 spawn；重启在触发者 run 终态后执行。 */
+export interface GatewayRestartResult {
+  accepted: boolean;
+  session_id: string;
+  run_id: string;
+  orchestrator_pid: number;
+  wait_timeout_ms: number;
+}
+
 export interface AdminMethodsDeps {
   /** asm 注入的实际热重载实现；缺省 → `not_supported`。 */
   reload?: (scopes: string[]) => Promise<GatewayReloadResult>;
@@ -68,6 +95,11 @@ export interface AdminMethodsDeps {
    * 缺省 → `not_supported`。
    */
   selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
+  /**
+   * asm 注入的完整自重启预约（q-restart-tool）：写 continuation 标记 + handoff +
+   * spawn detached 编排者后立即返回。缺省 → `not_supported`。
+   */
+  restart?: (input: GatewayRestartInput) => Promise<GatewayRestartResult>;
 }
 
 /**
@@ -193,6 +225,74 @@ export function createAdminMethods(deps: AdminMethodsDeps): RpcMethodDefinition[
           session_id: sessionId,
           ...(runId !== undefined ? { run_id: runId } : {}),
           ...(cancel ? { cancel: true } : { prompt }),
+        });
+      },
+    },
+    {
+      // q-restart-tool（用户裁定）：self-restart 的 vessel 工具面入口。平台级操作
+      // 影响整个 gateway+node，故放 vessel RPC 层而非 agent 工具；permission 'write'
+      // ⇒ vessel op=rpc 可达（write→ask 确认卡，与 bash 危险操作同口径；admin 被桥
+      // 硬 deny，所以 node.restart.self 保持 CLI 专用）。prompt 可选：缺省 = 请求级
+      // 重启（装配层以系统恢复指令点火续作）；编排者 / fail-safe / 续作投递与 CLI
+      // `vessel restart --self` 完全同一份实现（selfRestartReserveCommand）。
+      name: 'gateway.restart',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: {
+          session_id: { type: 'string' },
+          run_id: { type: 'string' },
+          prompt: { type: 'string' },
+          wait_timeout_ms: { type: 'integer', minimum: 1 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['accepted', 'session_id', 'run_id', 'orchestrator_pid', 'wait_timeout_ms'],
+        properties: {
+          accepted: { type: 'boolean' },
+          session_id: { type: 'string' },
+          run_id: { type: 'string' },
+          orchestrator_pid: { type: 'integer' },
+          wait_timeout_ms: { type: 'integer' },
+        },
+      },
+      handler: async (params) => {
+        const restart = deps.restart;
+        if (!restart) {
+          throw new RpcError('not_supported', 'gateway.restart is not supported by this gateway');
+        }
+        const sessionId = typeof params.session_id === 'string' ? params.session_id.trim() : '';
+        if (sessionId === '') {
+          throw new RpcError('invalid_params', 'session_id must be a non-empty string');
+        }
+        // prompt 可选（请求级重启）；显式传入则必须非空（空串歧义拒绝）。
+        let prompt: string | undefined;
+        if (params.prompt !== undefined) {
+          if (typeof params.prompt !== 'string' || params.prompt.trim() === '') {
+            throw new RpcError(
+              'invalid_params',
+              'prompt must be a non-empty string when provided (omit it for request-level resume)',
+            );
+          }
+          prompt = params.prompt;
+        }
+        let waitTimeoutMs: number | undefined;
+        if (params.wait_timeout_ms !== undefined) {
+          const value = params.wait_timeout_ms;
+          if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+            throw new RpcError('invalid_params', 'wait_timeout_ms must be a positive integer');
+          }
+          waitTimeoutMs = value;
+        }
+        const runId =
+          typeof params.run_id === 'string' && params.run_id !== '' ? params.run_id : undefined;
+        return restart({
+          session_id: sessionId,
+          ...(runId !== undefined ? { run_id: runId } : {}),
+          ...(prompt !== undefined ? { prompt } : {}),
+          ...(waitTimeoutMs !== undefined ? { wait_timeout_ms: waitTimeoutMs } : {}),
         });
       },
     },

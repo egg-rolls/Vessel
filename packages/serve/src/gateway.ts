@@ -66,6 +66,8 @@ import {
 import {
   createAdminMethods,
   type GatewayReloadResult,
+  type GatewayRestartInput,
+  type GatewayRestartResult,
   type SelfRestartInput,
   type SelfRestartResult,
 } from './gateway/methods/admin.js';
@@ -90,6 +92,8 @@ import {
 
 export type {
   GatewayReloadResult,
+  GatewayRestartInput,
+  GatewayRestartResult,
   SelfRestartInput,
   SelfRestartResult,
 } from './gateway/methods/admin.js';
@@ -402,6 +406,13 @@ export interface GatewayOptions {
    * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
    */
   selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
+  /**
+   * q-restart-tool：`gateway.restart` 的完整自重启预约（asm 注入）。
+   * 写 continuation 标记 + handoff + spawn detached 编排者后立即返回；
+   * prompt 可选（缺省 = 请求级续作，系统点火文本由装配层提供）。
+   * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
+   */
+  restart?: (input: GatewayRestartInput) => Promise<GatewayRestartResult>;
   /**
    * CONTRACT-hot-apply §7：`permissions.setToolPolicy` 的写盘面（asm 注入）。
    * 缺省 = 方法仍进 manifest，但 handler 返回 `not_supported`。
@@ -2797,6 +2808,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       reload: opts.reload,
       ...(opts.shutdown !== undefined ? { shutdown: opts.shutdown } : {}),
       ...(opts.selfRestart !== undefined ? { selfRestart: opts.selfRestart } : {}),
+      ...(opts.restart !== undefined ? { restart: opts.restart } : {}),
     }),
     // 0.14 P0：agents 注册表（additive，排在表尾）。
     ...createAgentMethods({

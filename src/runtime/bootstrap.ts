@@ -54,6 +54,8 @@ import {
   type ConfigSnapshotLike,
   createGatewayEventHub,
   createLocalRpcDispatcher,
+  type GatewayRestartInput,
+  type GatewayRestartResult,
   type HubControlLike,
   type LocalRpcDispatcher,
   RpcError,
@@ -77,6 +79,8 @@ import {
   type LocalMemberTarget,
 } from '../agent/team-human-delivery';
 import { deliverAnsweredAsksToSession, orphanPendingAsksForRun } from '../cli/ask-channel';
+// q-restart-tool：gateway.restart 复用 CLI 的预约逻辑（唯一真源；编排者机制不变）。
+import { selfRestartReserveCommand } from '../cli/commands/fleet/restart-command';
 import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { formatConfigErrors } from '../config/config-error-format';
 import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
@@ -416,6 +420,11 @@ export interface BootstrapResult {
    * 没有本地执行面（connect 模式 / agent 关闭）时不提供。
    */
   selfRestart?: (input: SelfRestartInput) => Promise<SelfRestartResult>;
+  /**
+   * q-restart-tool：`gateway.restart` 的完整预约（标记 + handoff + detached 编排者）。
+   * vessel 工具面经 op=rpc 触达；prompt 可选（缺省 = 请求级续作）。
+   */
+  gatewayRestart?: (input: GatewayRestartInput) => Promise<GatewayRestartResult>;
   cleanup: () => void;
 }
 
@@ -2337,6 +2346,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
     // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
     listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
+    // R-1（q-restart-tool）：vessel op=rpc 走的是本 localDispatcher（vesselRpcPort），
+    // gateway.restart 必须在这里同样注入，否则设计主入口 not_supported——
+    // cli.ts 的网络 gatewayOptions 只是另一路。惰性包装：gatewayRestart 定义在
+    // 装配后段，dispatch 发生时早已初始化（TDZ 无虞）。additive 只补 restart；
+    // selfRestart/shutdown/reload 的本地面缺口另议，不在本批扩面。
+    restart: async (input) => gatewayRestart(input),
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
@@ -2557,6 +2572,60 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
     logger.info('node.self_restart.accepted', { session_id: sessionId, run_id: activeRunId });
     return { accepted: true, run_id: activeRunId, session_id: sessionId };
+  };
+
+  /**
+   * q-restart-tool：请求级重启的缺省续作点火文本（用户裁定 B）。
+   * prompt 缺省时替代模型嘱托写入 continuation.prompt——重启后新 run 自动起跑，
+   * 模型无需给自己写启动提示词；投递仍走既有 resumeContinuations startup:true 通道。
+   */
+  const REQUEST_LEVEL_CONTINUATION_PROMPT =
+    '【系统·请求级重启恢复】节点刚完成一次请求边界重启（gateway.restart）；你上一回合的 run 已正常结束，' +
+    '重启不是故障。请检查对话上下文、inbox 与待办事项，从断点继续未完成的工作；' +
+    '若没有待办，简要确认状态后正常收尾。';
+
+  /**
+   * q-restart-tool：`gateway.restart` 的完整预约（vessel 工具面 op=rpc 入口）。
+   * 整体复用 CLI 的 selfRestartReserveCommand：认触发者 → loopback node.restart.self
+   * 写 continuation 标记 → handoff → spawn detached 编排者（windowsHide）→ 回填 pid
+   * → 立即返回。编排者等 run 终态 / fail-safe 超时不重启 / 续作投递全部不变。
+   * config 用启动快照（token/TLS 判定与 CLI loadConfig 同口径；热应用极少改 node 段）。
+   */
+  const gatewayRestart = async (input: GatewayRestartInput): Promise<GatewayRestartResult> => {
+    const requestLevel = input.prompt === undefined || input.prompt.trim() === '';
+    const prompt = requestLevel ? REQUEST_LEVEL_CONTINUATION_PROMPT : (input.prompt as string);
+    let reserved:
+      | { session_id: string; run_id: string; orchestrator_pid: number; wait_timeout_ms: number }
+      | undefined;
+    const errors: string[] = [];
+    const code = await selfRestartReserveCommand({
+      deps: {},
+      env: process.env,
+      config,
+      dataDir,
+      prompt,
+      session: input.session_id,
+      ...(input.run_id !== undefined ? { run: input.run_id } : {}),
+      ...(input.wait_timeout_ms !== undefined ? { waitTimeoutMs: input.wait_timeout_ms } : {}),
+      print: () => undefined,
+      printErr: (line) => errors.push(line),
+      onReserved: (info) => {
+        reserved = info;
+      },
+    });
+    if (code !== 0 || reserved === undefined) {
+      throw new RpcError(
+        'restart_reserve_failed',
+        errors.join('\n') || 'self-restart reservation failed',
+      );
+    }
+    logger.info('gateway.restart.accepted', {
+      session_id: reserved.session_id,
+      run_id: reserved.run_id,
+      orchestrator_pid: reserved.orchestrator_pid,
+      request_level: requestLevel,
+    });
+    return { accepted: true, ...reserved };
   };
 
   // ── 关闭 ────────────────────────────────────────
@@ -2954,6 +3023,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     shutdown,
     beginDrain,
     selfRestart,
+    gatewayRestart,
     cleanup: () => {
       void shutdown();
     },
