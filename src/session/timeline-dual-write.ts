@@ -105,7 +105,7 @@ import type {
   TimelineDualWriteEvent,
 } from '../../packages/core/src/index';
 import { encodeSessionDirName, sessionDirPath } from '../../packages/core/src/index';
-import { loadIndexSnapshot } from '../../packages/core/src/timeline/index';
+import { loadIndexSnapshot, type SeqRange } from '../../packages/core/src/timeline/index';
 import { assertSessionFormatSupported } from '../../packages/core/src/timeline/legacy-format';
 import { TimelineEventLog, toSessionEventRecord } from '../../packages/core/src/timeline/read-port';
 import {
@@ -121,6 +121,8 @@ import {
   readCrcNdjsonFile,
   readHoles,
   readTimelineEvents,
+  readTimelineRange,
+  TimelineRangeUndecidable,
 } from '../../packages/core/src/timeline/wal';
 import { TimelineWriter } from '../../packages/core/src/timeline/writer';
 import { noteStartup, noteStartupMax } from '../observability/startup-timing';
@@ -1934,10 +1936,24 @@ interface RunSessionIndex {
  * **成本写清楚**：这是 O(全库事件数) 的一次读（实测 267 会话 / 19 万条约 1–3 秒），
  * 所以它是**运维命令**的路径，不是页面路径；页面永远给 `run_id`。
  */
+
+/** run 事件范围读的分页大小（jn-F3）：常量条数，窗口上界由范围读自身收口。 */
+const RUN_EVENTS_PAGE = 1000;
+
+/** run 事件范围读计数（jn-F3 降级留痕；与 read-port 的 `rangeReadCounters` 同口径）。 */
+const runEventsRangeCounters = { hits: 0, degraded: 0 };
+
+/** 读一份 run 事件范围读计数快照（自证脚本用）。 */
+export function timelineRunEventsRangeStats(): { hits: number; degraded: number } {
+  return { ...runEventsRangeCounters };
+}
+
 export function createTimelineRunEventsPort(options: {
   sessionsDir: string;
   /** 可选快路径：`run_id → session_id`（RunRecord store）。返回 `undefined` 表示没查到。 */
   resolveSession?: (runId: string) => Promise<string | undefined>;
+  /** 可选诊断口：范围读降级整份读时留一条 warn（不给则只计数，退回整份读仍是完整结果）。 */
+  logger?: Logger;
 }): { read(query: { runId?: string }): Promise<readonly TimelineRunEvent[]> } {
   let index: RunSessionIndex | undefined;
 
@@ -1981,11 +1997,8 @@ export function createTimelineRunEventsPort(options: {
     return index.runs.get(runId);
   }
 
-  /** 某会话的全部时间线记录 → 线上事件形状（升序、按 seq 去重）。 */
-  async function readSessionRecords(sessionId: string): Promise<TimelineRunEvent[]> {
-    const records = await readTimelineEvents(sessionDirOf(options.sessionsDir, sessionId)).catch(
-      () => [],
-    );
+  /** 记录列表 → 线上事件形状（升序、按 seq 去重）。 */
+  function toRunEvents(records: readonly TimelineRecord[]): TimelineRunEvent[] {
     const seen = new Set<number>();
     const events: TimelineRunEvent[] = [];
     for (const record of [...records].sort((a, b) => a.seq - b.seq)) {
@@ -2000,6 +2013,80 @@ export function createTimelineRunEventsPort(options: {
       });
     }
     return events;
+  }
+
+  /** 某会话的全部时间线记录 → 线上事件形状（升序、按 seq 去重）。 */
+  async function readSessionRecords(sessionId: string): Promise<TimelineRunEvent[]> {
+    const records = await readTimelineEvents(sessionDirOf(options.sessionsDir, sessionId)).catch(
+      () => [],
+    );
+    return toRunEvents(records);
+  }
+
+  /**
+   * 读一个 run 的某段 seq 区间 `[start, end]`（jn-F3：范围读分页，只保留区间内的记录）。
+   *
+   * 复用 0.56 范围读（`readTimelineRange`，行二分 + 覆盖算术 + blob 还原，输出与整份读逐条
+   * 等价）。游标从 `start-1` 起，每页常量 `RUN_EVENTS_PAGE` 条；越过 `end` 的记录丢弃
+   * （洞可能把页填到区间外），区间内无记录可推进或会话到尾即停。
+   */
+  async function readRunRange(
+    sessionDir: string,
+    start: number,
+    end: number,
+  ): Promise<TimelineRecord[]> {
+    const out: TimelineRecord[] = [];
+    let cursor = start - 1;
+    for (;;) {
+      const { records } = await readTimelineRange(sessionDir, {
+        sinceSeq: cursor,
+        limit: RUN_EVENTS_PAGE,
+      });
+      if (records.length === 0) break;
+      let last = cursor;
+      for (const record of records) {
+        if (record.seq > end) break;
+        out.push(record);
+        last = record.seq;
+      }
+      if (last === cursor) break; // 起点之后即洞/越界：区间内没有可推进的记录
+      cursor = last;
+      if (cursor >= end) break;
+      if (records.length < RUN_EVENTS_PAGE) break; // 范围读已证明会话到尾
+    }
+    return out;
+  }
+
+  /**
+   * 按 `run.idx` 的精确 seq 区间范围读一个 run 的事件（jn-F3：有索引不再整份读会话）。
+   *
+   * 索引缺失 / 该 run 无区间 / 范围读不可判 ⇒ **退回整份读**（`readSessionRecords`，换源前
+   * 的同口径，返回完整结果而非窄化），并计数留痕。跨 run（无 `run_id`）不走这里。
+   */
+  async function readRunEvents(sessionId: string, runId: string): Promise<TimelineRunEvent[]> {
+    const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
+    const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined);
+    const ranges: SeqRange[] | undefined = snapshot?.runs.get(runId);
+    if (ranges !== undefined && ranges.length > 0) {
+      try {
+        const records: TimelineRecord[] = [];
+        for (const range of ranges) {
+          records.push(...(await readRunRange(sessionDir, range.start_seq, range.end_seq)));
+        }
+        runEventsRangeCounters.hits += 1;
+        return toRunEvents(records);
+      } catch (error) {
+        runEventsRangeCounters.degraded += 1;
+        options.logger?.warn('timeline run events range read degraded', {
+          session_id: sessionId,
+          run_id: runId,
+          reason: error instanceof TimelineRangeUndecidable ? error.reason : 'read_failed',
+          error: error instanceof Error ? error.message : String(error),
+        });
+        // 落到下方整份读：降级只影响速度，不影响结果完整性。
+      }
+    }
+    return readSessionRecords(sessionId);
   }
 
   return {
@@ -2034,7 +2121,8 @@ export function createTimelineRunEventsPort(options: {
       }
       const sessionId = await resolveRunSession(query.runId);
       if (sessionId === undefined) return [];
-      const events = await readSessionRecords(sessionId);
+      // jn-F3：按 run.idx 区间范围读（不再整份读会话再 filter）；不可判时内部退回整份读。
+      const events = await readRunEvents(sessionId, query.runId);
       return events.filter((event) => event.run_id === query.runId);
     },
   };
