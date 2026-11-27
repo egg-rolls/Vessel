@@ -35,6 +35,11 @@
       不匹配 —— 免得同一个块被「父级淡入 + 块淡入」两层同时动画（叠起来发虚）。
       判据必须是「块首次挂载」。**严禁**按 delta / 定时器逐块逐字 setState 播动画：
       流式期间每 50ms 一次 flush，任何按 delta 跑的东西都会抖。
+      **例外（用户裁定，流式平滑化 A，参考豆包 Doubao）**：允许渲染侧 rAF 缓冲 reveal
+      （`useTypewriterText`：到达节奏与渲染节拍解耦，按积压自适应速率匀速吐字，
+      非逐 delta / 非定时器）。正文侧必须配套增量解析（`parseMarkdownStreaming`
+      只重解析尾块 + `memo(Block)` 前缀子树跳过），不得逐帧全量 parse。
+      块入场动画仍只按首次挂载播一次，不随逐字 reveal 重播。
       块的位置与高度一次到位（只动 opacity / filter），流式期不要做高度动画。
       段级入场与块级不叠：`AssistantText` 首帧定格一次「这条正文是流式出现还是整段出现」，
       流式出现只挂 `.motion-stream`，整段出现才挂 `.msg-enter`。
