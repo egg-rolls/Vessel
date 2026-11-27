@@ -2407,8 +2407,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── node 退出序列（drain-to-quiesce，用户裁定：缺省完全优雅）─────
-  //   1) fence 准入（runs.start 立刻 gateway_restarting / 人类输入拒绝 /
-  //      agents.* 只进 inbox 并返 queued）——此后 live run 集合只减不增
+  //   1) fence 准入（新投递只进 durable inbox 并返 deferred(draining)，
+  //      q-inbox-ux-fix：人类输入不再拒绝；无 inbox 才 gateway_restarting）
+  //      ——此后 live run 集合只减不增
   //   2) 不限时等所有活跃 run（含已受理排队的）自然跑完 + 每 5s 进度日志
   //   3) flush 会话状态
   // 不 interrupt、不写 resume 标记：run 自然完成就没有欠账。--force 是唯一

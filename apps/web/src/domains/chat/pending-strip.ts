@@ -159,6 +159,39 @@ export function shortSenderId(from: string): string {
 }
 
 /**
+ * 联邦来源前缀（跨 node 投递的 `from` / `source` 形态：`federation:principal@node:team`）。
+ *
+ * q-inbox-ux-fix：这个前缀在身份行是**多余还挡名字** —— 旧逻辑没有 `from_name` 就把整段
+ * 地址截成 `federati…`，发送者名字整个被埋掉。地址里的 node/team 段已表明「非本 node」，
+ * 前缀本身不携带额外信息。身份行剥掉它、让 principal 段（发送者名 / uuid）直接露出。
+ */
+export const FEDERATION_SOURCE_PREFIX = 'federation:';
+
+/** principal 段可能是名字也可能是完整 uuid（服务端 `formatMessageSource`：名字不安全才写 uuid）。 */
+const UUID_LIKE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** 剥掉 `federation:` 前缀（没有前缀原样返回）；node/team 地址段不动。 */
+export function stripFederationSource(from: string): string {
+  return from.startsWith(FEDERATION_SOURCE_PREFIX)
+    ? from.slice(FEDERATION_SOURCE_PREFIX.length)
+    : from;
+}
+
+/** 联邦地址 → principal 段（`@` 之前，先剥前缀）；空段返回 undefined。 */
+export function federationPrincipalOf(from: string): string | undefined {
+  const principal = stripFederationSource(from.trim()).split('@')[0]?.trim();
+  return principal !== undefined && principal !== '' ? principal : undefined;
+}
+
+/**
+ * principal → 身份字面：uuid 退短 id（绝不铺 36 位），**名字原样露出**（不截断 ——
+ * 名字本身可辨识，截了反而读不出）。供无 roster 查表的读点兜底。
+ */
+export function senderLabelOfPrincipal(principal: string): string {
+  return UUID_LIKE.test(principal) ? shortSenderId(principal) : principal;
+}
+
+/**
  * 条带卡头身份（纯函数）：`等待中　<身份>: <说的话>` 里那格「谁」。
  *
  * 身份分档（用户口径，0.51；来源 enum 见服务端 `InboxSourceLabel`）：
@@ -168,6 +201,8 @@ export function shortSenderId(from: string): string {
  *   （ask 答复 / bash 作业 / 系统）：它们不是「谁说的话」，**不走显示名分支** ——
  *   bash 作业的 `from_name` 是收件人自己，走名字分支就画成「自己发给自己」；
  * - 有显示名 ⇒ `agent:<name>`（与 AgentMessageCard / A2A 卡片同形，用户一眼能对上）；
+ * - 联邦来源（`federation:principal@node:team`）⇒ 剥前缀露出 principal：名字走 `agent:<name>`、
+ *   uuid 退短 id（q-inbox-ux-fix：不再把整段地址截成 `federati…` 挡掉名字）；
  * - 没有显示名 ⇒ 短 id（{@link shortSenderId}），**绝不显示完整 UUID**；
  * - 空 `from` ⇒ `undefined`（不渲染身份槽，卡头回到「胶囊 + 摘要」两段）。
  *
@@ -202,8 +237,19 @@ export function pendingIdentityOf(
   if (from === BASH_SOURCE) return options.bashLabel ?? shortSenderId(from);
   if (from === SYSTEM_SOURCE) return options.systemLabel ?? shortSenderId(from);
   const name = nameOf(entry.from_name) ?? nameOf(options.fallbackName);
-  if (name === undefined) return shortSenderId(from);
-  return (options.agentLabel ?? defaultAgentLabel)(name);
+  if (name !== undefined) return (options.agentLabel ?? defaultAgentLabel)(name);
+  // q-inbox-ux-fix：联邦来源剥掉 `federation:` 前缀，让 principal 段（发送者名 / uuid）
+  // 直接露出 —— 旧逻辑这里把整段地址截成 `federati…`，名字被前缀挡掉。名字走 agent 身份
+  // 字面（与本机 A2A 同形），uuid 退短 id；node/team 地址段保留在来源行（展开可见）。
+  if (from.startsWith(FEDERATION_SOURCE_PREFIX)) {
+    const principal = federationPrincipalOf(from);
+    if (principal !== undefined) {
+      return UUID_LIKE.test(principal)
+        ? shortSenderId(principal)
+        : (options.agentLabel ?? defaultAgentLabel)(principal);
+    }
+  }
+  return shortSenderId(from);
 }
 
 /** 缺省的 agent 身份字面：与 `agent-sender.ts` 的 `agent:<alias>` 同一形状。 */
