@@ -406,16 +406,20 @@ function EventPayload({ event }: { event: RunEvent }) {
 export function NoticeRow({
   event,
   defaultOpen = false,
+  entering = false,
 }: {
   event: RunEvent;
   defaultOpen?: boolean;
+  /** 本帧才追加进来的项：卡框入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
+  entering?: boolean;
 }) {
   const view = noticeView(event);
-  if (!view) return <EventRow event={event} defaultOpen={defaultOpen} />;
+  if (!view) return <EventRow event={event} defaultOpen={defaultOpen} entering={entering} />;
   return (
     <StreamCard
       tone={view.tone}
       defaultOpen={defaultOpen}
+      entering={entering}
       title={
         <span className="notice-block-text" role="status">
           {view.text}
@@ -431,14 +435,18 @@ export function NoticeRow({
 export function EventRow({
   event,
   defaultOpen = false,
+  entering = false,
 }: {
   event: RunEvent;
   defaultOpen?: boolean;
+  /** 本帧才追加进来的项：卡框入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
+  entering?: boolean;
 }) {
   const tag = eventTag(event.type);
   return (
     <StreamCard
       defaultOpen={defaultOpen}
+      entering={entering}
       title={
         <>
           <span className="shrink-0 font-mono text-sm tabular-nums text-faint">

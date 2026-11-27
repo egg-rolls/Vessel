@@ -41,8 +41,13 @@
       只重解析尾块 + `memo(Block)` 前缀子树跳过），不得逐帧全量 parse。
       块入场动画仍只按首次挂载播一次，不随逐字 reveal 重播。
       块的位置与高度一次到位（只动 opacity / filter），流式期不要做高度动画。
-      段级入场与块级不叠：`AssistantText` 首帧定格一次「这条正文是流式出现还是整段出现」，
-      流式出现只挂 `.motion-stream`，整段出现才挂 `.msg-enter`。
+      卡框与内容分层、不叠（q-card-entrance-fade）：`AssistantText` 首帧定格一次
+      「这条正文是流式出现还是整段出现」。流式出现：`entering`（真追加）时卡框挂
+      `.motion-appear`（只动透明度，`--motion-base`），内容块挂 `.motion-stream`
+      （`--motion-slow`）—— 卡框略快落定、内容块随后渐显填充；两层各动各的 opacity，
+      都不碰布局。整段出现：只挂容器级 `.msg-enter`（淡入 + 4px，它本身就是卡框入场），
+      内容块不再另挂动画 —— 卡框与内容不做双重淡入。首屏 / 历史不播的门
+      （`useEnteringItems`）对卡框与内容同样生效。
       流式光标 `.stream-caret`（几何在本文件，动画复用 `pulse-soft`）：挂在尾块**内联尾部**
       （不是 `.markdown` 直接子元素，免得被块选择器当新块播入场），收字结束由调用方移除。
 
