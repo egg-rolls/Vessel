@@ -293,6 +293,17 @@ export async function configSetCommand(
       };
     }
     parsed = limit;
+  } else if (key === 'vision.imageTokenBudgetRatio') {
+    // q-vision-image-budget-fix ①B：与 config validator / serve config.set 同界（[0,1] 浮点）。
+    const ratio = Number(value);
+    if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidNumber', { key, min: 0, max: 1 }),
+      };
+    }
+    parsed = ratio;
   } else if (key === 'emptyResponse.nudge') {
     if (value.trim() === '') {
       return { exitCode: 2, stdout: '', stderr: t('config.set.invalidNudge') };

@@ -147,11 +147,12 @@ import type {
   SessionStatus,
   SessionStore,
 } from '../types/session.js';
-import type { AttachmentPlan, VisionSettings } from '../types/vision.js';
+import type { AttachmentPlan, DroppedImage, VisionSettings } from '../types/vision.js';
 import { EMPTY_ATTACHMENT_PLAN } from '../types/vision.js';
 import {
   imageDropLabel,
   imageDropStatus,
+  renderImageDropNotice,
   resolveAttachmentPlan,
   sha8Of,
   summarizeAttachmentPlan,
@@ -3773,7 +3774,8 @@ export class ExecutionUnit {
       tools: NonNullable<ChatRequest['tools']>;
       sessionId: string;
       signal?: AbortSignal;
-      /** 重新按当前窗口组装请求；0.52 V2 起 run 内不改写历史，保留位给段起点以后的路径。 */
+      /** 重新按当前窗口组装请求；0.52 V2 起 run 内不改写历史。两个消费点：段起点以后的
+       * 路径（保留位），以及 ③ 丢图注记卡追加后的视图重建（纯追加，前缀不变）。 */
       rebuildMessages: () => Message[];
       /** BeforeLlm hook 注入的额外头/参数（additive，q-thinking-plugin）；轮级事实，重试链复用。 */
       requestExtras?: {
@@ -3783,7 +3785,7 @@ export class ExecutionUnit {
     },
   ): Promise<LLMResponse> {
     const { runId, stats } = execution;
-    const messages = args.messages;
+    let messages = args.messages;
     let overflowRetried = false;
 
     // ── 0.56：图片计划（请求期算一次，整条重试链复用）───────────────────────────
@@ -3791,8 +3793,31 @@ export class ExecutionUnit {
     // **重试必须复用同一份 plan**：字节在入池时已冻结，重算只会重复 I/O；更重要的是
     // plan 进请求体，重试换一份字节就是「同一条请求两次内容不同」。
     // 无图（绝大多数会话）= 空计划，请求体与 0.55 逐字节相同。
-    const attachmentPlan = await this.resolveAttachmentPlanFor(messages);
-    this.reportImageDelivery(execution, args.sessionId, attachmentPlan);
+    const attachmentPlan = await this.resolveAttachmentPlanFor(
+      messages,
+      execution.workingContext.maxTokens,
+    );
+    const freshDrops = this.reportImageDelivery(execution, args.sessionId, attachmentPlan);
+    // q-vision-image-budget-fix ③：新丢弃的**已入池**图（带 sha256 = 工具回执声称附上了
+    // 的）给模型追加一张事实注记卡，否则模型只看到乐观回执、容易声称看到了没内联的图。
+    // 卡需要进**本次**请求（丢弃就发生在这一轮）：appendNotice 写入窗口（append 侧脱敏
+    // 在那里做），再 rebuildMessages 从窗口重建请求视图 —— 拿到的是与落盘逐字节一致的
+    // 那条卡（不能自己 push 构造对象：maskForAppend 可能改字节，下一轮重建会前缀分叉）。
+    // 窗口只追加了这张卡 ⇒ 重建视图 = 原视图 + 卡，纯追加，前缀守卫天然满足；plan 按
+    // 消息下标命中，尾部追加不移位，重试链复用同一份 plan 照旧成立。去重与事件同一套：
+    // 同一张图同一 reason 只注记一次。not_ingested 无 sha256 ⇒ 不注记（loop 不 surfaced 它）；
+    // vision_disabled / no_vision 也不注记：那两条路 `[refs]` 尾注本就回落老文案
+    // （visionSurfaceOf=off），没有乐观回执问题，kill switch 行为保持逐字节不变。
+    const unseenDrops = freshDrops.filter(
+      (drop) =>
+        drop.sha256 !== undefined &&
+        drop.reason !== 'vision_disabled' &&
+        drop.reason !== 'no_vision',
+    );
+    if (unseenDrops.length > 0) {
+      this.appendNotice(renderImageDropNotice(unseenDrops));
+      messages = args.rebuildMessages();
+    }
     const attachmentTokens = attachmentPlan.tokens;
 
     /** 重试链（传输层 / overflow）里的第几次真实请求（1 起；写进落盘元信息） */
@@ -3842,8 +3867,9 @@ export class ExecutionUnit {
         tokens: requestViewTokens,
         messageCount: messages.length,
         // P2：增量切片的基准是**构建视图时工作窗口**的条数，不是请求视图条数
-        // （normalize 丢孤儿 tool 消息时两者不等）。构建到此处之间窗口无追加
-        // （loop 在 buildRequestMessages 之后只读；附件解析/投递报告不写窗口）。
+        // （normalize 丢孤儿 tool 消息时两者不等）。构建到此处之间窗口至多追加一张
+        // 丢图注记卡（③）：请求视图已 rebuildMessages 同步重建，两个 population
+        // 同步 +1，基准不错位；此外 loop 在 buildRequestMessages 之后只读。
         sourceMessageCount: execution.workingContext.messages.length,
       };
       const contextUsed = this.correctedContextTokens(execution, requestViewTokens);
@@ -5150,7 +5176,10 @@ export class ExecutionUnit {
    *
    * 无图时返回空计划（一次 `Map` 分配，没有 I/O），请求体与 0.55 逐字节相同。
    */
-  private async resolveAttachmentPlanFor(messages: readonly Message[]): Promise<AttachmentPlan> {
+  private async resolveAttachmentPlanFor(
+    messages: readonly Message[],
+    contextWindowTokens?: number,
+  ): Promise<AttachmentPlan> {
     const hasImageRef = messages.some((message) =>
       (message.refs ?? []).some((ref) => ref.kind === 'image'),
     );
@@ -5159,6 +5188,8 @@ export class ExecutionUnit {
       messages,
       ...(this.provider.vision !== undefined ? { backend: this.provider.vision } : {}),
       ...(this.visionSettings !== undefined ? { settings: this.visionSettings } : {}),
+      // ①B：窗口只用来推导图片 token 预算；每段固定 ⇒ plan 确定性不受影响。
+      ...(contextWindowTokens !== undefined ? { contextWindowTokens } : {}),
     });
   }
 
@@ -5173,9 +5204,17 @@ export class ExecutionUnit {
    *
    * 去重：(session, sha8, 结果) 只记一条 —— plan 每轮重算，同一张历史里的图会被反复解析
    * 出来，不去重就会随轮数线性增长（P0-09 的幂等性判据）。
+   *
+   * q-vision-image-budget-fix ③：返回**本次首次报告**的丢弃（与事件同一套去重）。
+   * 调用方据此给模型追加一张事实注记卡 —— 只注记新丢弃，历史丢弃不每轮重复发卡。
    */
-  private reportImageDelivery(execution: Run, sessionId: string, plan: AttachmentPlan): void {
+  private reportImageDelivery(
+    execution: Run,
+    sessionId: string,
+    plan: AttachmentPlan,
+  ): DroppedImage[] {
     const { runId } = execution;
+    const fresh: DroppedImage[] = [];
     if (plan.disabled === true && !this.visionDisabledReported.has(sessionId)) {
       this.visionDisabledReported.add(sessionId);
       this.publishEvent({
@@ -5230,6 +5269,7 @@ export class ExecutionUnit {
       const key = `drop:${sha8 !== '' ? sha8 : drop.path}:${drop.reason}`;
       if (reported.has(key)) continue;
       reported.add(key);
+      fresh.push(drop);
       this.publishEvent({
         type: 'context.image_dropped',
         run_id: runId,
@@ -5247,6 +5287,7 @@ export class ExecutionUnit {
         ts: Date.now(),
       });
     }
+    return fresh;
   }
 
   /**

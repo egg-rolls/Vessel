@@ -8,6 +8,7 @@
  *   因为「同一张图两次请求同一串字节」是前缀守卫的不变量；
  * - `ingest.ts`：上传即落（refs → sha256 + blob）；
  * - `plan.ts`：请求期把 refs 解析成「这一轮发哪几张图」（确定性，只读 blob）。
+ * - `notice.ts`：请求期丢图时的模型侧事实注记卡（q-vision-image-budget-fix ③）。
  *
  * 第一份具体实现（OpenAI `image_url` 形状 + magic bytes 嗅探）在
  * `plugins/provider/openai/src/vision.ts`，通过 `provider.vision` 挂到实例上。
@@ -48,9 +49,11 @@ export {
   type ImageIngestResult,
   ingestImageRefs,
 } from './ingest.js';
+export { renderImageDropNotice } from './notice.js';
 export {
   type AttachmentPlanInput,
-  DEFAULT_MAX_IMAGES_PER_REQUEST,
+  DEFAULT_IMAGE_TOKEN_BUDGET,
+  DEFAULT_IMAGE_TOKEN_BUDGET_RATIO,
   imageDropLabel,
   imageDropStatus,
   type ReadImageBlob,

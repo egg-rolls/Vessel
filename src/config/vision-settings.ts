@@ -5,8 +5,8 @@
  *
  * 能力问 `provider.vision`（插件挂的 `VisionBackend` 描述符）：核心与装配层都不认识
  * 「哪个模型支持视觉」，也不该认识（那张「模型名 → 能力」表注定与 provider 配置漂移）。
- * 本模块只把用户配置里的**运行期**四件事翻成 core 的形状：
- * kill switch / 单请求张数 / 精度意图 / 预处理策略。
+ * 本模块只把用户配置里的**运行期**几件事翻成 core 的形状：
+ * kill switch / 张数硬上限 / 图片 token 预算（比例 / 绝对值）/ 精度意图 / 预处理策略。
  *
  * ## 没有 `enable`
  *
@@ -48,6 +48,23 @@ export function visionSettingsOf(config: VesselConfig): VisionSettings | undefin
       Math.floor(vision.maxImagesPerRequest),
       MAX_IMAGES_PER_REQUEST_LIMIT,
     );
+  }
+  // ①B（q-vision-image-budget-fix）：token 预算两键。比例夹 [0,1]（与 validator 同界）；
+  // 绝对值取整（与 maxImagesPerRequest 同风格）。缺省不注入 = core 侧缺省推导。
+  if (
+    typeof vision.imageTokenBudgetRatio === 'number' &&
+    Number.isFinite(vision.imageTokenBudgetRatio) &&
+    vision.imageTokenBudgetRatio >= 0 &&
+    vision.imageTokenBudgetRatio <= 1
+  ) {
+    settings.imageTokenBudgetRatio = vision.imageTokenBudgetRatio;
+  }
+  if (
+    typeof vision.maxImageTokens === 'number' &&
+    Number.isFinite(vision.maxImageTokens) &&
+    vision.maxImageTokens >= 0
+  ) {
+    settings.maxImageTokens = Math.floor(vision.maxImageTokens);
   }
   if (typeof vision.detail === 'string' && vision.detail.length > 0) {
     settings.detail = vision.detail;

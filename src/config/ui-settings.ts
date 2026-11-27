@@ -161,6 +161,8 @@ export type SettableConfigKey =
   | 'agent.cwd'
   // q-team-limit-config：Team present 成员上限（YAML agent.team_member_limit）。
   | 'agent.teamMemberLimit'
+  // q-vision-image-budget-fix ①B：图片 token 预算比例（YAML vision.image_token_budget_ratio）。
+  | 'vision.imageTokenBudgetRatio'
   // q-empty-response：空响应兜底（core 设置面；YAML `empty_response`）。
   | 'emptyResponse.enabled'
   | 'emptyResponse.seamless'
@@ -225,6 +227,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'observability.log.time': { block: 'observability', subBlock: 'log', yamlKey: 'time' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
   'agent.teamMemberLimit': { block: 'agent', yamlKey: 'team_member_limit' },
+  'vision.imageTokenBudgetRatio': { block: 'vision', yamlKey: 'image_token_budget_ratio' },
   'emptyResponse.enabled': { block: 'empty_response', yamlKey: 'enabled' },
   'emptyResponse.seamless': { block: 'empty_response', yamlKey: 'seamless' },
   'emptyResponse.maxRetries': { block: 'empty_response', yamlKey: 'max_retries' },
@@ -315,6 +318,13 @@ export async function setUserConfigValue(
     (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
   ) {
     throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (integer >= 1)`);
+  }
+  // q-vision-image-budget-fix ①B：与 config validator / serve config.set 同界（[0,1] 浮点）。
+  if (
+    key === 'vision.imageTokenBudgetRatio' &&
+    (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1)
+  ) {
+    throw new Error(`invalid_number: ${key}=${JSON.stringify(value)} (finite number in [0, 1])`);
   }
   // q-kanban-proxy：与 config validator 同界（非空字符串）；~ 展开 / 相对 cwd
   // 解析在装配层（与启动装配同一表达式），这里不做路径存在性校验。

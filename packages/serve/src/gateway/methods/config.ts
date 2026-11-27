@@ -75,6 +75,9 @@ const NUMBER_KEYS: Readonly<
   // q-team-limit-config：Team present 成员上限。与 config validator 同界
   // （正整数 ≥1，不设人为上限）；构造期注入 AgentService，写后需重启生效。
   'agent.teamMemberLimit': { min: 1, max: Number.MAX_SAFE_INTEGER },
+  // q-vision-image-budget-fix ①B：图片 token 预算比例。与 config validator /
+  // ui-settings 同界（[0,1] 浮点）；EU 构造期读 visionSettings，写后需重启生效。
+  'vision.imageTokenBudgetRatio': { min: 0, max: 1, integer: false },
 };
 
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
