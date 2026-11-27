@@ -35,6 +35,11 @@ export interface AgentStatusLike {
   session_id: string;
   name?: string;
   parent_id?: string;
+  /**
+   * 树深度（depth-color D1 additive）：parent 链服务端真值（根 = 0）。
+   * 旧快照 / 老适配器缺省时 publicMember 回落 0（字段早已下发，值不再是假 0）。
+   */
+  depth?: number;
   /** v3 成员角色；旧快照可能缺省。 */
   role?: AgentRoleLike;
   /** 归属 principal；缺省 = peer（无 owner） */

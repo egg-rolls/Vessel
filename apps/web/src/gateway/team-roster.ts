@@ -147,6 +147,8 @@ function memberFromList(entry: AgentSummary): TeamMember | undefined {
     ...(entry.owner !== undefined ? { owner: entry.owner } : {}),
     // 显式 pin 只读（model-registry A+B）；旧 gateway 缺失时不写键。
     ...(entry.model !== undefined ? { model: entry.model } : {}),
+    // 树深度（depth-color D1）：服务端真值透传，不再丢弃；旧 gateway 缺失时不写键。
+    ...(entry.depth !== undefined ? { depth: entry.depth } : {}),
   };
 }
 

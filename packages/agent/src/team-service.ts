@@ -1766,6 +1766,8 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     ...(status.name !== undefined ? { name: status.name } : {}),
     session_id: status.session_id,
     ...(status.team_id !== undefined ? { team_id: status.team_id } : {}),
+    // 树深度（depth-color D1）：与 MemberStatus.depth 同值透传，roster 反查档的 depth 源。
+    ...(status.depth !== undefined ? { depth: status.depth } : {}),
     membership: status.membership ?? 'present',
     presence: status.presence ?? 'gone',
     role: status.role,

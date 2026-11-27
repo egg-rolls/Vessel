@@ -660,6 +660,12 @@ export interface SessionAgentBinding {
   state: string;
   presence?: 'live' | 'gone';
   primary: boolean;
+  /**
+   * 树深度（depth-color D1 additive）：parent 链服务端真值（根 = 0），
+   * 与 agents.list / teams.get roster / self-card 同一 resolver。
+   * 老适配器缺省 ⇒ 不写键，前端回落 roster 反查 / 不着色。
+   */
+  depth?: number;
 }
 
 export interface SessionMethodsDeps {
@@ -1675,11 +1681,17 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         typeof member.name === 'string' && member.name.trim() !== '' ? member.name : undefined;
       const presence =
         member.presence === 'live' || member.presence === 'gone' ? member.presence : undefined;
+      // 树深度（depth-color D1）：只认非负整数真值；老适配器缺省 / 形状不对 ⇒ 不写键。
+      const depth =
+        typeof member.depth === 'number' && Number.isInteger(member.depth) && member.depth >= 0
+          ? member.depth
+          : undefined;
       const base = {
         id: member.id,
         ...(name === undefined ? {} : { name }),
         state: String(member.state ?? ''),
         ...(presence === undefined ? {} : { presence }),
+        ...(depth === undefined ? {} : { depth }),
       } satisfies Omit<SessionAgentBinding, 'primary'>;
       const live = typeof member.session_id === 'string' ? member.session_id : '';
       if (live !== '' && !bindings.has(live)) bindings.set(live, { ...base, primary: true });

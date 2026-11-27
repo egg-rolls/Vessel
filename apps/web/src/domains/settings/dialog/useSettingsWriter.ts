@@ -49,7 +49,11 @@ export function toSettingConfigValue(
     const value = Number(raw);
     const min = def.min ?? Number.NEGATIVE_INFINITY;
     const max = def.max ?? Number.POSITIVE_INFINITY;
-    if (raw.trim() === '' || !Number.isInteger(value) || value < min || value > max) {
+    // depth-color D7：float 键接受有限小数（缺省整数，旧键行为逐字节不变）；
+    // maxExclusive 表达开区间上界（rootHue ∈ [0,360)，与 serve config.set 同口径）。
+    const shapeOk = def.float === true ? Number.isFinite(value) : Number.isInteger(value);
+    const upperOk = def.maxExclusive === true ? value < max : value <= max;
+    if (raw.trim() === '' || !shapeOk || value < min || !upperOk) {
       return undefined;
     }
     return value;

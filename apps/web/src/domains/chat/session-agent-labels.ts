@@ -32,6 +32,8 @@ export interface LabelAgent {
   bodies?: readonly LabelBody[] | null;
   /** 已退役 body（0.52：`agents.list` / `TeamMember` 都带，rotate 之前的旧身体）。 */
   body_history?: readonly { session_id?: string | null }[] | null;
+  /** 树深度（depth-color D1：服务端 parent 链真值，根 = 0）；老 gateway 缺省。 */
+  depth?: number | null;
 }
 
 /** NodeRoster 的最小结构（与 gateway/team-roster.ts 同一形状）。 */
@@ -256,4 +258,52 @@ export function sessionAgentLabels(
     }
   }
   return labels;
+}
+
+/**
+ * roster + 会话列表 -> session_id 到树深度的映射（depth-color D1）。
+ *
+ * 与 sessionAgentLabels / sessionAgentRetiredLabels 同一遍历骨架（bodies /
+ * body_history / primaryBodySessionId 复用）：现役 body 与退役 body 都产出深度——
+ * 退役档的值供 D3 裁定备用（当前灰档不消费，状态语义优先）。
+ *
+ * depth 是服务端 parent 链真值（LabelAgent.depth 透传），**前端不重算 parent 链**
+ * （单一事实源，设计稿 §4.1）。老 gateway 不下发 ⇒ 不产出 ⇒ 不着色（回落 accent-ink）。
+ *
+ * - depth 缺失 / 非有限数 / 负值 ⇒ 不产出；
+ * - sessions 缺省 = 不过滤；给了就只为列表里真实存在的会话产出；
+ * - live body 优先：迟到的 body_history 不许覆盖现役会话的深度（与 retiredLabels 同口径）。
+ */
+export function sessionAgentDepths(
+  rosters: readonly LabelRoster[],
+  sessions?: readonly LabelSession[],
+): ReadonlyMap<string, number> {
+  const listed = sessions
+    ? new Set(
+        sessions
+          .map((session) => trimId(session.session_id))
+          .filter((id): id is string => id !== undefined),
+      )
+    : undefined;
+
+  const depths = new Map<string, number>();
+  const put = (sessionId: string | undefined, depth: number) => {
+    if (sessionId === undefined) return;
+    if (listed && !listed.has(sessionId)) return;
+    if (depths.has(sessionId)) return;
+    depths.set(sessionId, depth);
+  };
+
+  for (const roster of rosters) {
+    const entries: LabelAgent[] = [...(roster.agents ?? [])];
+    for (const team of roster.rosters ?? []) entries.push(...(team.members ?? []));
+    for (const entry of entries) {
+      const depth = entry.depth;
+      if (typeof depth !== 'number' || !Number.isFinite(depth) || depth < 0) continue;
+      for (const body of entry.bodies ?? []) put(bodySessionId(body), depth);
+      put(primaryBodySessionId(entry), depth);
+      for (const body of entry.body_history ?? []) put(trimId(body.session_id), depth);
+    }
+  }
+  return depths;
 }

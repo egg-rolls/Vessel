@@ -310,6 +310,74 @@ export function toRuntimeMember(record: MemberRecord): MemberExecutionMember {
   };
 }
 
+/**
+ * 树深度解析（depth-color D1）：parent 链的**单一事实源**。
+ *
+ * depth 语义：根（无 parent_id 的成员，即 main）= 0，`depth(m) = depth(parent(m)) + 1`。
+ * 环 / 孤儿防御与 TUI `buildAgentTree`「父缺失提升为根」同口径：parent 缺失 ⇒ 该节点
+ * 按根计 0；parent 链成环 ⇒ 环上节点按根计 0，环外后代从环入口起累计深度。
+ *
+ * 纯函数、零副作用：四个暴露点（session.agent / agents.list / teams.get roster /
+ * self-card）都经它解析，前端不重算 parent 链（设计稿 §4.1）。
+ */
+export function memberDepths(
+  records: Iterable<Pick<MemberRecord, 'id' | 'parentId'>>,
+): Map<string, number> {
+  const parentOf = new Map<string, string | undefined>();
+  for (const record of records) parentOf.set(record.id, record.parentId);
+  const depths = new Map<string, number>();
+  // parent 必须是**真实存在的记录**才继续上溯；指向缺失 id ⇒ 当前节点按根计 0
+  // （孤儿防御，与 TUI buildAgentTree「父缺失提升为根」同口径）。
+  const knownParent = (id: string): string | undefined => {
+    const parent = parentOf.get(id);
+    return parent !== undefined && parentOf.has(parent) ? parent : undefined;
+  };
+  for (const id of parentOf.keys()) {
+    resolveChainDepth(id, knownParent, depths);
+  }
+  return depths;
+}
+
+/** 单条 parent 链行走（带记忆化）；memberDepths 与 MemberRegistry.depthOf 共用。 */
+function resolveChainDepth(
+  start: string,
+  parentOf: (id: string) => string | undefined,
+  depths: Map<string, number>,
+): number {
+  const path: string[] = [];
+  const index = new Map<string, number>();
+  let current: string | undefined = start;
+  let anchor: number | undefined;
+  while (current !== undefined) {
+    const cached = depths.get(current);
+    if (cached !== undefined) {
+      anchor = cached;
+      break;
+    }
+    const cycleAt = index.get(current);
+    if (cycleAt !== undefined) {
+      // 成环：环上节点按根计 0；环外节点从环入口起累计（cycleAt - i）。
+      for (const node of path.slice(cycleAt)) depths.set(node, 0);
+      for (let i = cycleAt - 1; i >= 0; i -= 1) {
+        const node = path[i];
+        if (node !== undefined) depths.set(node, cycleAt - i);
+      }
+      return depths.get(start) ?? 0;
+    }
+    index.set(current, path.length);
+    path.push(current);
+    current = parentOf(current);
+  }
+  // 链尾：parent 缺失 ⇒ 根 0；命中记忆化 ⇒ anchor + 1。回溯给整条路径落深度。
+  let depth = anchor === undefined ? 0 : anchor + 1;
+  for (let i = path.length - 1; i >= 0; i -= 1) {
+    const node = path[i];
+    if (node !== undefined) depths.set(node, depth);
+    depth += 1;
+  }
+  return depths.get(start) ?? 0;
+}
+
 /** 成员注册表 */
 export class MemberRegistry {
   private readonly byId = new Map<string, MemberRecord>();
@@ -347,6 +415,21 @@ export class MemberRegistry {
 
   get(id: string): MemberRecord | undefined {
     return this.byId.get(id);
+  }
+
+  /**
+   * 成员树深度（parent 链解析，与 `memberDepths` 同一行走核心）。
+   * 未知 id 按孤儿防御计 0；每次 O(depth)，不缓存（记录可变，缓存会漂移）。
+   */
+  depthOf(id: string): number {
+    return resolveChainDepth(
+      id,
+      (next) => {
+        const parent = this.byId.get(next)?.parentId;
+        return parent !== undefined && this.byId.has(parent) ? parent : undefined;
+      },
+      new Map(),
+    );
   }
 
   /** 只按 live body session 直查，不走 id 兜底 */

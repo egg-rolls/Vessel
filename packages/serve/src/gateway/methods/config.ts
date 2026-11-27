@@ -46,17 +46,32 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   // auto-gc P1（O8）：自动回收开关 / 观察模式（与 src/config/ui-settings 白名单同口径）。
   'autoPrune.enabled',
   'autoPrune.dryRun',
+  // depth-color（D6）：树深度配色总开关（缺省 true）。
+  'ui.depthColor.enabled',
 ]);
 
 /**
  * 整数键（q-empty-response 起）：值域与 config validator 同界。
  * 接受 number 或整数字符串（CLI / 旧客户端只传字符串）。
+ *
+ * depth-color D7：range spec 增可选 `integer: false`（缺省 true = 旧键行为逐字节
+ * 不变）——度 / OKLCH 值天然是小数，浮点键校验 `Number.isFinite + 值域`；
+ * `maxExclusive: true` 表达开区间上界（rootHue ∈ [0, 360)）。拒绝毫度整数 hack。
  */
-const NUMBER_KEYS: Readonly<Record<string, { min: number; max: number }>> = {
+const NUMBER_KEYS: Readonly<
+  Record<string, { min: number; max: number; integer?: boolean; maxExclusive?: boolean }>
+> = {
   'emptyResponse.maxRetries': { min: 0, max: 10 },
   // auto-gc P1（O8）：值域与 ui-settings / config validator 同界。
   'autoPrune.intervalHours': { min: 1, max: 168 },
   'autoPrune.olderThanHours': { min: 0, max: 8760 },
+  // depth-color（§6.1）：六 number 键浮点白名单，值域与 config validator 同界。
+  'ui.depthColor.rootHue': { min: 0, max: 360, integer: false, maxExclusive: true },
+  'ui.depthColor.hueStep': { min: 0, max: 360, integer: false },
+  'ui.depthColor.lightnessLight': { min: 0.3, max: 0.51, integer: false },
+  'ui.depthColor.chromaLight': { min: 0, max: 0.37, integer: false },
+  'ui.depthColor.lightnessDark': { min: 0.73, max: 0.95, integer: false },
+  'ui.depthColor.chromaDark': { min: 0, max: 0.37, integer: false },
 };
 
 const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
@@ -101,10 +116,15 @@ function normalizeConfigValue(key: string, raw: unknown): string | boolean | num
   const range = NUMBER_KEYS[key];
   if (range !== undefined) {
     const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
-    if (!Number.isInteger(value) || value < range.min || value > range.max) {
+    // D7：integer 缺省 true（旧键逐字节不变）；浮点键只要求有限数 + 值域。
+    const shapeOk = range.integer === false ? Number.isFinite(value) : Number.isInteger(value);
+    const upperOk = range.maxExclusive === true ? value < range.max : value <= range.max;
+    if (!shapeOk || value < range.min || !upperOk) {
+      const kind = range.integer === false ? 'a number' : 'an integer';
+      const upper = range.maxExclusive === true ? ')' : ']';
       throw new RpcError(
         'invalid_params',
-        `${key} must be an integer in [${range.min}, ${range.max}]`,
+        `${key} must be ${kind} in [${range.min}, ${range.max}${upper}`,
         { key },
       );
     }

@@ -52,6 +52,11 @@ export interface TeamMember {
   agent_id: string;
   name?: string;
   session_id?: string;
+  /**
+   * Additive (depth-color D1)：成员树深度（parent 链服务端真值，根 = 0）；
+   * roster 反查档的 depth 源。老 gateway 缺省 ⇒ 不着色。
+   */
+  depth?: number;
   membership: 'present' | 'left';
   presence: 'live' | 'gone';
   visibility: 'private' | 'team' | 'tenant';

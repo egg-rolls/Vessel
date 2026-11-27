@@ -7232,6 +7232,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
+   * 成员树深度（depth-color D1）：parent 链单一事实源，与 `statusFor` 同口径。
+   * 供装配层注入执行内核 self-card 的 `depthFor`（卡片颜色与 self-card 同值）；
+   * 未知成员 → undefined（消费方回落 host 兜底）。同步只读，spawn 期调用（ready 之后）。
+   */
+  memberDepth(memberId: string): number | undefined {
+    const record = this.registry.get(memberId) ?? this.registry.resolve(memberId);
+    return record === undefined ? undefined : this.registry.depthOf(record.id);
+  }
+
+  /**
    * 历史视图（0.53）：只读列出已释放成员。
    *
    * 为什么单独立一个方法：`list` 的语义是「谁还在」（roster 只放 present），历史视图是
@@ -7927,9 +7937,9 @@ export class AgentServiceImpl implements AgentService {
     }
   }
 
-  /** 对外状态：叠加 body 运行态 */
+  /** 对外状态：叠加 body 运行态 + 树深度（depth-color D1：parent 链服务端真值） */
   private statusFor(record: MemberRecord): MemberStatus {
-    const status = toMemberStatus(record);
+    const status = { ...toMemberStatus(record), depth: this.registry.depthOf(record.id) };
     const entries = this.liveEntries(record.id);
     if (entries.length === 0) return status;
     return {

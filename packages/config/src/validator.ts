@@ -959,6 +959,22 @@ const UI_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
 /** `ui.addressStyle` 允许值（q-addr-display；与 agent 包 ADDRESS_STYLES 同步） */
 const UI_ADDRESS_STYLES: ReadonlySet<string> = new Set(['name', 'compact', 'full']);
 
+/**
+ * `ui.depthColor.*` number 键值域（depth-color §6.1）：L 上/下界由全 360 色相
+ * WCAG 对比度实证锁定（light ≤0.51 / dark ≥0.73，全 C 值域边界压力档仍 ≥4.5:1）。
+ * 与 serve config.set NUMBER_KEYS / CLI ui-settings 白名单同界。
+ */
+const UI_DEPTH_COLOR_RANGES: Readonly<
+  Record<string, { min: number; max: number; maxExclusive?: boolean }>
+> = {
+  rootHue: { min: 0, max: 360, maxExclusive: true },
+  hueStep: { min: 0, max: 360 },
+  lightnessLight: { min: 0.3, max: 0.51 },
+  chromaLight: { min: 0, max: 0.37 },
+  lightnessDark: { min: 0.73, max: 0.95 },
+  chromaDark: { min: 0, max: 0.37 },
+};
+
 /** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13/0.14 可见性；0.15 askUser） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
@@ -1074,6 +1090,39 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       message: 'ui.addressStyle must be one of "name", "compact", "full"',
       value: ui.addressStyle,
     });
+  }
+  // depth-color：会话卡树深度配色（值域 = 对比度护栏，§6.1/§7.2 实证锁定）。
+  if (ui.depthColor !== undefined) {
+    if (!isPlainObject(ui.depthColor)) {
+      errors.push({
+        path: 'ui.depthColor',
+        message: 'ui.depthColor must be an object',
+        value: ui.depthColor,
+      });
+    } else {
+      const depthColor = ui.depthColor;
+      if (depthColor.enabled !== undefined && typeof depthColor.enabled !== 'boolean') {
+        errors.push({
+          path: 'ui.depthColor.enabled',
+          message: 'ui.depthColor.enabled must be a boolean',
+          value: depthColor.enabled,
+        });
+      }
+      for (const [key, range] of Object.entries(UI_DEPTH_COLOR_RANGES)) {
+        const value = depthColor[key];
+        if (value === undefined) continue;
+        const upperOk =
+          typeof value === 'number' &&
+          (range.maxExclusive === true ? value < range.max : value <= range.max);
+        if (typeof value !== 'number' || !Number.isFinite(value) || value < range.min || !upperOk) {
+          errors.push({
+            path: `ui.depthColor.${key}`,
+            message: `ui.depthColor.${key} must be a number in [${range.min}, ${range.max}${range.maxExclusive === true ? ')' : ']'}`,
+            value,
+          });
+        }
+      }
+    }
   }
 }
 
@@ -4067,9 +4116,20 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'errorLevel',
     'askUser',
     'expandCards',
+    'depthColor',
   ],
   // q-msg-visibility：消息显示五 toggle（未知键由 findUnknownNestedKeys 报）。
   'ui.messageVisibility': ['reasoning', 'tools', 'environment', 'source', 'system'],
+  // depth-color：会话卡树深度配色七键（值域护栏在 validateUi）。
+  'ui.depthColor': [
+    'enabled',
+    'rootHue',
+    'hueStep',
+    'lightnessLight',
+    'chromaLight',
+    'lightnessDark',
+    'chromaDark',
+  ],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
   timeline: ['dualWrite', 'chunkFlushMs', 'archiveIntervalMs'],
   // 0.56：视觉（kill switch / 预算 / 精度 / 预处理 / blob 生命周期 / GC 定时）。
