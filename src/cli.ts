@@ -1142,6 +1142,9 @@ async function runWithConfig(result: BootstrapResult) {
         );
       }
       liveConfig = loaded.config;
+      // P2：同步 bootstrap 活配置引用 ⇒ 总线 hook / EU envCadence / 成员 spawn 的
+      // env_injection 闭包下一请求读到新值（热加载，无需重注册 / 重启）。
+      result.liveConfigRef.current = loaded.config;
       return loaded.config;
     };
     // 事件出口：notice 同时进事件流（Web/TUI）与模型上下文（BeforeLlm hook）。
@@ -1809,6 +1812,7 @@ async function runWithConfig(result: BootstrapResult) {
               neverAutoApprove: written.neverAutoApprove,
             },
           };
+          result.liveConfigRef.current = liveConfig;
           return {
             auto_approve: written.autoApprove,
             never_auto_approve: written.neverAutoApprove,

@@ -301,6 +301,12 @@ export interface BootstrapResult {
   executionRuntime: Runtime;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
+  /**
+   * P2 活配置引用：热应用 / 写回成功后调用方把新配置写进 `.current`，总线 hook /
+   * EU envCadence / 成员 spawn 的 env_injection 闭包下一请求即读到新值（修启动快照冻结）。
+   * 形状照 toolsEngine.bridgeDeny { current } 先例。
+   */
+  liveConfigRef: { current: Awaited<ReturnType<typeof loadConfig>>['config'] };
   /** 0.5：解析后的 tenant 与目录 */
   tenantId: string;
   tenantPaths: TenantPaths;
@@ -913,6 +919,7 @@ async function bootstrapConnect(input: {
     executionRuntime,
     ctx,
     config: input.config,
+    liveConfigRef: { current: input.config },
     tenantId: effectiveTenantId,
     ...(remote !== undefined ? { remote } : {}),
     tenantPaths: input.tenantPaths,
@@ -1047,6 +1054,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const { config, validation, tenantId: configTenantId, paths: configPaths } = loaded;
   markStartup('config');
+  // P2 活配置引用（热加载）：bootstrap 的 `config` 是启动期 const，热应用换的是 cli 的
+  // liveConfig（新对象），本对象不会被原地改。总线 hook / EU envCadence / 成员 spawn 的
+  // env_injection 闭包统一读这个 ref ⇒ cli 热应用时同步 `.current`，下一请求即生效
+  // （修「注册幂等导致冻结在启动值」）。形状照 toolsEngine.bridgeDeny { current } 先例。
+  const liveConfigRef: { current: VesselConfig } = { current: config };
 
   if (!useMock && validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
@@ -1358,6 +1370,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantId,
     runtime: executionRuntime,
     config,
+    // P2 热加载：EU envCadence / envChannel 读 live ref（cli 热应用时同步）。
+    getEnvInjection: () => liveConfigRef.current.envInjection,
     tenantPaths,
     configSources: loaded.sources,
     configPaths: loaded.paths,
@@ -1575,8 +1589,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     noticeBus = createRuntimeNoticeBus({
       events: runtimeEvents,
       tenantId,
+      // P2：off 在 publish 入口丢（live getter）；诊断日志走中枢。
+      envInjection: () => liveConfigRef.current.envInjection,
+      logger,
     });
-    registerRuntimeNoticeHook(finalPluginHost, noticeBus, eventLog, () => config.envInjection);
+    registerRuntimeNoticeHook(
+      finalPluginHost,
+      noticeBus,
+      eventLog,
+      () => liveConfigRef.current.envInjection,
+    );
     // 0.52：附件引用的环境信息行（模型据此知道有附件、该用 media 工具读）。
     // 0.56 P1：带上视觉面探针——有 `provider.vision` 且没被 kill switch 关时，尾注改说
     // 「图已随本条消息附上，不要再读」（避免模型把图再 media: read 一遍 = 双倍花费）。
@@ -1641,7 +1663,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         ? { contextToolResultWhitelist: config.context.toolResultWhitelist }
         : {}),
       // 注入粒度框架：self-card hook 的检测节奏（缺省不传 ⇒ 内置默认表，零回归）。
-      ...(config.envInjection !== undefined ? { envInjection: config.envInjection } : {}),
+      // P2：读 live ref ⇒ 热应用后新 spawn 的 body 用新配置（live body 的 hook 走 resolver）。
+      ...(liveConfigRef.current.envInjection !== undefined
+        ? { envInjection: liveConfigRef.current.envInjection }
+        : {}),
+      // P2 热加载：self-card hook 的 cadence/channel/off resolver 读 live ref（live body 同步）。
+      getEnvInjection: () => liveConfigRef.current.envInjection,
       permission,
       permissionMode: memberPermissionMode,
       // 0.31：按**入口是否真有进程内应答者**判定，而不是 `!headless`：feishu 非 TTY
@@ -2904,6 +2931,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     executionRuntime,
     ctx,
     config,
+    liveConfigRef,
     tenantId,
     tenantPaths,
     bundle,

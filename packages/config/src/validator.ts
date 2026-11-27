@@ -6,7 +6,7 @@
 import { isIP } from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ENV_CADENCE_VALUES } from '@vessel-agent/core';
+import { ENV_CADENCE_VALUES, ENV_CHANNEL_VALUES } from '@vessel-agent/core';
 import {
   describeRegisteredAuthKinds,
   getAuthStrategy,
@@ -343,14 +343,16 @@ function validateContext(context: ContextConfig, errors: ConfigValidationError[]
 /**
  * 校验 env_injection 块（注入节奏框架）：
  * - `default` 若存在必须 ∈ ENV_CADENCE_VALUES；
- * - `scopes` 每键：值 ∈ ENV_CADENCE_VALUES；键必须在 DEFAULT_ENV_CADENCE（拒未知词，防 typo）；
- * - 键 ∈ PINNED_REQUEST_SCOPES 且值 === 'request' ⇒ 报错拒绝（不静默钳制）。
+ * - `scopes` 每键：值 ∈ ENV_CADENCE_VALUES（含 'off'，P2）；键必须在 DEFAULT_ENV_CADENCE（拒未知词，防 typo）；
+ * - 键 ∈ PINNED_REQUEST_SCOPES 且值 === 'request' ⇒ 报错拒绝（不静默钳制）；
+ *   'off' 允许（D6：静默不破坏前缀不变量，只是模型不知情，UI 文案警示）；
+ * - `channels` 每键（P2 轴 C）：值 ∈ ENV_CHANNEL_VALUES；键必须在 DEFAULT_ENV_CADENCE。
  */
 function validateEnvInjection(
   envInjection: EnvInjectionConfig,
   errors: ConfigValidationError[],
 ): void {
-  const { default: defaultCadence, scopes } = envInjection;
+  const { default: defaultCadence, scopes, channels } = envInjection;
 
   if (
     defaultCadence !== undefined &&
@@ -358,42 +360,67 @@ function validateEnvInjection(
   ) {
     errors.push({
       path: 'envInjection.default',
-      message: 'envInjection.default must be one of "request", "run"',
+      message: 'envInjection.default must be one of "request", "run", "off"',
       value: defaultCadence,
     });
   }
 
-  if (scopes === undefined) return;
-  for (const [scope, cadence] of Object.entries(scopes)) {
-    const scopePath = `envInjection.scopes.${scope}`;
-    if (!(scope in DEFAULT_ENV_CADENCE)) {
-      errors.push({
-        path: scopePath,
-        message: `envInjection.scopes.${scope} is not a known scope (see DEFAULT_ENV_CADENCE)`,
-        value: cadence,
-      });
+  if (scopes !== undefined) {
+    for (const [scope, cadence] of Object.entries(scopes)) {
+      const scopePath = `envInjection.scopes.${scope}`;
+      if (!(scope in DEFAULT_ENV_CADENCE)) {
+        errors.push({
+          path: scopePath,
+          message: `envInjection.scopes.${scope} is not a known scope (see DEFAULT_ENV_CADENCE)`,
+          value: cadence,
+        });
+      }
+      if (cadence === undefined) continue;
+      if (
+        typeof cadence !== 'string' ||
+        !(ENV_CADENCE_VALUES as readonly string[]).includes(cadence)
+      ) {
+        errors.push({
+          path: scopePath,
+          message: 'envInjection.scopes values must be one of "request", "run", "off"',
+          value: cadence,
+        });
+        continue;
+      }
+      if (cadence === 'request' && (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope)) {
+        errors.push({
+          path: scopePath,
+          message:
+            scope === 'trim'
+              ? 'envInjection.scopes.trim is pinned to "run" (segment-start freezing is a prefix invariant); "request" is not configurable ("off" is allowed)'
+              : 'envInjection.scopes.model is pinned to "run" (model notice follows the EU first-run lifecycle); "request" is not configurable ("off" is allowed)',
+          value: cadence,
+        });
+      }
     }
-    if (cadence === undefined) continue;
-    if (
-      typeof cadence !== 'string' ||
-      !(ENV_CADENCE_VALUES as readonly string[]).includes(cadence)
-    ) {
-      errors.push({
-        path: scopePath,
-        message: 'envInjection.scopes values must be one of "request", "run"',
-        value: cadence,
-      });
-      continue;
-    }
-    if (cadence === 'request' && (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope)) {
-      errors.push({
-        path: scopePath,
-        message:
-          scope === 'trim'
-            ? 'envInjection.scopes.trim is pinned to "run" (segment-start freezing is a prefix invariant); "request" is not configurable'
-            : 'envInjection.scopes.model is pinned to "run" (model notice follows the EU first-run lifecycle); "request" is not configurable',
-        value: cadence,
-      });
+  }
+
+  if (channels !== undefined) {
+    for (const [scope, channel] of Object.entries(channels)) {
+      const channelPath = `envInjection.channels.${scope}`;
+      if (!(scope in DEFAULT_ENV_CADENCE)) {
+        errors.push({
+          path: channelPath,
+          message: `envInjection.channels.${scope} is not a known scope (see DEFAULT_ENV_CADENCE)`,
+          value: channel,
+        });
+      }
+      if (channel === undefined) continue;
+      if (
+        typeof channel !== 'string' ||
+        !(ENV_CHANNEL_VALUES as readonly string[]).includes(channel)
+      ) {
+        errors.push({
+          path: channelPath,
+          message: 'envInjection.channels values must be one of "model+ui", "ui-only"',
+          value: channel,
+        });
+      }
     }
   }
 }
@@ -4304,7 +4331,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   session: ['backend', 'storagePath', 'maxHistory'],
   // 注入节奏框架：scopes 的键是 scope 词（数据不属配置键），未知词拒绝在
   // validateEnvInjection 里按 DEFAULT_ENV_CADENCE 做。
-  envInjection: ['default', 'scopes'],
+  envInjection: ['default', 'scopes', 'channels'],
   pricing: ['models'],
   permission: ['autoApprove', 'neverAutoApprove'],
   update: ['autoCheck', 'channel', 'source'],

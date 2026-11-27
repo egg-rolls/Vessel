@@ -296,6 +296,8 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // 缺省 'run' = 原 processedRuns gate（每 run 首请求观察一次，零回归）；
       // 'request' 跳过该 gate，每请求观察（去重轴 notified_rev 不动，不会重复发卡）。
       const filesCadence = deps.config.envGranularity?.files ?? 'run';
+      // off（P2 轴 A）：整段跳过——不观察、不产卡、不注入（先于 run gate）。
+      if (filesCadence === 'off') return;
       if (filesCadence === 'run') {
         if (processedRuns.has(runId)) return;
         if (processedRuns.size >= MAX_TRACKED_RUNS) processedRuns.clear();
@@ -458,6 +460,22 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         content: buildNotice(lines, changedCount, content),
         timestamp: now,
       };
+      // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected，Web 既有投影渲染 EnvCard），
+      // 不写 ctx.messages（模型不收）。notified_rev 游标已推进（上方 save）⇒ 不重复发卡。
+      // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退 ctx.messages 注入（model+ui 现状，additive）。
+      if (deps.config.envChannels?.files === 'ui-only' && ctx.emitFact !== undefined) {
+        ctx.emitFact({
+          type: 'message.injected',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: ctx.session_id,
+            message: { ...message, message_id: `${runId}:notice:${String(now)}` },
+          },
+          ts: now,
+        });
+        return;
+      }
       ctx.messages = [...(ctx.messages ?? []), message];
       return;
     },

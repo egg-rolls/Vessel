@@ -3,6 +3,7 @@
  * @module @vessel-agent/core/hooks
  */
 
+import type { RunEvent } from './event.js';
 import type { Message, MessageRef } from './provider.js';
 
 /** Hook 类型枚举 */
@@ -65,6 +66,17 @@ export interface HookContext {
    * last_writer 抑制主键；缺省 = 装配未填，消费方回退 session_id 判等（现状基线）。
    */
   agent_id?: string;
+  /**
+   * BeforeLlm 事实发射端口（P2 粒度配置轴 C；additive）。装配层（EU tool-calling loop）
+   * 绑定到 `publishEvent`（journal → 时间线双写）。hook 用它把「仅 UI 可见」的环境通知
+   * 落一条 `message.injected` 事实（vessel:notice 消息 + 稳定 message_id）——Web 经既有
+   * 投影渲染成 EnvCard，而**不**把消息写进 `ctx.messages`（模型上下文不收）。
+   *
+   * 为什么是 `message.injected` 而非 `runtime.notice`：后者是 internal 档原始事件行
+   * （默认隐藏），前者才是环境信息卡的唯一投影入口（live + 刷新回放同源）。
+   * 缺省 = 装配未填（旧 core / 裸宿主）⇒ 消费方回退 `ctx.messages` 注入（model+ui 现状）。
+   */
+  emitFact?: (event: RunEvent) => void;
   [key: string]: unknown;
 }
 

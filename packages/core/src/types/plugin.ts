@@ -353,6 +353,15 @@ export interface ExecutionUnitOptions {
    */
   envCadence?: (scope: string) => import('./env-cadence.js').EnvCadence;
   /**
+   * 环境信息投递通道端口（注入粒度框架轴 C；P2，additive）。
+   *
+   * 装配层注入 `scope => resolveEnvChannel(scope, config.envInjection)`；EU 的
+   * notice producer 在发射前问它：`ui-only` ⇒ 只落 `message.injected` 事实（UI 卡），
+   * 不写入模型上下文；`model+ui`（缺省）⇒ 事实 + 上下文（今天行为，零回归）。
+   * `off`（轴 A）整段静默，先于通道判定。core 不认识 scope 业务词，只调注入函数。
+   */
+  envChannel?: (scope: string) => import('./env-cadence.js').EnvChannel;
+  /**
    * 工具结果压缩白名单（q-tool-result-whitelist；additive）。
    *
    * 命中的工具结果抗 trim 不抗 compaction：段起点冻结占位集合时把命中的

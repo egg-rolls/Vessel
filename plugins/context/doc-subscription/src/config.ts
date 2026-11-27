@@ -8,7 +8,7 @@
 
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { EnvCadence } from '@vessel-agent/core';
+import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
 
 /** 插件配置（解析后形态） */
 export interface DocSubscriptionConfig {
@@ -41,6 +41,12 @@ export interface DocSubscriptionConfig {
    * 每 run 首请求观察一次）。
    */
   envGranularity?: Record<string, EnvCadence>;
+  /**
+   * 投递通道（env_injection 框架轴 C，P2）：scope → channel，由装配层按 `env_injection.channels`
+   * 解析后注入（doc-subscription 只产 files）。缺省 undefined = 内置默认（model+ui，零回归）。
+   * `ui-only` ⇒ hook 只落 UI 卡事实（ctx.emitFact），不写 ctx.messages（模型不收）。
+   */
+  envChannels?: Record<string, EnvChannel>;
 }
 
 /** 默认值 */
@@ -128,7 +134,7 @@ function readBoolean(
 }
 
 /**
- * 读取 envGranularity 字段（scope → cadence；只认 'request' / 'run'）。
+ * 读取 envGranularity 字段（scope → cadence；认 'request' / 'run' / 'off'，P2）。
  * 非法值 / 未知键忽略 —— 缺省回落到 hook 的内置字面量节奏（files='run'，零回归）。
  */
 function readEnvGranularity(
@@ -138,9 +144,25 @@ function readEnvGranularity(
   if (!isRecord(value)) return undefined;
   const granularity: Record<string, EnvCadence> = {};
   for (const [scope, cadence] of Object.entries(value)) {
-    if (cadence === 'request' || cadence === 'run') granularity[scope] = cadence;
+    if (cadence === 'request' || cadence === 'run' || cadence === 'off') {
+      granularity[scope] = cadence;
+    }
   }
   return Object.keys(granularity).length > 0 ? granularity : undefined;
+}
+
+/**
+ * 读取 envChannels 字段（scope → channel；认 'model+ui' / 'ui-only'，P2 轴 C）。
+ * 非法值 / 未知键忽略 —— 缺省回落到 model+ui（零回归）。
+ */
+function readEnvChannels(record: Record<string, unknown>): Record<string, EnvChannel> | undefined {
+  const value = record.envChannels ?? record.env_channels;
+  if (!isRecord(value)) return undefined;
+  const channels: Record<string, EnvChannel> = {};
+  for (const [scope, channel] of Object.entries(value)) {
+    if (channel === 'model+ui' || channel === 'ui-only') channels[scope] = channel;
+  }
+  return Object.keys(channels).length > 0 ? channels : undefined;
 }
 
 /** 把 YAML 配置解析成已知字段（未知键忽略） */
@@ -168,6 +190,7 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
   const dataDir = path.resolve(expandHomePrefix(dataDirRaw));
 
   const envGranularity = readEnvGranularity(source);
+  const envChannels = readEnvChannels(source);
 
   return {
     stateDir,
@@ -186,5 +209,6 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
       DEFAULT_CONFIG.maxTotalBytesPerRun,
     enabled: readBoolean(source, 'enabled', 'enabled') ?? DEFAULT_CONFIG.enabled,
     ...(envGranularity !== undefined ? { envGranularity } : {}),
+    ...(envChannels !== undefined ? { envChannels } : {}),
   };
 }

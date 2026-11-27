@@ -65,6 +65,11 @@ export interface TenantRuntimeProfile {
    * 缺省不注入 ⇒ producer 恒按 request 观察（零回归）。
    */
   envCadence?: (scope: string) => import('../types/env-cadence.js').EnvCadence;
+  /**
+   * 环境信息投递通道端口（见 `ExecutionUnitOptions.envChannel`；P2 轴 C）；
+   * 缺省不注入 ⇒ producer 恒 model+ui（零回归）。
+   */
+  envChannel?: (scope: string) => import('../types/env-cadence.js').EnvChannel;
   context: {
     maxTokens?: number;
     autoCompact?: boolean;
@@ -284,6 +289,7 @@ export class Runtime {
       ...(profile.emptyResponse !== undefined ? { emptyResponse: profile.emptyResponse } : {}),
       // 注入粒度框架：notice producer 的检测节奏端口（缺省不注入 ⇒ 恒 request）。
       ...(profile.envCadence !== undefined ? { envCadence: profile.envCadence } : {}),
+      ...(profile.envChannel !== undefined ? { envChannel: profile.envChannel } : {}),
       // q-tool-result-whitelist：构造期注入（重启生效）；缺省不注入 ⇒ core 内置默认。
       ...(profile.context.toolResultWhitelist !== undefined
         ? { toolResultWhitelist: [...profile.context.toolResultWhitelist] }

@@ -93,6 +93,7 @@ export {
   finestCadence,
   PINNED_REQUEST_SCOPES,
   resolveEnvCadence,
+  resolveEnvChannel,
 } from './env-injection.js';
 export {
   type ConfigKeyExplanation,

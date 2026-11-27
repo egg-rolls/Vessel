@@ -17,7 +17,8 @@
  * @module vessel/runtime-notice
  */
 
-import type { EventStream } from '../../packages/core/src/index';
+import type { EventStream, Logger } from '../../packages/core/src/index';
+import { type EnvInjectionConfig, resolveEnvCadence } from '../../packages/config/src/index';
 
 /**
  * 通知作用域：与 `gateway.reload` 的 scope 同名（`update` / `peer` 留给其它来源）。
@@ -88,6 +89,14 @@ export interface RuntimeNoticeBusOptions {
   runId?: string;
   tenantId?: string;
   now?: () => number;
+  /**
+   * 活配置 getter（P2 轴 A）：publish 入口按 scope 判 off —— `off` 的通知**整段丢弃**
+   * （不入队、不广播），留一条诊断日志。live 闭包 ⇒ 热改 env_injection 下一发布即生效。
+   * 缺省不注入 ⇒ 不丢任何通知（零回归）。
+   */
+  envInjection?: () => EnvInjectionConfig | undefined;
+  /** 诊断日志（off 丢弃时记一条 debug）；缺省静默。 */
+  logger?: Logger;
 }
 
 /** 把任意输入裁剪成契约形状（防御 applier / 调用方传半成品）。 */
@@ -194,6 +203,15 @@ export function createRuntimeNoticeBus(options: RuntimeNoticeBusOptions = {}): R
   return {
     publish(input, target) {
       const notice = normalizeNotice(input);
+      // P2 轴 A：off 在 publish 入口丢（不入队、不广播），留诊断日志。live getter 每发布
+      // 求值 ⇒ 热改即时生效。缺省 getter / 非 off ⇒ 照常（零回归）。
+      if (resolveEnvCadence(notice.scope, options.envInjection?.()) === 'off') {
+        options.logger?.debug('runtime.notice dropped (scope off)', {
+          scope: notice.scope,
+          summary: notice.summary,
+        });
+        return 0;
+      }
       const ts = now();
       const id = nextId;
       nextId += 1;
