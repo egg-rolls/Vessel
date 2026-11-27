@@ -1513,8 +1513,17 @@ export class ExecutionUnit {
    *
    * 值由 `rememberWindowSeqs` 在播种窗口时按内容对齐一次填好（对齐口径见
    * `alignMessageSeqs`）。**只服务索引记账**，不参与任何判据。
+   *
+   * q-arch-p0-fixes ctx-F2：值里同时记住**播种时的窗口消息对象**（`messages`）。
+   * 压缩会重排窗口（system 前置 + 摘要插入 + 中段移除），只播种不更新的话，同一
+   * 窗口第二次压缩的 `removed_indices` 查到的还是旧窗口的 seq ⇒ 错位区间读回别人的
+   * 历史。压缩发布后由 `realignWindowSeqsAfterCompaction` 按对象身份重对齐：
+   * 幸存消息保留原 seq，新摘要 / 播种后追加的消息记 `undefined`（不猜号）。
    */
-  private readonly windowSeqMaps = new WeakMap<object, (number | undefined)[]>();
+  private readonly windowSeqMaps = new WeakMap<
+    object,
+    { seqs: (number | undefined)[]; messages: readonly Message[] }
+  >();
 
   /**
    * 每条会话已产生的压缩索引（0.56 ctx-recall），按 sessionId 索引。
@@ -3471,8 +3480,14 @@ export class ExecutionUnit {
     if (projection === undefined || history.messages.length === 0) return;
     const aligned = alignMessageSeqs(history.messages, projection.messages, projection.messageSeqs);
     const expected = aligned.length + (prependedBaseSystem ? 1 : 0);
-    if (workingContext.messages.length !== expected) return;
-    this.windowSeqMaps.set(workingContext, prependedBaseSystem ? [undefined, ...aligned] : aligned);
+    const windowMessages = workingContext.messages;
+    if (windowMessages.length !== expected) return;
+    this.windowSeqMaps.set(workingContext, {
+      seqs: prependedBaseSystem ? [undefined, ...aligned] : aligned,
+      // ctx-F2：记住窗口里的**实际对象**（可能是盖章后的副本，与 history 不同一），
+      // 压缩后按身份重对齐要用它，而不是历史数组。
+      messages: windowMessages,
+    });
   }
 
   /**
@@ -4463,10 +4478,13 @@ export class ExecutionUnit {
     const report = workingContext.lastCompaction;
     if (report !== undefined) this.lastReportedCompactionId.set(runId, report.id);
     const remaining = workingContext.messages.length;
-    const compaction =
-      workingContext.getSessionId() === sessionId
-        ? this.buildCompactionEntry(workingContext, sessionId, removed, reason, tokensBefore)
-        : undefined;
+    const sameSession = workingContext.getSessionId() === sessionId;
+    const compaction = sameSession
+      ? this.buildCompactionEntry(workingContext, sessionId, removed, reason, tokensBefore)
+      : undefined;
+    // ctx-F2：索引按**旧**平行表算完之后，立即把表重对齐到压缩后的窗口 ——
+    // 同一窗口下一次压缩的 removed_indices 是新窗口下标，不重对齐就会查到旧 seq。
+    if (sameSession) this.realignWindowSeqsAfterCompaction(workingContext);
     if (compaction !== undefined) {
       // 先记账再渲染 stub：stub 要列出**含这一段在内**的全部段（多段累积），
       // 顺序反过来会让最新那一段在 stub 里缺一行（真机验证抓到过：stub 只列到 id=1，
@@ -4601,7 +4619,7 @@ export class ExecutionUnit {
     const removedSeqs: (number | undefined)[] = [];
     for (let offset = 0; offset < removed; offset += 1) {
       const index = indices[offset];
-      removedSeqs.push(index === undefined ? undefined : seqMap?.[index]);
+      removedSeqs.push(index === undefined ? undefined : seqMap?.seqs[index]);
     }
     const existing = this.sessionCompactions.get(sessionId) ?? [];
     const nextId = existing.reduce((max, entry) => Math.max(max, entry.compaction_id), 0) + 1;
@@ -4610,9 +4628,52 @@ export class ExecutionUnit {
       at: summary.timestamp ?? Date.now(),
       reason,
       summary: summary.content,
-      removedSeqs,
+      // ctx-F2 单调自检：窗口序 = 事件序时，映射出的 seq 必须严格递增。
+      // 出现回退 ⇒ 对齐已不可信，整段记 unmapped —— 宁可不写区间，也不写
+      // 一段读回来是别人历史的坐标。
+      removedSeqs: this.monotonicOrUnmapped(removedSeqs),
       tokens_before: tokensBefore,
       tokens_after: workingContext.tokenCount,
+    });
+  }
+
+  /**
+   * ctx-F2 单调自检：已映射的 seq 必须沿窗口顺序严格递增；任何回退都说明
+   * 「下标 → seq」的对齐已经错位（例如压缩重排后未重对齐）。此时整份降级为
+   * `undefined`（读侧记 `unmapped_messages`），不产出可能指向别人历史的区间。
+   */
+  private monotonicOrUnmapped(seqs: readonly (number | undefined)[]): (number | undefined)[] {
+    let previous: number | undefined;
+    for (const seq of seqs) {
+      if (seq === undefined) continue;
+      if (previous !== undefined && seq <= previous) return seqs.map(() => undefined);
+      previous = seq;
+    }
+    return [...seqs];
+  }
+
+  /**
+   * ctx-F2：压缩发布后把 `windowSeqMaps` 重对齐到**压缩后的窗口**。
+   *
+   * 压缩不是 append：`applyCompactionToMessages` 移除中段、把 system 前置、插入新摘要，
+   * 旧平行表的下标从此对不上新窗口。幸存消息在压缩前后是**同一个对象**（core 按引用
+   * 过滤），所以按对象身份把旧 seq 搬过来；新摘要与播种后追加的消息没有已知 seq，
+   * 记 `undefined`（与播种口径一致：不猜号）。
+   *
+   * 只在「窗口仍属于本次压缩的会话」时调用（调用方守卫）；没有旧表时不新建 ——
+   * 播种时就没对齐上的窗口，压缩后也不会凭空多出映射。
+   */
+  private realignWindowSeqsAfterCompaction(workingContext: WorkingContext): void {
+    const previous = this.windowSeqMaps.get(workingContext);
+    if (previous === undefined) return;
+    const seqByMessage = new Map<Message, number | undefined>();
+    previous.messages.forEach((message, index) => {
+      seqByMessage.set(message, previous.seqs[index]);
+    });
+    const current = workingContext.messages;
+    this.windowSeqMaps.set(workingContext, {
+      seqs: current.map((message) => seqByMessage.get(message)),
+      messages: current,
     });
   }
 

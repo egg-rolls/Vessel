@@ -81,6 +81,7 @@ import { ownerSelfCard } from '../agent/self-card';
 import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import { emptyResponsePolicyOf } from '../config/empty-response-settings';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
+import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
 import { visionSettingsOf } from '../config/vision-settings';
 import { resolveDataDir } from '../data/data-paths';
 import { resolveAgentCwd } from '../data/path-resolution';
@@ -643,7 +644,9 @@ export function resolveRuntimePermission(
       ...new Set([...(config.permission?.autoApprove ?? []).map(normalizeLegacyToolName), 'ask']),
     ],
     // 0.27：配置级保险；用户显式配置时以其值为准（与 autoApprove 语义一致，不合并默认）。
-    neverAutoApprove: (config.permission?.neverAutoApprove ?? ['agent.close']).map(
+    // perm-F1：缺省名单单一真源 `DEFAULT_NEVER_AUTO_APPROVE`（含 pii_reveal）——
+    // 热应用（replaceRules 整体替换）从这里取缺省，必须与成员 wiring 同源。
+    neverAutoApprove: (config.permission?.neverAutoApprove ?? [...DEFAULT_NEVER_AUTO_APPROVE]).map(
       normalizeLegacyToolName,
     ),
   };

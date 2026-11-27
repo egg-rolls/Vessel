@@ -18,6 +18,7 @@ import {
   type TeamPermissionPolicy,
 } from '@vessel-agent/config';
 import {
+  type CompactionReport,
   type ContextAnchor,
   type ContextSummarizer,
   DEFAULT_COMPACT_THRESHOLD,
@@ -219,6 +220,20 @@ class RoleAwareContext implements WorkingContext {
       if (this.inner.tokenCount <= max * threshold) return 0;
     }
     return this.inner.compactAsync(false);
+  }
+
+  /**
+   * q-arch-p0-fixes ctx-F1：**转发最近一次压缩报告**。
+   *
+   * `WorkingContext.lastCompaction` 在接口里是可选的 —— 少实现它不报错，只会让
+   * runtime 侧（`execution-unit.ts` 的 `publishCompacted` / `buildCompactionEntry` /
+   * `publishUntrackedCompaction`）拿到 `undefined`：成员会话的压缩索引
+   * `removed_indices` 恒空 ⇒ `removed_ranges` 恒空、全部记 `unmapped_messages`，
+   * recall 按 seq 读回原文的承诺静默落空（owner 直连 `MemoryWorkingContext` 不受影响）。
+   * 与 `setContextAnchor` 同一类坑：可选成员被包装层吃掉，新增转发时一并检查。
+   */
+  get lastCompaction(): CompactionReport | undefined {
+    return this.inner.lastCompaction;
   }
 
   /**
