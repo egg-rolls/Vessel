@@ -54,6 +54,7 @@ import {
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
+import { listAsyncBashJobs, readAsyncBashJobLogTail } from '../plugins/tools/basic-tools/src/index';
 // 0.57：**不**静态导入 Ink REPL。`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件，
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
@@ -1761,6 +1762,12 @@ async function runWithConfig(result: BootstrapResult) {
       // q-kanban-proxy：kanbanDeps 是可变对象（声明在 reloadRunner 前），
       // config.set kanban.boardPath / 手改 YAML 经 applyKanban 原地热更新。
       kanban: kanbanDeps,
+      // q-async-bash-viz：异步 bash 作业只读观察面（jobs.*）。注册表唯一真相源是
+      // basic-tools 的进程级作业表（会话绑定经 sessionId 过滤）；serve 只出形状。
+      jobs: {
+        list: (sessionId) => listAsyncBashJobs(sessionId),
+        logTail: (jobId, maxBytes) => readAsyncBashJobLogTail(jobId, maxBytes),
+      },
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,

@@ -66,6 +66,21 @@ export interface PendingStripEntry {
    * {@link pendingIdentityOf}）；折叠判据仍是 `from`，不要求显示名相同。
    */
   from_name?: string;
+  /**
+   * bash 作业占位元数据（q-async-bash-viz additive）：有它 = 异步 bash 作业卡，条带用专属
+   * 渲染（BashJobCard）而非通用排队卡。缺省 = 普通消息。折叠 / 排序不看它。
+   */
+  bash_job?: {
+    job_id: string;
+    status: 'running' | 'done' | 'failed';
+    command?: string;
+    pid?: number;
+    exit_code?: number | null;
+    log_path?: string;
+    started_at: number;
+    ended_at?: number;
+    session_id?: string;
+  };
 }
 
 /**

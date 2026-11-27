@@ -104,6 +104,7 @@ import {
 import { createEvalMethods } from './gateway/methods/evals.js';
 import { createFeishuMethods } from './gateway/methods/feishu.js';
 import { createInteractionMethods } from './gateway/methods/interactions.js';
+import { createJobMethods, type JobsPort } from './gateway/methods/jobs.js';
 import { createKanbanMethods, type KanbanMethodsDeps } from './gateway/methods/kanban.js';
 import { createMcpMethods } from './gateway/methods/mcp.js';
 import {
@@ -340,6 +341,12 @@ export interface GatewayOptions {
    * 缺省 = `kanban.*` 仍进 manifest，但 handler 返回 `not_found`。
    */
   kanban?: KanbanMethodsDeps;
+  /**
+   * q-async-bash-viz：异步 bash 作业只读观察面（canonical jobs.*；asm 注入 basic-tools
+   * 的进程级作业表快照 + log tail）。缺省 = `jobs.*` 仍进 manifest，但 handler 返回
+   * `not_supported`。
+   */
+  jobs?: JobsPort;
   /**
    * 0.25：canonical agent 生命周期控制面（app 注入 AgentService 适配器）。
    * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
@@ -2805,6 +2812,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createTeamMethods({ teams: opts.teams }),
     // q-kanban-view：任务看板（canonical kanban.*；additive，排在表尾）。
     ...createKanbanMethods(opts.kanban ?? {}),
+    // q-async-bash-viz：异步 bash 作业只读观察面（canonical jobs.*；additive，排在表尾）。
+    ...createJobMethods({ ...(opts.jobs !== undefined ? { jobs: opts.jobs } : {}) }),
     // CONTRACT-hot-apply §7：permissions.setToolPolicy（additive，排在表尾）。
     ...createPermissionsMethods({
       ...(opts.permissions !== undefined ? { permissions: opts.permissions } : {}),

@@ -1109,6 +1109,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'inbox.unholdRejected':
     'The server did not release the hold; re-read to align (the message may already be gone)',
   'inbox.unholdFailed': 'Failed to release hold: {detail}',
+  // Async bash job placeholder callback card (q-async-bash-viz)
+  'inbox.bashJob.running': 'Running',
+  'inbox.bashJob.done': 'Done',
+  'inbox.bashJob.failed': 'Failed',
+  'inbox.bashJob.logShow': 'View log',
+  'inbox.bashJob.logHide': 'Hide log',
+  'inbox.bashJob.logLoading': 'Loading log…',
+  'inbox.bashJob.logEmpty': '(log is empty)',
 
   // Teams (cross-node)
   'teams.title': 'Teams',
@@ -1372,6 +1380,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.index.label': 'Conversation index',
   'chat.index.jump': 'Jump to item {index}',
   'chat.pending.title': 'Inbox · {count}',
+  'chat.awaitingJobs': 'Awaiting {count} async job(s)',
   'chat.pending.identity.human': 'human',
   'chat.pending.identity.ask': 'ask answer',
   // Fixed runtime labels (server InboxSourceLabel): not "who said it" — never the

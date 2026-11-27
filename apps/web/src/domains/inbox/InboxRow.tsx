@@ -18,9 +18,11 @@
 
 import { Badge, Button } from '../../components/ui';
 import { formatTimestamp } from '../../format';
+import type { GatewayClient } from '../../gateway/client';
 import type { AgentInboxEntry } from '../../gateway/types';
 import { t } from '../../i18n';
 import { canUnhold, HUMAN_SOURCE, shortSenderId } from '../chat/pending-strip';
+import { BashJobCard } from './BashJobCard';
 
 export function InboxRow({
   entry,
@@ -35,8 +37,11 @@ export function InboxRow({
   onClaim,
   onUnhold,
   onOpenSession,
+  client,
 }: {
   entry: AgentInboxEntry;
+  /** 网关客户端（bash 作业卡的 log tail 按需读 jobs.log）；缺省 = 不渲染作业卡日志键。 */
+  client?: GatewayClient;
   /** 卡头身份（human / agent:<name> / 短 id）；undefined = 不渲染身份槽。 */
   identity?: string;
   /** 这一条有写操作在途：全部动作键禁用（同一条同时只允许一次）。 */
@@ -52,6 +57,11 @@ export function InboxRow({
   onUnhold: (messageId: string) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
+  // bash 作业占位回调卡（q-async-bash-viz）：专属渲染（科技蓝 running / 绿 done / 红 failed
+  // + 命令片段 + 跳秒 + log tail），不走通用消息卡。无 client 时退回通用卡（至少显示摘要）。
+  if (entry.bash_job !== undefined && client !== undefined) {
+    return <BashJobCard entry={entry} client={client} />;
+  }
   const human = entry.from === HUMAN_SOURCE;
   const sessionId = entry.session_id;
   return (

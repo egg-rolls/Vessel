@@ -994,7 +994,8 @@ export interface AgentRecallResult {
  */
 export interface AgentClaimSkip {
   message_id: string;
-  reason: 'not_found' | 'consumed';
+  /** `pending`：仍在跑的 bash 作业占位（还没结果，不可认领；q-async-bash-viz）。 */
+  reason: 'not_found' | 'consumed' | 'pending';
 }
 
 /** `claim` 入参：把**已经看到正文**的待处理输入从队列里拿走（不可逆）。 */
@@ -1703,6 +1704,30 @@ export interface AgentService {
    * 解析 session → agent/body，检查可见性 / 预算，入 body mailbox 并交给 scheduler。
    */
   admit(input: AdmitInput): Promise<AdmitResult>;
+  /**
+   * q-async-bash-viz：起 bash 作业时往 inbox 插一条 running 占位回调卡（不可消费 / 沉底）。
+   * 返回是否插入成功（无 inbox / 无成员 = false ⇒ 完成退回旧 admit 投递路径）。
+   */
+  insertBashJobPlaceholder(meta: {
+    jobId: string;
+    sessionId: string;
+    command: string;
+    pid?: number;
+    startedAt: number;
+    logPath: string;
+  }): Promise<boolean>;
+  /**
+   * q-async-bash-viz：bash 作业完成 —— 按 jobId 原位更新占位（running→done/failed + 填结果
+   * 正文 + 唤醒读取），不另插一条（单一真相源）。返回是否更新成功（无占位 = false ⇒ 退回 admit）。
+   */
+  completeBashJob(meta: {
+    jobId: string;
+    sessionId: string;
+    status: 'done' | 'failed';
+    content: string;
+    exitCode?: number | null;
+    endedAt?: number;
+  }): Promise<boolean>;
   /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
   bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
   /**
@@ -1731,7 +1756,20 @@ export interface AgentService {
       status: 'unread' | 'held';
       ts: number;
       session_id?: string;
+      from_name?: string;
       text?: string;
+      /** bash 作业占位元数据（q-async-bash-viz additive）：渲染侧据此画作业卡。 */
+      bash_job?: {
+        job_id: string;
+        status: 'running' | 'done' | 'failed';
+        command?: string;
+        pid?: number;
+        exit_code?: number | null;
+        log_path?: string;
+        started_at: number;
+        ended_at?: number;
+        session_id?: string;
+      };
     }[];
   };
   /**

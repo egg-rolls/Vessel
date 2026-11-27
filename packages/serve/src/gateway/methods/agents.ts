@@ -736,6 +736,22 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 // 发送者显示名（0.51 additive）：缺省 = 老条目 / 无本机成员名 ⇒ 前端退短 id。
                 from_name: { type: 'string' },
                 text: { type: 'string' },
+                // bash 作业占位元数据（q-async-bash-viz additive）：渲染侧据此画作业卡。
+                bash_job: {
+                  type: 'object',
+                  required: ['job_id', 'status', 'started_at'],
+                  properties: {
+                    job_id: { type: 'string' },
+                    status: { type: 'string', enum: ['running', 'done', 'failed'] },
+                    command: { type: 'string' },
+                    pid: { type: 'number' },
+                    exit_code: { type: ['number', 'null'] },
+                    log_path: { type: 'string' },
+                    started_at: { type: 'number' },
+                    ended_at: { type: 'number' },
+                    session_id: { type: 'string' },
+                  },
+                },
               },
             },
           },
@@ -894,7 +910,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
               required: ['message_id', 'reason'],
               properties: {
                 message_id: { type: 'string' },
-                reason: { type: 'string', enum: ['not_found', 'consumed'] },
+                reason: { type: 'string', enum: ['not_found', 'consumed', 'pending'] },
               },
             },
           },

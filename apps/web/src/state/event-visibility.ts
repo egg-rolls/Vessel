@@ -216,6 +216,13 @@ export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // 从 EventStore 原始条目读它（不受档位影响）；聊天/团队时间线永不出现 —— 它是
   // inbox 元数据审计，不是对话内容（正文仍由消息卡 / RPC 承接）。
   'agent.inbox.changed': { tier: 'observe', live: true },
+  // q-async-bash-viz：异步 bash 作业生命周期事实（起 / 完成 / 失败）。用户可见表示是
+  // inbox 占位回调卡（BashJobCard，原位更新）+ run 徽标「等待异步任务」；C 徽标从
+  // EventStore 原始条目读它（不受档位影响）。聊天 / 团队时间线永不出现 —— inbox 已承接，
+  // 再出一张时间线卡是冗余（与 agent.inbox.changed 同一口径）。
+  'bash.job.started': { tier: 'observe', live: true },
+  'bash.job.completed': { tier: 'observe', live: true },
+  'bash.job.failed': { tier: 'observe', live: true },
   'agent.message.notified': { tier: 'observe', live: false },
   'agent.message.sent': { tier: 'observe', live: false },
   'agent.stale': { tier: 'observe', live: true },
