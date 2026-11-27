@@ -41,11 +41,22 @@ function Inline({ nodes }: { nodes: InlineNode[] }): ReactNode {
   });
 }
 
-function Block({ block }: { block: MarkdownBlock }): ReactNode {
+/** 流式光标（motion.css `.stream-caret` + 既有 pulse-soft 脉冲）：纯装饰，aria-hidden。
+ *  只挂在尾块内联尾部（流式平滑化 D）；收字结束 streaming=false 即不再渲染。 */
+function StreamCaret(): ReactNode {
+  return <span className="stream-caret pulse-soft" aria-hidden="true" />;
+}
+
+function Block({ block, caret = false }: { block: MarkdownBlock; caret?: boolean }): ReactNode {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(6, Math.max(1, block.level))}` as 'h1';
-      return <Tag>{renderText(block.text)}</Tag>;
+      return (
+        <Tag>
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </Tag>
+      );
     }
     case 'code':
       return (
@@ -56,7 +67,10 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
             </span>
           )}
           <pre className="m-0 max-h-95 overflow-auto px-3 py-2.5 font-mono text-sm leading-normal whitespace-pre">
-            <code>{block.text}</code>
+            <code>
+              {block.text}
+              {caret && <StreamCaret />}
+            </code>
           </pre>
         </div>
       );
@@ -72,13 +86,19 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
               {item.children?.map((child, childIndex) => (
                 <Block key={childIndex} block={child} />
               ))}
+              {caret && index === block.items.length - 1 && <StreamCaret />}
             </li>
           ))}
         </Tag>
       );
     }
     case 'blockquote':
-      return <blockquote className="py-0.5 pl-2.5 text-muted">{renderText(block.text)}</blockquote>;
+      return (
+        <blockquote className="py-0.5 pl-2.5 text-muted">
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </blockquote>
+      );
     case 'table':
       return (
         <div className="max-w-full overflow-x-auto">
@@ -101,6 +121,9 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
                   {row.map((cell, cellIndex) => (
                     <td className="px-2.25 py-1.25 text-left align-top" key={cellIndex}>
                       {renderText(cell)}
+                      {caret &&
+                        rowIndex === block.rows.length - 1 &&
+                        cellIndex === row.length - 1 && <StreamCaret />}
                     </td>
                   ))}
                 </tr>
@@ -112,7 +135,12 @@ function Block({ block }: { block: MarkdownBlock }): ReactNode {
     case 'hr':
       return <hr className="my-3 h-px border-0 bg-line" />;
     default:
-      return <p>{renderText(block.text)}</p>;
+      return (
+        <p>
+          {renderText(block.text)}
+          {caret && <StreamCaret />}
+        </p>
+      );
   }
 }
 
@@ -186,7 +214,8 @@ const MarkdownBlocks = memo(function MarkdownBlocks({
   return (
     <div className={`markdown${className ? ` ${className}` : ''}`}>
       {blocks.map((block, index) => (
-        <Block key={index} block={block} />
+        // 流式光标只给尾块（D）：内联尾部挂载，收字（streaming=false）即移除。
+        <Block key={index} block={block} caret={streaming && index === blocks.length - 1} />
       ))}
     </div>
   );
