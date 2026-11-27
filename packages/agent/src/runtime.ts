@@ -808,9 +808,11 @@ function agentIdOf(from: string): string {
  *   （idle 唤醒 = `vessel:notice`，见 `AgentService.INBOX_WAKE_NAME`；rotate 交接 =
  *   `rotate:handoff:<epoch>`，见 `AgentService.ROTATE_HANDOFF_INPUT_NAME`；restart --self
  *   跨进程续作 = `tool:system`，见 `AgentService.CONTINUATION_INPUT_NAME`）。上下文
- *   身份不只能从 `source` 推理出来：`startup_prompt` 与唤醒同为 system principal
- *   投递，前者在 rotate 路径上是 agent 写的交接书、在 create / restart / activate
- *   路径上是人的开场白，只能由生产者说清楚。
+ *   身份不只能从 `source` 推理出来：`startup_prompt` 与唤醒曾同为 system principal
+ *   投递 —— rotate 路径是 agent 写的交接书、restart / activate 是人的开场白，只能由
+ *   生产者说清楚；agent 经内置工具 create / hire 的 startup_prompt 归属创建者
+ *   （from=创建者 ⇒ source='agent'，走下面的 `agent:<alias>` 推导，见 service.ts
+ *   `deliverStartupPrompt`）。
  * - `agent:<alias>`：A2A 投递（`agentInputName`）。
  * - 人类 / 系统 / 联邦来源返回 undefined，消息不带 `name`（保持 nil）。
  *
