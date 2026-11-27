@@ -398,6 +398,15 @@ export type FederationCommand =
 export type RpcCommand = { kind: 'list'; json: boolean };
 
 /**
+ * `vessel kanban ...` 子命令（q-tooling）：kanban.list / kanban.view 的 CLI 包装。
+ * targeting（--node / --connect / --connect-token / --ca）复用全局字段，
+ * 由 extractTargetFlags 前置摘出（与 rpc / agent / team 同机制）。
+ */
+export type KanbanCommand =
+  | { kind: 'list'; column?: string; owner?: string; status?: string; json: boolean }
+  | { kind: 'view'; id: string; json: boolean };
+
+/**
  * `vessel fleet ...` 子命令：本舰队一屏总览（AX 自服务 · 发现组）。
  * 本地只读命令：不接受 targeting（--connect / --node），严格本舰队 dataDir。
  */
@@ -675,6 +684,8 @@ export interface CliArgs {
    * 可选以兼容既有 parseArgs 快照测试（与 hubCommand / tokenCommand 同先例）。
    */
   rpcCommand?: RpcCommand | null;
+  /** `vessel kanban ...`（看板轻量读面；可选以兼容既有 parseArgs 快照测试）。 */
+  kanbanCommand?: KanbanCommand | null;
   /** `vessel fleet ...`（本舰队总览；可选以兼容既有 parseArgs 快照测试）。 */
   fleetCommand?: FleetCommand | null;
   /** `vessel ps`（docker ps 式进程清单；可选以兼容既有 parseArgs 快照测试）。 */
@@ -929,6 +940,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'rpc' && i === 0) {
       return parseRpcArgs(argv.slice(1), args);
+    }
+    if (a === 'kanban' && i === 0) {
+      return parseKanbanArgs(argv.slice(1), args);
     }
     if (a === 'fleet' && i === 0) {
       return parseFleetArgs(argv.slice(1), args);
@@ -5760,6 +5774,84 @@ function parseRpcArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
   args.rpcCommand = { kind: 'list', json };
+  return { ok: true, args };
+}
+
+// ── kanban 子命令（q-tooling：看板轻量读面）─────────────────────────────
+
+/**
+ * `kanban list [--column X] [--owner Y] [--status Z] [--json]` /
+ * `kanban view <id> [--json]`；targeting flag 与 rpc list 同口径前置摘出。
+ */
+function parseKanbanArgs(rest: string[], args: CliArgs): ParseResult {
+  const extracted = extractTargetFlags(rest, args);
+  if (!extracted.ok) return extracted;
+  rest = extracted.rest;
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub !== 'list' && sub !== 'view') {
+    return { ok: false, error: `Unknown kanban subcommand: ${sub} (list|view)` };
+  }
+  let json = false;
+  let column: string | undefined;
+  let owner: string | undefined;
+  let status: string | undefined;
+  const positional: string[] = [];
+  for (let i = 1; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (sub === 'list' && (a === '--column' || a === '--owner' || a === '--status')) {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        return { ok: false, error: `Missing value for ${a}` };
+      }
+      if (a === '--column') column = value;
+      else if (a === '--owner') owner = value;
+      else status = value;
+      i++;
+      continue;
+    }
+    // 与 fleet status 同族：子命令内也认 --data-dir（写回全局字段）。
+    if (a === '--data-dir') {
+      const value = readDataDirFlag(rest, i);
+      if (!value.ok) return value;
+      args.dataDirArg = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for kanban ${sub}: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  if (sub === 'view') {
+    if (positional.length !== 1) {
+      return { ok: false, error: 'kanban view requires exactly one task id' };
+    }
+    args.kanbanCommand = { kind: 'view', id: positional[0] ?? '', json };
+    return { ok: true, args };
+  }
+  if (positional.length > 0) {
+    return { ok: false, error: `Unexpected argument for kanban list: ${positional[0]}` };
+  }
+  args.kanbanCommand = {
+    kind: 'list',
+    json,
+    ...(column !== undefined ? { column } : {}),
+    ...(owner !== undefined ? { owner } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
   return { ok: true, args };
 }
 

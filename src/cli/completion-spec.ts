@@ -528,6 +528,30 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     ],
   },
   {
+    token: 'kanban',
+    registryName: 'kanban',
+    subcommands: [
+      {
+        name: 'list',
+        flags: [
+          '--json',
+          '--column',
+          '--owner',
+          '--status',
+          '--node',
+          '--connect',
+          '--connect-token',
+          '--ca',
+          '--help',
+        ],
+      },
+      {
+        name: 'view',
+        flags: ['--json', '--node', '--connect', '--connect-token', '--ca', '--help'],
+      },
+    ],
+  },
+  {
     token: 'fleet',
     registryName: 'fleet',
     subcommands: [{ name: 'status', flags: ['--json', '--data-dir', '--help'] }],
