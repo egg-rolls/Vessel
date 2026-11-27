@@ -476,17 +476,20 @@ export function envCardOfPromptContext(
 }
 
 /**
- * 0.55.1：`[inbox] N pending` 这一类通知**只给模型看**，不给人在消息列表里再看一遍。
+ * 纯 pending 形态的 `[inbox] N pending` 通知（0.55.1 引入，q-inbox-notice-visibility-fix 收窄）。
  *
- * 为什么（用户裁定「多余设计」）：同一件事人类侧已经有 PendingStrip（输入框上方的待处理条带，
- * 带「收回来编辑 / 取消 / 删除」三个动作，数据源是 agents.inbox 的服务端真相）。
- * 而这条 vessel:notice 是模型侧的尾消息（packages/agent/src/inbox.ts#noticeContent）——
- * 它存在的目的是让模型知道「有排队输入，别重发别重做」，**不是给人类的界面**。
- * Web 把 vessel:notice 一律渲染成卡片，于是同一事实在屏幕上出现了两次。
+ * **这只是形态判据，不是覆盖判据**：命中它只说明这张卡「有可能」被 PendingStrip 承接，
+ * 是否真抑制由调用方（TranscriptWindow）叠加「条带此刻正画着本会话 human 源未消费条目」
+ * 的实时判定（stripCoversInboxPending）决定。
  *
- * 只隐藏**纯 pending** 那一种（`[inbox] N pending`，不含 unread）：
- * 含 unread 的行说的是「别人给你发了消息」，条带**不覆盖**这类（无 session 归属的条目会被条带隐藏），
- * 所以那条必须留给人看。
+ * 历史背景：0.55.1 按当时用户裁定「多余设计」把命中本形态的卡一律隐藏，前提是条带已承接。
+ * probe-inbox-notice（2026-11-27）证伪了该前提：生产 56/56 条通知来自 agent 投递
+ * （wake/quiet / 成员 send），条带行消费即消失、不留持久痕迹，一律抑制 ⇒ 用户从未见过卡。
+ * 另注：条带取数自 I-1（194c348b）起是 agent 级全量（含无 session 归属的 wake/quiet），
+ * 「无归属条目被条带隐藏」的旧说法已不成立；真正的覆盖缺口是「消费即消失 + 非 human 排队」。
+ *
+ * 只认**纯 pending** 那一种（`[inbox] N pending`，不含 unread）：含 unread 的行说的是
+ * 「别人给你发了消息、要用 inbox 工具去读」，与条带的「排队输入」语义不同，保守起见一律出卡。
  */
 export function isStripCoveredInboxNotice(card: EnvNoticeCard): boolean {
   if (card.scope !== 'inbox') return false;
