@@ -62,7 +62,7 @@ import {
   type AgentInboxListEntry,
   AgentInboxStore,
   deliveryFromNotify,
-  type InboxBashJobMeta,
+  type InboxAsyncJobMeta,
 } from './inbox.js';
 import { memberCwdFromTeam } from './member-cwd.js';
 import { normalizeRefs } from './refs.js';
@@ -2953,23 +2953,25 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * q-async-bash-viz：起 bash 作业时往 inbox 插一条 **running 占位回调卡**（灵魂出窍复原）。
+   * q-async-bash-viz：起异步作业时往 inbox 插一条 **running 占位回调卡**（灵魂出窍复原，
+   * **kind 无关通用机制**）。bash 首个消费者（kind='bash'），ask 未来消费者复用同机制。
    *
    * 会话绑定：经 sessionId resolve 成员，inbox 按 agentId。占位 `quiet`（永不当 run input）、
-   * running 态不可被 read 消费 / 弹出（readable 排除）、list 沉底（科技蓝占位）。完成时
-   * {@link completeBashJob} 按 jobId **原位更新同一条目**，不另插一条 —— 单一真相源。
+   * running 态不可被 read 消费 / 弹出（readable 排除）、list 沉底。完成时
+   * {@link completeAsyncJob} 按 jobId **原位更新同一条目**，不另插一条 —— 单一真相源。
    *
-   * 占位的 `session_id` 只放进 `bash_job` 元数据（展示 / 归属关联），**不**写条目级
+   * kind 专属细节放 `payload`（机制层不解释）：bash={command,pid,log_path}；ask={question,...}。
+   * 占位的 `session_id` 只放进 `async_job` 元数据（展示 / 归属关联），**不**写条目级
    * `session_id`（quiet 条目带归属会被重启恢复重投，见 trackInbox 的分界）。
    * 返回是否插入成功（无 inbox / 无成员 = false ⇒ 完成退回旧 admit 投递路径，不丢结果）。
    */
-  async insertBashJobPlaceholder(meta: {
+  async insertAsyncPlaceholder(meta: {
+    kind: string;
     jobId: string;
     sessionId: string;
-    command: string;
-    pid?: number;
     startedAt: number;
-    logPath: string;
+    payload?: Record<string, unknown>;
+    summary?: string;
   }): Promise<boolean> {
     await this.ready;
     const inbox = this.inbox;
@@ -2979,18 +2981,18 @@ export class AgentServiceImpl implements AgentService {
     const result = inbox.append(
       record.id,
       {
-        id: `bash-job-${meta.jobId}`,
+        id: `async-job-${meta.jobId}`,
         ts: meta.startedAt,
-        source: BASH_JOB_INBOX_SOURCE,
-        text: `[bash job ${meta.jobId}] running: ${meta.command}`,
-        bash_job: {
+        // source 用 kind（bash→'bash'、ask→'ask'），与 InboxSourceLabel 口径一致。
+        source: meta.kind,
+        text: meta.summary ?? `[${meta.kind} job ${meta.jobId}] running`,
+        async_job: {
           job_id: meta.jobId,
+          kind: meta.kind,
           status: 'running',
-          command: meta.command,
           started_at: meta.startedAt,
-          log_path: meta.logPath,
           session_id: meta.sessionId,
-          ...(meta.pid !== undefined ? { pid: meta.pid } : {}),
+          ...(meta.payload !== undefined ? { payload: meta.payload } : {}),
         },
       },
       { delivery: 'quiet' },
@@ -2999,32 +3001,33 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * q-async-bash-viz：bash 作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填
-   * 结果正文 + 转可消费），再唤醒模型读取（synthetic wake）。**不是另插一条**：完成结果只存
-   * 这一条 inbox 条目（单一真相源，杜绝「工具返回一次 + inbox 又插一次」双份）。
+   * q-async-bash-viz：异步作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填
+   * 结果正文 + 合并 kind 专属 payload + 转可消费），再唤醒模型读取（synthetic wake）。
+   * **不是另插一条**：完成结果只存这一条 inbox 条目（单一真相源，杜绝「工具返回一次 +
+   * inbox 又插一次」双份）。**kind 无关**：bash/ask 共享同一机制。
    *
    * 占位是 quiet（结果正文由模型自己 read 拉，不直投成 run input），故唤醒走
    * {@link scheduleInboxWake}（摘要唤醒）而非队头直投。忙 / 无 body 时唤醒返回 false，但结果
    * 已落 inbox unread —— 下一次 run 的 inbox notice hook 照样 surfaced，结果不丢。
    * 返回是否更新成功（无占位 = false ⇒ 调用方退回 admit 旧路径）。
    */
-  async completeBashJob(meta: {
+  async completeAsyncJob(meta: {
     jobId: string;
     sessionId: string;
     status: 'done' | 'failed';
     content: string;
-    exitCode?: number | null;
     endedAt?: number;
+    payload?: Record<string, unknown>;
   }): Promise<boolean> {
     await this.ready;
     const inbox = this.inbox;
     if (inbox === undefined) return false;
     const record = this.registry.resolve(meta.sessionId);
     if (record === undefined) return false;
-    const updated = inbox.updateBashJob(record.id, meta.jobId, {
+    const updated = inbox.updateAsyncJob(record.id, meta.jobId, {
       status: meta.status,
       text: meta.content,
-      ...(meta.exitCode !== undefined ? { exit_code: meta.exitCode } : {}),
+      ...(meta.payload !== undefined ? { payload: meta.payload } : {}),
       ...(meta.endedAt !== undefined ? { ended_at: meta.endedAt } : {}),
     });
     if (!updated) return false;
@@ -3927,8 +3930,8 @@ export class AgentServiceImpl implements AgentService {
        */
       from_name?: string;
       text?: string;
-      /** bash 作业占位元数据（q-async-bash-viz additive）：渲染侧据此画作业卡。 */
-      bash_job?: InboxBashJobMeta;
+      /** 异步作业占位元数据（q-async-bash-viz additive，kind 无关）：渲染侧按 kind 画作业卡。 */
+      async_job?: InboxAsyncJobMeta;
     }[];
   } {
     const store = this.inbox;
@@ -3943,13 +3946,13 @@ export class AgentServiceImpl implements AgentService {
     const sessionId = options.sessionId;
     const entries = listed.messages
       // 归属过滤放在服务端：调用方（条带）只拿得到自己那一份，不需要在客户端猜。
-      // bash 作业占位是 quiet（无条目级 session_id，避免重启重投），归属在 bash_job 元数据里：
-      // 会话视图按它匹配，作业卡才能出现在发起会话的条带里（q-async-bash-viz）。
+      // 异步作业占位是 quiet（无条目级 session_id，避免重启重投），归属在 async_job 元数据里：
+      // 会话视图按它匹配，作业卡才能出现在发起会话的条带里（q-async-bash-viz，kind 无关）。
       .filter(
         (entry) =>
           sessionId === undefined ||
           entry.session_id === sessionId ||
-          entry.bash_job?.session_id === sessionId,
+          entry.async_job?.session_id === sessionId,
       )
       .map((entry) => {
         const text = bodyById.get(entry.id);
@@ -3963,7 +3966,7 @@ export class AgentServiceImpl implements AgentService {
           // 显示名只读透传：条带据此把 `agent:<id>` 读成名字，缺省时前端自己退短 id。
           ...(entry.from_name !== undefined ? { from_name: entry.from_name } : {}),
           ...(text !== undefined ? { text } : {}),
-          ...(entry.bash_job !== undefined ? { bash_job: entry.bash_job } : {}),
+          ...(entry.async_job !== undefined ? { async_job: entry.async_job } : {}),
         };
       });
     // `unread` / `pending` 保持 **agent 维度**（过滤前），它们是收件箱口径，不是会话口径。

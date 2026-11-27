@@ -22,7 +22,7 @@ import type { GatewayClient } from '../../gateway/client';
 import type { AgentInboxEntry } from '../../gateway/types';
 import { t } from '../../i18n';
 import { canUnhold, HUMAN_SOURCE, shortSenderId } from '../chat/pending-strip';
-import { BashJobCard } from './BashJobCard';
+import { AsyncJobCard } from './AsyncJobCard';
 
 export function InboxRow({
   entry,
@@ -57,10 +57,10 @@ export function InboxRow({
   onUnhold: (messageId: string) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
-  // bash 作业占位回调卡（q-async-bash-viz）：专属渲染（科技蓝 running / 绿 done / 红 failed
-  // + 命令片段 + 跳秒 + log tail），不走通用消息卡。无 client 时退回通用卡（至少显示摘要）。
-  if (entry.bash_job !== undefined && client !== undefined) {
-    return <BashJobCard entry={entry} client={client} />;
+  // 异步作业占位回调卡（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派专属渲染
+  // （bash 科技蓝命令卡 + log tail；ask 未来问题卡），不走通用消息卡。无 client 时退回通用卡。
+  if (entry.async_job !== undefined && client !== undefined) {
+    return <AsyncJobCard entry={entry} client={client} />;
   }
   const human = entry.from === HUMAN_SOURCE;
   const sessionId = entry.session_id;

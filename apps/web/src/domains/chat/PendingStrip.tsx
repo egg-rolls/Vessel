@@ -74,7 +74,7 @@ import type {
   AgentRecallResponse,
 } from '../../gateway/types';
 import { t } from '../../i18n';
-import { BashJobCard } from '../inbox/BashJobCard';
+import { AsyncJobCard } from '../inbox/AsyncJobCard';
 import { errorMessage } from './errors';
 import {
   claimedEntryIdOf,
@@ -144,7 +144,7 @@ function toEntry(entry: AgentInboxEntry): PendingStripEntry {
     // 身份行要读名字：服务端在入队时存下的发送者显示名，原样带到条带上。
     ...(entry.from_name !== undefined ? { from_name: entry.from_name } : {}),
     // bash 作业占位元数据（q-async-bash-viz）：条带据此用专属作业卡渲染。
-    ...(entry.bash_job !== undefined ? { bash_job: entry.bash_job } : {}),
+    ...(entry.async_job !== undefined ? { async_job: entry.async_job } : {}),
   };
 }
 
@@ -553,7 +553,7 @@ export function PendingStrip({
           !claimed.has(entry.message_id) &&
           !sent.has(entry.message_id) &&
           // bash 作业占位走专属沉底卡（jobRows），不进通用排队分组（q-async-bash-viz）。
-          entry.bash_job === undefined,
+          entry.async_job === undefined,
       )
       .map((entry) => ({
         entry: toEntry(entry),
@@ -575,7 +575,7 @@ export function PendingStrip({
     const sent = new Set(sentMessageIds);
     return entries.filter(
       (entry) =>
-        entry.bash_job !== undefined &&
+        entry.async_job !== undefined &&
         !claimed.has(entry.message_id) &&
         !sent.has(entry.message_id),
     );
@@ -1156,12 +1156,13 @@ export function PendingStrip({
                   })}
                 </ul>
               </div>
-              {/* bash 作业占位卡沉底（q-async-bash-viz）：running 科技蓝 / done 绿 / failed 红，
-                  不参与同源折叠，随条带开合。结果正文由模型 inbox read 取走（单一真相源）。 */}
+              {/* 异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派
+                  （bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
+                  结果正文由模型 inbox read 取走（单一真相源）。 */}
               {jobRows.length > 0 && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {jobRows.map((entry) => (
-                    <BashJobCard key={entry.message_id} entry={entry} client={client} />
+                    <AsyncJobCard key={entry.message_id} entry={entry} client={client} />
                   ))}
                 </div>
               )}

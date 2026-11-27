@@ -1705,28 +1705,30 @@ export interface AgentService {
    */
   admit(input: AdmitInput): Promise<AdmitResult>;
   /**
-   * q-async-bash-viz：起 bash 作业时往 inbox 插一条 running 占位回调卡（不可消费 / 沉底）。
+   * q-async-bash-viz：起异步作业时往 inbox 插一条 running 占位回调卡（不可消费 / 沉底，
+   * **kind 无关通用机制**；bash 首个消费者，ask 未来复用）。kind 专属细节放 payload。
    * 返回是否插入成功（无 inbox / 无成员 = false ⇒ 完成退回旧 admit 投递路径）。
    */
-  insertBashJobPlaceholder(meta: {
+  insertAsyncPlaceholder(meta: {
+    kind: string;
     jobId: string;
     sessionId: string;
-    command: string;
-    pid?: number;
     startedAt: number;
-    logPath: string;
+    payload?: Record<string, unknown>;
+    summary?: string;
   }): Promise<boolean>;
   /**
-   * q-async-bash-viz：bash 作业完成 —— 按 jobId 原位更新占位（running→done/failed + 填结果
-   * 正文 + 唤醒读取），不另插一条（单一真相源）。返回是否更新成功（无占位 = false ⇒ 退回 admit）。
+   * q-async-bash-viz：异步作业完成 —— 按 jobId 原位更新占位（running→done/failed + 填结果
+   * 正文 + 合并 payload + 唤醒读取），不另插一条（单一真相源，kind 无关）。
+   * 返回是否更新成功（无占位 = false ⇒ 退回 admit）。
    */
-  completeBashJob(meta: {
+  completeAsyncJob(meta: {
     jobId: string;
     sessionId: string;
     status: 'done' | 'failed';
     content: string;
-    exitCode?: number | null;
     endedAt?: number;
+    payload?: Record<string, unknown>;
   }): Promise<boolean>;
   /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
   bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
@@ -1758,14 +1760,12 @@ export interface AgentService {
       session_id?: string;
       from_name?: string;
       text?: string;
-      /** bash 作业占位元数据（q-async-bash-viz additive）：渲染侧据此画作业卡。 */
-      bash_job?: {
+      /** 异步作业占位元数据（q-async-bash-viz additive，kind 无关）：渲染侧按 kind 画作业卡。 */
+      async_job?: {
         job_id: string;
+        kind: string;
         status: 'running' | 'done' | 'failed';
-        command?: string;
-        pid?: number;
-        exit_code?: number | null;
-        log_path?: string;
+        payload?: Record<string, unknown>;
         started_at: number;
         ended_at?: number;
         session_id?: string;

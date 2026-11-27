@@ -155,16 +155,16 @@ export interface AgentInboxEntry {
   /** 仅当请求带 `message_ids` 且命中时存在（peek 正文，不改状态）。 */
   text?: string;
   /**
-   * bash 作业占位回调元数据（q-async-bash-viz additive）：有它 = 这是一条异步 bash 作业卡。
-   * running 科技蓝占位（不可消费 / 沉底）；done 绿 / failed 红 + log tail。缺省 = 普通消息。
+   * 异步作业占位回调元数据（q-async-bash-viz additive，kind 无关）：有它 = 这是一条异步作业卡。
+   * running 占位（不可消费 / 沉底）；done/failed 转可消费。渲染层按 kind 分派专属卡
+   * （AsyncJobCard）：bash→科技蓝命令卡 + log tail；ask→未来问题卡。缺省 = 普通消息。
    */
-  bash_job?: {
+  async_job?: {
     job_id: string;
+    kind: string;
     status: 'running' | 'done' | 'failed';
-    command?: string;
-    pid?: number;
-    exit_code?: number | null;
-    log_path?: string;
+    /** kind 专属载荷（bash={command,pid,exit_code,log_path}；ask={question,...}）。 */
+    payload?: Record<string, unknown>;
     started_at: number;
     ended_at?: number;
     session_id?: string;

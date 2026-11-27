@@ -1056,13 +1056,13 @@ export const messages = {
   'inbox.unholdRejected': '服务端没有解除 hold，已重读对齐（这条可能已经不在了）',
   'inbox.unholdFailed': '取消 hold 失败：{detail}',
   // 异步 bash 作业占位回调卡（q-async-bash-viz）
-  'inbox.bashJob.running': '运行中',
-  'inbox.bashJob.done': '已完成',
-  'inbox.bashJob.failed': '失败',
-  'inbox.bashJob.logShow': '查看日志',
-  'inbox.bashJob.logHide': '收起日志',
-  'inbox.bashJob.logLoading': '正在读取日志…',
-  'inbox.bashJob.logEmpty': '（日志为空）',
+  'inbox.asyncJob.running': '运行中',
+  'inbox.asyncJob.done': '已完成',
+  'inbox.asyncJob.failed': '失败',
+  'inbox.asyncJob.logShow': '查看日志',
+  'inbox.asyncJob.logHide': '收起日志',
+  'inbox.asyncJob.logLoading': '正在读取日志…',
+  'inbox.asyncJob.logEmpty': '（日志为空）',
 
   // Teams（跨节点）
   'teams.title': '团队',

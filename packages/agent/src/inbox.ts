@@ -136,7 +136,7 @@ export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDeliv
 }
 
 /**
- * 异步 bash 作业的占位回调元数据（q-async-bash-viz，additive）。
+ * 异步作业的**通用**占位回调元数据（q-async-bash-viz，additive；机制层 kind 无关）。
  *
  * 灵魂出窍复原：起作业时往 inbox 插一条**占位卡**（`status:'running'`），作业完成时
  * **按 job_id 原位更新同一条目**（running→done/failed + 填结果正文 + 转可消费），不是另插
@@ -147,21 +147,28 @@ export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDeliv
  * 在 list 里**沉底**（pinned-bottom）；done/failed 后回到正常可读队列（仍可 read 消费，
  * 但 `quiet` 留档语义保证它不会被当成 run input 直投 —— 唤醒读取，正文由模型自己拉）。
  *
- * 缺省（老条目 / 非 bash 作业）= 无此字段，照常加载、照常消费，零回归。
+ * **通用解耦**：占位行为（不可消费 / 沉底 / 原位复原 / 防双真相 / 不计 unread）全部
+ * **kind 无关**。`kind` 是消费者类别扩展点 —— `'bash'` 首个消费者，`'ask'` 未来消费者
+ * 复用同一机制，无需再改 inbox 核心。kind 专属细节放 `payload`（机制层不解释，只透传 /
+ * 合并）：bash = {command, pid, exit_code, log_path}；ask = {question, options, ...}。
+ *
+ * 缺省（老条目 / 非异步作业）= 无此字段，照常加载、照常消费，零回归。
  */
-export interface InboxBashJobMeta {
-  /** 作业 id（与 basic-tools 的 job id 同源；原位更新的定位键）。 */
+export interface InboxAsyncJobMeta {
+  /** 作业 id（消费者侧 job id 同源；原位更新的定位键）。 */
   job_id: string;
-  /** 生命周期状态：running 占位不可消费；done/failed 转可消费。 */
+  /**
+   * 消费者类别（扩展点，机制层不解释）：`'bash'` 首个消费者；`'ask'` 未来；其余字符串
+   * 预留。渲染层按 kind 分派专属卡（AsyncJobCard），inbox 核心只认 status。
+   */
+  kind: string;
+  /** 生命周期状态：running 占位不可消费；done/failed 转可消费（kind 无关）。 */
   status: 'running' | 'done' | 'failed';
-  /** 命令片段（截断，展示用；全文在日志）。 */
-  command?: string;
-  /** 进程 pid（展示 / 诊断用）。 */
-  pid?: number;
-  /** 退出码（done/failed 时填；null = 被信号杀）。 */
-  exit_code?: number | null;
-  /** 日志落盘路径（log tail 按钮据此读）。 */
-  log_path?: string;
+  /**
+   * kind 专属载荷（机制层只当不透明 record 透传 / 合并，不校验内部形状 —— 那是消费者
+   * 与渲染层的契约）：bash = {command, pid, exit_code, log_path}；ask = {question, ...}。
+   */
+  payload?: Record<string, unknown>;
   /** 起作业时刻（ms）。 */
   started_at: number;
   /** 收口时刻（ms；done/failed 时填）。 */
@@ -170,9 +177,9 @@ export interface InboxBashJobMeta {
   session_id?: string;
 }
 
-/** 一条 inbox 条目是否是**仍在跑**的 bash 作业占位（不可消费 / 沉底）。 */
-export function isRunningBashJob(message: { bash_job?: InboxBashJobMeta }): boolean {
-  return message.bash_job?.status === 'running';
+/** 一条 inbox 条目是否是**仍在跑**的异步作业占位（不可消费 / 沉底；kind 无关）。 */
+export function isRunningAsyncJob(message: { async_job?: InboxAsyncJobMeta }): boolean {
+  return message.async_job?.status === 'running';
 }
 
 export interface StoredInboxMessage {
@@ -222,10 +229,10 @@ export interface StoredInboxMessage {
    */
   from_name?: string;
   /**
-   * 异步 bash 作业占位回调元数据（q-async-bash-viz，additive）：有它 = 这是一条 bash
+   * 异步作业占位回调元数据（q-async-bash-viz，additive，kind 无关）：有它 = 这是一条异步
    * 作业卡（running 占位不可消费 / 沉底；done/failed 转可消费）。缺省 = 普通消息。
    */
-  bash_job?: InboxBashJobMeta;
+  async_job?: InboxAsyncJobMeta;
 }
 
 export interface AgentInboxEntryInput {
@@ -248,8 +255,8 @@ export interface AgentInboxEntryInput {
    * 没有名字（人类 / 系统 / 联邦地址 / 老调用方），条带渲染时退化成短 id。
    */
   from_name?: string;
-  /** 异步 bash 作业占位元数据（可缺省）；起作业时随占位卡写入。 */
-  bash_job?: InboxBashJobMeta;
+  /** 异步作业占位元数据（可缺省）；起作业时随占位卡写入。 */
+  async_job?: InboxAsyncJobMeta;
 }
 
 export interface AgentInboxListEntry {
@@ -276,8 +283,8 @@ export interface AgentInboxListEntry {
    * （8 位 + `…`），**绝不把完整 UUID 摆到卡头**。
    */
   from_name?: string;
-  /** 异步 bash 作业占位元数据（只读透传）：渲染侧据此画作业卡（running/done/failed）。 */
-  bash_job?: InboxBashJobMeta;
+  /** 异步作业占位元数据（只读透传）：渲染侧据此画作业卡（running/done/failed）。 */
+  async_job?: InboxAsyncJobMeta;
 }
 
 export interface AgentInboxReadSelection {
@@ -350,7 +357,7 @@ export interface AgentInboxClaimSkip {
   id: string;
   /**
    * `not_found`：id 不在库里（含损坏的收件箱）；`consumed`：这条早就被拿走了；
-   * `pending`：仍在跑的 bash 作业占位（还没结果，不可认领）。
+   * `pending`：仍在跑的 异步作业占位（还没结果，不可认领）。
    */
   reason: 'not_found' | 'consumed' | 'pending';
 }
@@ -467,18 +474,19 @@ export interface AgentInboxPort {
    */
   markConsumed(agentId: string, ids: readonly string[], sessionId: string): Promise<void>;
   /**
-   * 按 job_id **原位更新** bash 作业占位（q-async-bash-viz，单一真相源）：running→done/failed，
-   * 填结果正文（重算 summary）+ exit_code / ended_at。不另插条目 —— 完成结果只存这一条。
-   * 找不到对应占位（未起过 / 已被裁）返回 false（调用方据此退回旧投递路径，不丢结果）。
-   * 更新后条目转可消费（done/failed 离开 running 排除集），发 `updated` 变更帧。
+   * 按 job_id **原位更新**异步作业占位（q-async-bash-viz，单一真相源，kind 无关）：
+   * running→done/failed，填结果正文（重算 summary）+ 合并 kind 专属 payload + ended_at。
+   * 不另插条目 —— 完成结果只存这一条。找不到对应占位（未起过 / 已被裁）返回 false
+   * （调用方据此退回旧投递路径，不丢结果）。更新后条目转可消费（done/failed 离开 running
+   * 排除集），发 `updated` 变更帧。`payload` 浅合并进既有 payload（机制层不解释内部字段）。
    */
-  updateBashJob(
+  updateAsyncJob(
     agentId: string,
     jobId: string,
     patch: {
       status: 'done' | 'failed';
       text?: string;
-      exit_code?: number | null;
+      payload?: Record<string, unknown>;
       ended_at?: number;
     },
   ): boolean;
@@ -553,7 +561,7 @@ export type AgentInboxChangeReason =
   | 'consumed'
   | 'claimed'
   | 'discarded'
-  /** bash 作业占位原位更新（running→done/failed + 填结果正文；q-async-bash-viz）。 */
+  /** 异步作业占位原位更新（running→done/failed + 填结果正文；q-async-bash-viz）。 */
   | 'updated';
 
 /** 一次 mutation 的变更摘要（触发器不读它，数据永远来自那次 RPC；诊断 / 未来细粒度 UI 用）。 */
@@ -617,29 +625,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * bash 作业占位元数据的加载校验（additive）：缺省合法（普通消息）；有它就必须是合法形状
- * （job_id 非空串 + status 三态之一 + started_at 有限数），其余字段类型不符按损坏处理。
- * 与其余字段同口径：不猜类型、不做半新半旧的内存。
+ * 异步作业占位元数据的加载校验（additive，kind 无关）：缺省合法（普通消息）；有它就必须是
+ * 合法形状（job_id 非空串 + kind 非空串 + status 三态之一 + started_at 有限数）。`payload`
+ * 只校验「是 record」（kind 专属内部形状是消费者 / 渲染层的契约，机制层不解释）。其余字段
+ * 类型不符按损坏处理。与其余字段同口径：不猜类型、不做半新半旧的内存。
  */
-function isInboxBashJobMeta(value: unknown): value is InboxBashJobMeta {
+function isInboxAsyncJobMeta(value: unknown): value is InboxAsyncJobMeta {
   if (!isRecord(value)) return false;
   if (typeof value.job_id !== 'string' || value.job_id === '') return false;
+  if (typeof value.kind !== 'string' || value.kind === '') return false;
   if (value.status !== 'running' && value.status !== 'done' && value.status !== 'failed') {
     return false;
   }
   if (typeof value.started_at !== 'number' || !Number.isFinite(value.started_at)) return false;
-  if (value.command !== undefined && typeof value.command !== 'string') return false;
-  if (value.pid !== undefined && (typeof value.pid !== 'number' || !Number.isFinite(value.pid))) {
-    return false;
-  }
-  if (
-    value.exit_code !== undefined &&
-    value.exit_code !== null &&
-    (typeof value.exit_code !== 'number' || !Number.isFinite(value.exit_code))
-  ) {
-    return false;
-  }
-  if (value.log_path !== undefined && typeof value.log_path !== 'string') return false;
+  if (value.payload !== undefined && !isRecord(value.payload)) return false;
   if (
     value.ended_at !== undefined &&
     (typeof value.ended_at !== 'number' || !Number.isFinite(value.ended_at))
@@ -650,19 +649,14 @@ function isInboxBashJobMeta(value: unknown): value is InboxBashJobMeta {
   return true;
 }
 
-/** 归一为内存形状：只保留合法字段（手改文件带进的半成品形状逐字段丢弃）。 */
-function cloneBashJob(meta: InboxBashJobMeta): InboxBashJobMeta {
+/** 归一为内存形状：只保留合法字段；payload 当不透明 record 浅拷贝（机制层不解释内部）。 */
+function cloneAsyncJob(meta: InboxAsyncJobMeta): InboxAsyncJobMeta {
   return {
     job_id: meta.job_id,
+    kind: meta.kind,
     status: meta.status,
     started_at: meta.started_at,
-    ...(typeof meta.command === 'string' ? { command: meta.command } : {}),
-    ...(typeof meta.pid === 'number' && Number.isFinite(meta.pid) ? { pid: meta.pid } : {}),
-    ...(meta.exit_code === null ||
-    (typeof meta.exit_code === 'number' && Number.isFinite(meta.exit_code))
-      ? { exit_code: meta.exit_code }
-      : {}),
-    ...(typeof meta.log_path === 'string' ? { log_path: meta.log_path } : {}),
+    ...(isRecord(meta.payload) ? { payload: { ...meta.payload } } : {}),
     ...(typeof meta.ended_at === 'number' && Number.isFinite(meta.ended_at)
       ? { ended_at: meta.ended_at }
       : {}),
@@ -703,8 +697,8 @@ function isStoredInboxMessage(value: unknown): value is StoredInboxMessage {
   // 不因为一条坏引用把整个收件箱判成损坏）。
   if (value.refs !== undefined && !Array.isArray(value.refs)) return false;
   if (value.summary !== undefined && typeof value.summary !== 'string') return false;
-  // bash 作业占位元数据 additive：缺省 = 普通消息；有它就必须是合法形状。
-  if (value.bash_job !== undefined && !isInboxBashJobMeta(value.bash_job)) return false;
+  // 异步作业占位元数据 additive：缺省 = 普通消息；有它就必须是合法形状。
+  if (value.async_job !== undefined && !isInboxAsyncJobMeta(value.async_job)) return false;
   return true;
 }
 
@@ -740,7 +734,7 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
     ...(message.quiet === true ? { quiet: true as const } : {}),
     ...(fromName !== undefined ? { from_name: fromName } : {}),
     ...(refs.length > 0 ? { refs } : {}),
-    ...(message.bash_job !== undefined ? { bash_job: cloneBashJob(message.bash_job) } : {}),
+    ...(message.async_job !== undefined ? { async_job: cloneAsyncJob(message.async_job) } : {}),
   };
 }
 
@@ -835,8 +829,8 @@ export class AgentInboxStore implements AgentInboxPort {
       ...(delivery === 'quiet' ? { quiet: true as const } : {}),
       ...(fromName !== undefined ? { from_name: fromName } : {}),
       ...(refs.length > 0 ? { refs } : {}),
-      // bash 作业占位元数据随条目落盘（running 占位不可消费 / 沉底；完成时原位更新）。
-      ...(message.bash_job !== undefined ? { bash_job: cloneBashJob(message.bash_job) } : {}),
+      // 异步作业占位元数据随条目落盘（running 占位不可消费 / 沉底；完成时原位更新）。
+      ...(message.async_job !== undefined ? { async_job: cloneAsyncJob(message.async_job) } : {}),
     });
     this.prune(state);
     void this.enqueueWrite(state);
@@ -908,7 +902,7 @@ export class AgentInboxStore implements AgentInboxPort {
     const includeHeld = options?.includeHeld === true;
     const selected = includeHeld
       ? state.messages.filter(
-          (message) => message.status === 'unread' && !isRunningBashJob(message),
+          (message) => message.status === 'unread' && !isRunningAsyncJob(message),
         )
       : readable;
     const toEntry = (message: StoredInboxMessage): AgentInboxListEntry => ({
@@ -922,14 +916,15 @@ export class AgentInboxStore implements AgentInboxPort {
       ...(message.session_id !== undefined ? { session_id: message.session_id } : {}),
       // 显示名同属只读透传：条带身份行据此显示 `agent:<name>` 而不是一串 UUID。
       ...(message.from_name !== undefined ? { from_name: message.from_name } : {}),
-      // bash 作业占位元数据只读透传：渲染侧据此画作业卡（running/done/failed）。
-      ...(message.bash_job !== undefined ? { bash_job: cloneBashJob(message.bash_job) } : {}),
+      // 异步作业占位元数据只读透传：渲染侧据此画作业卡（running/done/failed）。
+      ...(message.async_job !== undefined ? { async_job: cloneAsyncJob(message.async_job) } : {}),
     });
     const messages = selected.map(toEntry);
-    // running bash 作业占位**沉底**（pinned-bottom）：不计 unread（模型还读不到），但要在
+    // running 异步作业占位**沉底**（pinned-bottom）：不计 unread（模型还读不到），但要在
     // 列表里可见（科技蓝占位卡）。done/failed 后回到上面的正常队列（按插入序）。
     for (const message of state.messages) {
-      if (message.status === 'unread' && isRunningBashJob(message)) messages.push(toEntry(message));
+      if (message.status === 'unread' && isRunningAsyncJob(message))
+        messages.push(toEntry(message));
     }
     return { ...this.counts(state), messages };
   }
@@ -1008,8 +1003,8 @@ export class AgentInboxStore implements AgentInboxPort {
         skipped.push({ id, reason: 'consumed' });
         continue;
       }
-      // running bash 作业占位还没结果，不可认领（与 read 跳过同口径）。
-      if (isRunningBashJob(message)) {
+      // running 异步作业占位还没结果，不可认领（与 read 跳过同口径）。
+      if (isRunningAsyncJob(message)) {
         skipped.push({ id, reason: 'pending' });
         continue;
       }
@@ -1037,26 +1032,29 @@ export class AgentInboxStore implements AgentInboxPort {
     };
   }
 
-  updateBashJob(
+  updateAsyncJob(
     agentId: string,
     jobId: string,
     patch: {
       status: 'done' | 'failed';
       text?: string;
-      exit_code?: number | null;
+      payload?: Record<string, unknown>;
       ended_at?: number;
     },
   ): boolean {
     const state = this.stateFor(agentId);
     if (!state.available) return false;
-    const message = state.messages.find((entry) => entry.bash_job?.job_id === jobId);
+    const message = state.messages.find((entry) => entry.async_job?.job_id === jobId);
     // 只更新仍在跑的占位：已收口（done/failed）/ 已消费 / 不存在都不重复更新（幂等）。
-    if (message === undefined || message.bash_job === undefined) return false;
-    if (message.bash_job.status !== 'running') return false;
-    message.bash_job = {
-      ...message.bash_job,
+    if (message === undefined || message.async_job === undefined) return false;
+    if (message.async_job.status !== 'running') return false;
+    message.async_job = {
+      ...message.async_job,
       status: patch.status,
-      ...(patch.exit_code !== undefined ? { exit_code: patch.exit_code } : {}),
+      // kind 专属 payload 浅合并（机制层不解释内部字段；bash 填 exit_code 等）。
+      ...(patch.payload !== undefined
+        ? { payload: { ...message.async_job.payload, ...patch.payload } }
+        : {}),
       ...(patch.ended_at !== undefined ? { ended_at: patch.ended_at } : {}),
     };
     // 填结果正文（单一真相源）：重算 summary，条目随即离开 running 排除集 → 可消费。
@@ -1213,8 +1211,8 @@ export class AgentInboxStore implements AgentInboxPort {
     let pending = 0;
     for (const message of state.messages) {
       if (message.status !== 'unread') continue;
-      // running bash 作业占位不计 unread（模型还读不到，与 readable 同口径；q-async-bash-viz）。
-      if (isRunningBashJob(message)) continue;
+      // running 异步作业占位不计 unread（模型还读不到，与 readable 同口径；q-async-bash-viz）。
+      if (isRunningAsyncJob(message)) continue;
       if (state.held.has(message.id)) pending += 1;
       else unread += 1;
     }
@@ -1224,13 +1222,13 @@ export class AgentInboxStore implements AgentInboxPort {
   /**
    * unread 且未被持有，保持插入顺序。
    *
-   * **running bash 作业占位排除在外**（q-async-bash-viz）：它还没结果，不可被 read 消费 /
+   * **running 异步作业占位排除在外**（q-async-bash-viz）：它还没结果，不可被 read 消费 /
    * 弹出，也不当 run input（inputHead 复用本方法）。done/failed 后回到可读队列。
    */
   private readable(state: AgentInboxState): StoredInboxMessage[] {
     return state.messages.filter(
       (message) =>
-        message.status === 'unread' && !state.held.has(message.id) && !isRunningBashJob(message),
+        message.status === 'unread' && !state.held.has(message.id) && !isRunningAsyncJob(message),
     );
   }
 
@@ -1238,7 +1236,7 @@ export class AgentInboxStore implements AgentInboxPort {
   private visible(state: AgentInboxState, includeHeld: boolean): StoredInboxMessage[] {
     if (!includeHeld) return this.readable(state);
     return state.messages.filter(
-      (message) => message.status === 'unread' && !isRunningBashJob(message),
+      (message) => message.status === 'unread' && !isRunningAsyncJob(message),
     );
   }
 

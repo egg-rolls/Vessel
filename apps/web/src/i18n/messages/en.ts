@@ -1110,13 +1110,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
     'The server did not release the hold; re-read to align (the message may already be gone)',
   'inbox.unholdFailed': 'Failed to release hold: {detail}',
   // Async bash job placeholder callback card (q-async-bash-viz)
-  'inbox.bashJob.running': 'Running',
-  'inbox.bashJob.done': 'Done',
-  'inbox.bashJob.failed': 'Failed',
-  'inbox.bashJob.logShow': 'View log',
-  'inbox.bashJob.logHide': 'Hide log',
-  'inbox.bashJob.logLoading': 'Loading log…',
-  'inbox.bashJob.logEmpty': '(log is empty)',
+  'inbox.asyncJob.running': 'Running',
+  'inbox.asyncJob.done': 'Done',
+  'inbox.asyncJob.failed': 'Failed',
+  'inbox.asyncJob.logShow': 'View log',
+  'inbox.asyncJob.logHide': 'Hide log',
+  'inbox.asyncJob.logLoading': 'Loading log…',
+  'inbox.asyncJob.logEmpty': '(log is empty)',
 
   // Teams (cross-node)
   'teams.title': 'Teams',

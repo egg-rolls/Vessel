@@ -43,10 +43,7 @@ import {
 
 /** 装配依赖：admit + identify + 占位插入 / 原位完成四个口（不把整个 AgentService 契约绑进来）。 */
 export type BashJobDeliveryDeps = {
-  service: Pick<
-    AgentService,
-    'admit' | 'identify' | 'insertBashJobPlaceholder' | 'completeBashJob'
-  >;
+  service: Pick<AgentService, 'admit' | 'identify' | 'insertAsyncPlaceholder' | 'completeAsyncJob'>;
   logger?: Logger;
 };
 
@@ -63,13 +60,18 @@ export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
   // 起作业占位（fire-and-forget）：插入失败只记日志，完成时退回 admit 旧路径。
   const unregisterStart = registerAsyncBashStartSink(async (start: AsyncBashJobStart) => {
     try {
-      const inserted = await deps.service.insertBashJobPlaceholder({
+      // bash 是通用占位机制的首个消费者（kind='bash'）；命令/pid/日志路径放 kind 专属 payload。
+      const inserted = await deps.service.insertAsyncPlaceholder({
+        kind: 'bash',
         jobId: start.jobId,
         sessionId: start.sessionId,
-        command: start.command,
         startedAt: start.startedAt,
-        logPath: start.logPath,
-        ...(start.pid !== undefined ? { pid: start.pid } : {}),
+        summary: `[bash job ${start.jobId}] running: ${start.command}`,
+        payload: {
+          command: start.command,
+          log_path: start.logPath,
+          ...(start.pid !== undefined ? { pid: start.pid } : {}),
+        },
       });
       deps.logger?.debug('agent.bash_job.placeholder', {
         job_id: start.jobId,
@@ -98,7 +100,7 @@ export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
       inflight += 1;
       try {
         // 先试原位更新占位（单一真相源）：成功 = 结果已落 inbox + 唤醒读取，标 announced。
-        const filled = await deps.service.completeBashJob({
+        const filled = await deps.service.completeAsyncJob({
           jobId: completion.jobId,
           sessionId: completion.sessionId,
           status:
@@ -106,8 +108,9 @@ export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
               ? 'failed'
               : 'done',
           content: completion.content,
-          exitCode: completion.exitCode,
           endedAt: Date.now(),
+          // kind 专属 payload：bash 填退出码（机制层不解释，原位合并进占位 payload）。
+          payload: { exit_code: completion.exitCode },
         });
         if (filled) {
           deps.logger?.debug('agent.bash_job.placeholder_filled', {

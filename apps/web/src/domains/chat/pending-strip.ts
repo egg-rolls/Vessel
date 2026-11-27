@@ -67,16 +67,14 @@ export interface PendingStripEntry {
    */
   from_name?: string;
   /**
-   * bash 作业占位元数据（q-async-bash-viz additive）：有它 = 异步 bash 作业卡，条带用专属
-   * 渲染（BashJobCard）而非通用排队卡。缺省 = 普通消息。折叠 / 排序不看它。
+   * 异步作业占位元数据（q-async-bash-viz additive，kind 无关）：有它 = 异步作业卡，条带用
+   * 专属渲染（AsyncJobCard 按 kind 分派）而非通用排队卡。缺省 = 普通消息。折叠 / 排序不看它。
    */
-  bash_job?: {
+  async_job?: {
     job_id: string;
+    kind: string;
     status: 'running' | 'done' | 'failed';
-    command?: string;
-    pid?: number;
-    exit_code?: number | null;
-    log_path?: string;
+    payload?: Record<string, unknown>;
     started_at: number;
     ended_at?: number;
     session_id?: string;
