@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
 import { useToast } from '../../components/ToastProvider';
 import { Button, Textarea } from '../../components/ui';
+import { formatBytes } from '../../format';
 import { GatewayHttpError } from '../../gateway/node';
 import type {
   AttachmentListEntry,
@@ -97,16 +98,6 @@ function refKindForPath(target: string): MessageRef['kind'] {
   if (IMAGE_EXTENSIONS.has(extension)) return 'image';
   if (DOCUMENT_EXTENSIONS.has(extension)) return 'document';
   return 'file';
-}
-
-/** 字节数 → 紧凑文案（面板里的次要信息，不追求精度）。 */
-function formatBytes(bytes: number | undefined): string {
-  if (bytes === undefined) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  const kib = bytes / 1024;
-  if (kib < 1024) return `${kib < 10 ? kib.toFixed(1) : Math.round(kib)} KiB`;
-  const mib = kib / 1024;
-  return `${mib < 10 ? mib.toFixed(1) : Math.round(mib)} MiB`;
 }
 
 /** 结果体里的稳定码 → 人话（与 `refsErrorText` 同族，但这里是「列不出来」而不是「被拒」）。 */

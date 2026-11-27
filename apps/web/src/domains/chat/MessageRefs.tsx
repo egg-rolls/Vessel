@@ -147,8 +147,8 @@ function reasonCodeOf(reason: string | undefined): string {
   }
 }
 
-/** 投递状态 → chip 的修饰类（颜色由 CSS 决定；三态各一档）。 */
-function deliveryClass(delivery: ImageDelivery | undefined): string {
+/** 投递状态 → chip 的修饰类（颜色由 CSS 决定；三态各一档）。图片卡复用同一口径。 */
+export function deliveryClass(delivery: ImageDelivery | undefined): string {
   if (delivery === undefined) return 'msg-ref-delivery pending';
   return `msg-ref-delivery ${delivery.status.replace('_', '-')}`;
 }
