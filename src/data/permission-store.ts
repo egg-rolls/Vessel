@@ -25,6 +25,7 @@ import {
   withConfigLock,
   writeUserConfigRoot,
 } from '../../packages/config/src/index';
+import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
 
 /** 存储选项 */
 export interface PermissionStoreOptions {
@@ -135,12 +136,12 @@ function assertToolName(tool: string): string {
 }
 
 /**
- * 缺省强制确认键；与 `resolveRuntimePermission` 的 `?? ['agent.close']` 同源。
- * 键缺失时读回它，避免 Web 首次写盘把默认保护落成 `never_auto_approve: []`。
+ * 从 permission 块读取 never_auto_approve（兼容 camelCase）。
+ *
+ * 缺省强制确认键用 perm-F1 的单一真源 `DEFAULT_NEVER_AUTO_APPROVE`（含 `pii_reveal`，
+ * 与成员 wiring / `resolveRuntimePermission` 同源）。键缺失时读回它，避免 Web 首次
+ * 写盘把默认保护落成 `never_auto_approve: []`。
  */
-const DEFAULT_NEVER_AUTO_APPROVE = ['agent.close'] as const;
-
-/** 从 permission 块读取 never_auto_approve（兼容 camelCase） */
 function readNeverRules(root: Record<string, unknown>): string[] {
   const permission = root.permission;
   // 显式配置（含空数组）优先；只有键缺失才补回运行时默认。
@@ -273,7 +274,7 @@ export async function setAutoApproveRules(
 
 /**
  * 读取两个规则数组（文件 / key 不存在时 autoApprove 为空，neverAutoApprove 返回
- * 运行时默认 `['agent.close']`；显式配置优先）。
+ * 运行时默认 `DEFAULT_NEVER_AUTO_APPROVE`；显式配置优先）。
  */
 export async function readToolPolicies(
   options: PermissionStoreOptions = {},

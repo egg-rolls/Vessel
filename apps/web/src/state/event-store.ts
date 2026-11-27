@@ -149,6 +149,9 @@ export const NOTIFY_INTERVAL_MS = 50;
  *   （`state/agents.ts#reduceAgents`）的终态来源，而成员树是**纯 `entries` 派生**的
  *   ——它没有 `LiveItemStore` 的台账（`closedRuns` / `sessionClosed`）那一层兜底，
  *   终态被总量裁剪挤掉就是「成员永远在跑」，没有任何机制能救回来。
+ * - **成员 run 终态**（q-arch-p0-fixes webui-F2）：`reduceAgents` 同样消费
+ *   `subagent.run.completed/cancelled/failed`（成员 body 的 run 终态，与 delegate
+ *   终态是两条独立来源）；缺了它们，裁剪挤掉终态后成员树同样「永远在跑」。
  */
 export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.started',
@@ -159,6 +162,9 @@ export const RUN_ANCHOR_EVENT_TYPES: ReadonlySet<string> = new Set([
   'subagent.delegate.started',
   'subagent.delegate.completed',
   'subagent.delegate.failed',
+  'subagent.run.completed',
+  'subagent.run.cancelled',
+  'subagent.run.failed',
 ]);
 
 export interface EventMeta {
