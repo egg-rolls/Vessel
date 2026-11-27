@@ -42,6 +42,7 @@ import {
   MAX_INLINE_BYTES,
   TIMELINE_LAYOUT,
   type TimelineBlockEntry,
+  TimelineError,
   type TimelineHole,
   type TimelineHoleDeclarationLine,
   type TimelineManifestLine,
@@ -704,6 +705,43 @@ export async function readNdjsonFileStrict(path: string): Promise<NdjsonReadResu
     size: result.size,
     ...(result.truncateTo !== undefined ? { truncateTo: result.truncateTo } : {}),
   };
+}
+
+/**
+ * 严格读一个 ndjson 文件的**字节区间** `[start, end)`（写路径增量校验专用）。
+ *
+ * 与 {@link readNdjsonFileStrict} 同一套逐行 CRC 校验，但只读指定窗口 —— 调用方必须保证
+ * `start` / `end` 都落在**完整行边界**上（写者拿「已 fsync 的 `walSize`」当右端、上一次
+ * 校验过的行边界当左端）。三条诚实出口，与严格读同口径（绝不把读失败当成空）：
+ *
+ * - `start === end` ⇒ 空结果（没有新增字节，不是读失败）；
+ * - 读不满（文件在读取期间变短 / 打不开）⇒ 抛错，调用方按「本次校验作废」处理；
+ * - 末尾出现半行（`truncateTo`）⇒ 抛错：右端不是 durable 行边界，不猜。
+ *
+ * 存在的理由（jn-F2）：归档过去每次整份 strict 读 `wal.log`（O(会话)，实测 73–90 ms），
+ * 而写者自己知道「上次校验到哪一行边界」——只读新增的那一段就把成本压到 O(增量)。
+ */
+export async function readNdjsonRangeStrict(
+  path: string,
+  start: number,
+  end: number,
+): Promise<NdjsonReadResult> {
+  if (end <= start) return { records: [], invalid: [], size: 0 };
+  const buffer = await readFileWindow(path, start, end - start);
+  if (buffer === undefined) {
+    throw new TimelineError(
+      'timeline_archive_failed',
+      `ndjson range [${String(start)},${String(end)}) unreadable (file shortened during read?)`,
+    );
+  }
+  const result = parseCrcNdjsonBuffer(buffer, validateRecord);
+  if (result.truncateTo !== undefined) {
+    throw new TimelineError(
+      'timeline_archive_failed',
+      'ndjson range ends mid-line (right edge is not a durable line boundary)',
+    );
+  }
+  return { records: result.items, invalid: result.invalid, size: buffer.length };
 }
 
 /**
