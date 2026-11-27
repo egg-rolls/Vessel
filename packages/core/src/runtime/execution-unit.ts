@@ -16,9 +16,11 @@ import {
   ContextWindowExceededError,
   clampAnchorRatio,
   decideProjectionRunMode,
+  effectiveToolResultWhitelist,
   estimateMessagesTokensUpperBound,
   estimateRequestViewTokens,
   estimateTokens,
+  filterWhitelistedToolResults,
   formatCompactionStub,
   measureArchivedToolResults,
   measureToolResultPressure,
@@ -90,6 +92,7 @@ import {
   type ContextCompactedReason,
   DEFAULT_COMPACT_THRESHOLD,
   type PromptContextFingerprint,
+  type ToolResultWhitelistRule,
   type WorkingContext,
 } from '../types/context.js';
 import type { EnvCadence } from '../types/env-cadence.js';
@@ -1045,6 +1048,12 @@ export class ExecutionUnit {
    */
   private readonly envCadence?: (scope: string) => EnvCadence;
   /**
+   * 工具结果压缩白名单（q-tool-result-whitelist）：原样存注入值（undefined = 未配置）。
+   * 消费点（段起点冻结）用 `effectiveToolResultWhitelist` 判定生效规则：
+   * 缺省 ⇒ 内置默认（inbox read + agent read）；显式 [] ⇒ 关闭。
+   */
+  private readonly toolResultWhitelist?: readonly ToolResultWhitelistRule[];
+  /**
    * cadence='run' 的 per-run 首请求守卫：runId → 本 run 已观察过的 scope 集。
    * 环形上限 64（仿 runtime-notice-hook 的 injectedByRun）：长进程不无界增长。
    */
@@ -1074,6 +1083,7 @@ export class ExecutionUnit {
     this.bindingLease = opts.bindingLease;
     this.visionSettings = opts.vision;
     this.envCadence = opts.envCadence;
+    this.toolResultWhitelist = opts.toolResultWhitelist;
     // 缺省走中枢薄封装：级别跟随进程级配置（不再以 VESSEL_DEBUG 定死 debug/noop）。
     this.logger = opts.logger ?? createStderrLogger();
     // 空闲 EU 也必须续租 BindingLease：仅靠 acquireSessionLease/ensureSessionLease
@@ -2053,10 +2063,23 @@ export class ExecutionUnit {
     const declaration = decided.declaration;
     // 集合：`placeholder` 与 `archive_notice` 都按同一套保留预算规划（一个换占位、一个只
     // 登记）；`passthrough` 恒为空集（不读也不改历史）。
-    const ids =
+    // q-tool-result-whitelist：`placeholder` 模式在 plan 之后做**消费侧纯后过滤** ——
+    // 白名单命中的 tool_call_id 不进冻结集合 ⇒ 请求视图永保原文（抗 trim）。
+    // planClearedToolResults / 增量规划器一字不动（确定性/增量/reset 合同保留）；
+    // compaction 的摘要/移除照常（不抗 compaction），落盘永远原文。
+    // `archive_notice` 不过滤：该模式本就不换占位、原文恒可见，归档登记照旧。
+    const planned =
       decided.effective_mode === 'passthrough'
         ? []
         : planClearedToolResults(messages, window.maxTokens ?? 0);
+    const ids =
+      decided.effective_mode === 'placeholder'
+        ? filterWhitelistedToolResults(
+            messages,
+            planned,
+            effectiveToolResultWhitelist(this.toolResultWhitelist),
+          )
+        : planned;
     // 模式先钉到窗口上（此后本段内任何请求读到的都是它）。`archive_notice` 钉 `passthrough`，
     // 理由见 `windowModeOf`：请求视图与体积维度两件事上两者等价。
     setWindowProjectionMode(window, windowModeOf(decided.effective_mode));

@@ -248,6 +248,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.imageTokenBudgetRatio.title': 'Image token budget ratio',
   'settings.item.imageTokenBudgetRatio.desc':
     'Share of the context window reserved for inlined images (0–1, default 0.05). The image count cap is derived from this budget divided by per-image tokens, clamped to the backend safety cap (32). Larger windows allow more images; overflow drops the newest images with a notice to the model. Requires a node restart to apply.',
+  'settings.item.toolResultWhitelist.title': 'Tool result trim whitelist',
+  'settings.item.toolResultWhitelist.desc':
+    'Tool results matching a rule ({tool, action?}) keep their original text in the request view instead of being turned into placeholders (trim-exempt). Segment-boundary compaction still summarizes them as usual. Unset = built-in default (inbox read + agent read); explicit [] = disabled; an explicit list replaces the default. YAML-only (context.tool_result_whitelist); read-only here. Requires a node restart to apply.',
   'settings.dialog.searchPlaceholder':
     'Search settings… (@modified / @plugin:<id> / @local / @user)',
   'settings.dialog.tabUser': 'User',

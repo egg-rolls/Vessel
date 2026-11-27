@@ -60,6 +60,8 @@ export interface LocalRunAdapterOptions {
     maxMessages?: number;
     autoCompact?: boolean;
     compactThreshold?: number;
+    /** q-tool-result-whitelist：缺省 ⇒ core 内置默认；显式 [] ⇒ 关闭。 */
+    toolResultWhitelist?: { tool: string; action?: string }[];
   };
   /** run 终态等待上限；缺省 10 分钟（与 `--connect` 一致） */
   timeoutMs?: number;
