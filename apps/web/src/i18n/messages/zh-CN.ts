@@ -1604,6 +1604,13 @@ export const messages = {
   'chat.message.copied': '已复制',
   'chat.message.edit': '编辑',
   'chat.message.retry': '重试',
+  // 消息引用（q-message-quote）：hover 工具栏动作 / 引用块 / 输入框预览条。
+  'chat.quote.action': '引用',
+  'chat.quote.label': '引用消息',
+  'chat.quote.jump': '跳转到原消息',
+  'chat.quote.remove': '取消引用',
+  'chat.quote.source.user': '用户',
+  'chat.quote.source.assistant': '助手',
   'chat.message.create.editTitle': '编辑消息',
   'chat.message.create.editBody':
     '将以这条消息之前的历史新建一个 session，并把原文放回输入框。当前 session 会保留为只读，历史不会被删除。',

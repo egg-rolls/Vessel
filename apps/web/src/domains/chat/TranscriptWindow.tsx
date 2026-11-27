@@ -211,6 +211,8 @@ export function TranscriptWindow({
   onGoChat,
   onEditMessage,
   onRetryMessage,
+  onQuoteMessage,
+  quoteJumpRef,
   pendingSends,
   onRetryPending,
   onDismissPending,
@@ -308,6 +310,14 @@ export function TranscriptWindow({
   onGoChat: () => void;
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
+  /** 引用一条消息（q-message-quote）；缺省历史消息不渲染「引用」动作。 */
+  onQuoteMessage?: (message: Message) => void;
+  /**
+   * 引用跳转函数的注册槽（q-message-quote）：滚动容器在这一层，输入框预览条在
+   * ChatView 那一层 —— 这里把跳转函数写进槽，预览条点击时调它（与
+   * `pendingNewSessions` 同一「ref 当 prop」做法）。
+   */
+  quoteJumpRef?: { current: ((messageId: string) => void) | undefined };
 }) {
   // q-msg-visibility：消息显示 toggle 读同一份 configStore 快照（与 useChatTranscript
   // 的 visibility 同源）；不经 ChatView props 链，避免与滚动容器改动相互踩踏。
@@ -377,6 +387,37 @@ export function TranscriptWindow({
     entryKeys: indexEntries.map((entry) => entry.key),
     resetKey,
   });
+
+  // 引用块跳转（q-message-quote）：与索引跳转同一套几何（只滚容器自己，不用
+  // scrollIntoView 连带祖先）；落点闪一下底色定位（reduced-motion 不播动画，
+  // 滚动也退瞬时）。锚点 = data-quote-anchor（所有带稳定身份的消息都挂）。
+  const jumpToMessage = useCallback(
+    (messageId: string) => {
+      const element = getElement();
+      if (!element) return;
+      const anchor = element.querySelector<HTMLElement>(
+        `[data-quote-anchor="${CSS.escape(messageId)}"]`,
+      );
+      if (!anchor) return;
+      const top =
+        anchor.getBoundingClientRect().top -
+        element.getBoundingClientRect().top +
+        element.scrollTop -
+        12;
+      const reduced =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      element.scrollTo({ top: Math.max(0, top), behavior: reduced ? 'auto' : 'smooth' });
+      // 重播闪烁：先摘类 + 强制 reflow 再挂类（同一目标连点两次也要闪）。
+      anchor.classList.remove('quote-flash');
+      void anchor.offsetWidth;
+      anchor.classList.add('quote-flash');
+      window.setTimeout(() => anchor.classList.remove('quote-flash'), 1300);
+    },
+    [getElement],
+  );
+  // 注册给输入框预览条（ChatView 持有槽）；渲染期写 ref 是「最新值」模式，无副作用。
+  if (quoteJumpRef !== undefined) quoteJumpRef.current = jumpToMessage;
 
   // 前插锚点：请求前记录 (scrollHeight, scrollTop)，布局落地后按高度差回填 scrollTop。
   // 这样历史消息只会在视口上方长出来，用户看到的行不移动；stickyBottom 的 pinned
@@ -557,6 +598,7 @@ export function TranscriptWindow({
               ts={item.ts}
               entering={isEntering(item.key)}
               refs={item.refs}
+              onJumpQuote={jumpToMessage}
             />
           );
         case 'inbox-read': {
@@ -569,7 +611,14 @@ export function TranscriptWindow({
           //   原始地址吸入展开体首行（formatAddress 按 ui.addressStyle，A2A 卡同款）。
           // 「收件箱取走」框定彻底消失 —— inbox 本身就是收件箱，消息卡只报「谁说的」。
           if (item.source === HUMAN_SOURCE) {
-            return <UserBubble text={item.text} ts={item.ts} entering={isEntering(item.key)} />;
+            return (
+              <UserBubble
+                text={item.text}
+                ts={item.ts}
+                entering={isEntering(item.key)}
+                onJumpQuote={jumpToMessage}
+              />
+            );
           }
           const fixedLabel = fixedSourceLabel(item.source);
           if (fixedLabel !== undefined) {
@@ -648,6 +697,7 @@ export function TranscriptWindow({
               text={item.text}
               streaming={item.streaming}
               entering={isEntering(item.key)}
+              onJumpQuote={jumpToMessage}
               actions={
                 item.text.trim().length > 0 ? (
                   <MessageActions
@@ -775,6 +825,7 @@ export function TranscriptWindow({
       cardsDefaultOpen,
       isEntering,
       copy,
+      jumpToMessage,
       reasoningRuns,
       agentNames,
       verbosity,
@@ -871,6 +922,8 @@ export function TranscriptWindow({
                 renderItem={renderItem}
                 onEditMessage={onEditMessage}
                 onRetryMessage={onRetryMessage}
+                onQuoteMessage={onQuoteMessage}
+                onJumpQuote={jumpToMessage}
               />
             ) : null}
 
@@ -887,6 +940,7 @@ export function TranscriptWindow({
                 pending={pending}
                 onRetry={onRetryPending}
                 onDismiss={onDismissPending}
+                onJumpQuote={jumpToMessage}
               />
             ))}
 

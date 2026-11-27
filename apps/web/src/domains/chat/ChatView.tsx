@@ -10,13 +10,14 @@ import { ResizeHandle } from '../../components/ResizeHandle';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import { useNodes } from '../../gateway/NodeProvider';
-import type { AskUserAnswer, PermissionScope } from '../../gateway/types';
+import type { AskUserAnswer, Message, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { StoredEvent } from '../../state/events';
 import { useRuntimeVisibility } from '../../state/runtime-visibility';
 import { sessionTitle } from '../../state/sessions';
 import { resourceData } from '../../state/useResource';
 import { useAgentStore } from '../../stores/agentStore';
+import { chatDraftKey, useComposerDraftStore } from '../../stores/composerDraftStore';
 import { useAgentInboxRefreshTick } from '../inbox/agent-inbox-refresh';
 import { useNodeNames } from '../nodes/useNodeNames';
 import { useAskCursorPrune } from '../pending/ask-cursor-store';
@@ -37,6 +38,7 @@ import { NodeNamesProvider } from './node-name-context';
 import { PendingStrip } from './PendingStrip';
 import type { PendingSend } from './pending-sends';
 import { ProjectionReadbackProvider } from './projection-readback';
+import { parseQuoteEnvelope } from './quote-ref';
 import { SessionRail } from './SessionRail';
 import type { SessionRefScope } from './session-ref';
 import { TranscriptWindow } from './TranscriptWindow';
@@ -165,6 +167,11 @@ export function ChatView({
 
   // 草稿态不再本地造 session id：首次发送由 `runs.start` 解析 main primary body。
   const pendingNewSessions = useRef(new Set<string>());
+  /**
+   * 引用跳转函数槽（q-message-quote）：滚动容器在 TranscriptWindow 里，输入框
+   * 预览条在这一层 —— TranscriptWindow 把跳转函数写进来，预览条点击时调它。
+   */
+  const quoteJumpRef = useRef<((messageId: string) => void) | undefined>(undefined);
   const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [composerFocus, setComposerFocus] = useState(0);
   const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null);
@@ -407,6 +414,15 @@ export function ChatView({
     },
     [openCreate],
   );
+  // 引用一条消息（q-message-quote）：写草稿槽（预览条出现）+ 聚焦输入框。
+  // 稳定身份：与 edit / retry 同一理由（行级 memo 的 TranscriptMessage）。
+  const handleQuoteMessage = useCallback(
+    (message: Message) => {
+      submitApi.quoteMessage(message);
+      setComposerFocus((value) => value + 1);
+    },
+    [submitApi.quoteMessage],
+  );
 
   /**
    * `sessions.create{from_session_id}` 要求源 session 是当前 primary。
@@ -448,12 +464,34 @@ export function ChatView({
     setCreating(false);
     navigate({ domain: 'chat', sessionId: nextSessionId });
     // 目标会话的槽要显式指定：此时 `selectedId` 还是源会话（`hashchange` 未到）。
-    submitApi.setInputForSession(nextSessionId, target.text);
     if (target.kind === 'edit') {
+      // 编辑引用回复（q-message-quote）：把信封拆回「正文 + 草稿引用」，预览条
+      // 重新出现；不拆的话信封会以原文留在输入框里（也能发，但体验降级）。
+      const lifted = parseQuoteEnvelope(target.text);
+      if (lifted !== null) {
+        submitApi.setInputForSession(nextSessionId, lifted.body);
+        // 信封不带来源角色：按 id 回查源会话历史；查不到按 user（编辑的总是用户消息，
+        // 被引消息多数也是用户消息；来源标识只影响预览条文案，不影响发送）。
+        const quoted =
+          lifted.messageId !== undefined
+            ? transcriptApi.transcriptMessages.find(
+                (message) => message.message_id === lifted.messageId,
+              )
+            : undefined;
+        useComposerDraftStore.getState().setQuote(chatDraftKey(nextSessionId), {
+          ...(lifted.messageId !== undefined ? { messageId: lifted.messageId } : {}),
+          snippet: lifted.snippet,
+          source: quoted?.role === 'assistant' ? 'assistant' : 'user',
+        });
+      } else {
+        submitApi.setInputForSession(nextSessionId, target.text);
+      }
       setComposerFocus((value) => value + 1);
       toast.success(t('chat.message.create.editDone'));
     } else {
       // 先回填再重发：重发失败时原文仍留在输入框。
+      // 重试不拆信封：正文已含引用块，原样重发（submitText 不传 quoteOverride，不叠第二层）。
+      submitApi.setInputForSession(nextSessionId, target.text);
       await submitApi.handleRetry(target.text, nextSessionId);
     }
   };
@@ -641,6 +679,8 @@ export function ChatView({
                     onGoChat={() => navigate({ domain: 'chat' })}
                     onEditMessage={handleEditMessage}
                     onRetryMessage={handleRetryMessage}
+                    onQuoteMessage={handleQuoteMessage}
+                    quoteJumpRef={quoteJumpRef}
                     // 已答提问：服务端 answered 记录按 answered_at 落进时间线（item kind
                     // ask-answered），不再是滚动区末尾的额外一段。子 agent 详情页讲的是另一个
                     // run，那里不画（TranscriptWindow 按 activeAgent 自己断，同失败卡的口径）。
@@ -741,6 +781,9 @@ export function ChatView({
             sessionRefs={submitApi.sessionRefs}
             onRemoveSessionRef={submitApi.removeSessionRef}
             onAddSessionRef={submitApi.addSessionRef}
+            quote={submitApi.quote}
+            onRemoveQuote={submitApi.removeQuote}
+            onJumpQuote={(messageId) => quoteJumpRef.current?.(messageId)}
             currentScope={composerScope}
             sessionId={selectedId ?? undefined}
           />
