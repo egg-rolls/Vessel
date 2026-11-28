@@ -105,7 +105,7 @@ paths: [packages/serve/**, apps/web/src/gateway/**]
 - **需同步文档 = 绑代码叶子**：`kind: current / advisory` 且有代码 `paths`。`paths` = 同步范围，**收窄到事实锚点**（具体文件优先，单一子系统 glob 次之；禁包根/全仓宽 glob）；共享锚点（如 `execution-unit.ts`）允许多叶同挂，各管一个侧面。
 - **guide 排除代码同步**：`kind: guide` 只有 `children`（下层文档相对路径），无 paths、无 churn；正文只导航不落事实（事实在叶子），≤60 行。义务 = 叶子增删时维护 children 登记；`INDEX.md` 即根/目录 guide。导航允许多父，**事实家唯一**。
 - **自绑稳定页（快照类）**：无代码锚点的稳定知识/裁定规则 `paths: [自身]`，churn 恒 0，不需同步不管。`kind: target`、历史容器（`versions/`、`adr/`）与 `specs/`（冻结定稿）同样排除。根 O(1) 文件（AGENTS/README/CHANGELOG）需同步，范围 = 全仓命令/路径/版本事实（无 frontmatter 是设计如此，§3.1）。
-- **同步基线 = 最近一次触碰该文档的 commit**（git 历史是唯一记录；不加字段、不存状态文件）。文档同步 commit 带 `Synced-to: <sha>` trailer，供 `git log --grep=Synced-to -- <doc>` 查验证基线。
+- **同步基线 = 最近一次触碰该文档的 commit**（git 历史是唯一记录；不加字段、不存基线状态文件；语义确认标记 `docs/doc-lag-marks.json` 见 §3.5，非基线机制）。文档同步 commit 带 `Synced-to: <sha>` trailer，供 `git log --grep=Synced-to -- <doc>` 查验证基线。
 - **检测**：`bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all] [--quiet]`。原理 = `git log -1 --format=%h -- <doc>` 取基线 + `git diff <sha>..HEAD -- <paths>` 列变更；churn 只是上界，语义确认与更新判断归人。`treeGaps` 信息性浮现未登记叶子 / children 死链。`--quiet` = 订阅脚本契约（仅滞后清单，无滞后 stdout 全空）。**「确认无需改」标记**（q-subscription-script-p1）：语义确认者把 `{ "<leaf>": { "sha", "reason"(必填), "at" } }` 写入 `docs/doc-lag-marks.json`（扫描集之外，commit 标记不触叶子基线）；doc-sync 双向 ancestor 校验（基线→sha→HEAD）通过后 lag 只数 sha 之后 churn（精确抑制虚高段，非清零）——这是语义确认登记，不是基线状态（基线仍以 git 历史为唯一记录）。
 - **工具分类**：信息性 sync 检测工具（docs-find 类）允许；gate/test/probe 仍禁（宪法第三/四条）。被删的 check-docs 是正确性校验器（断言合规、红绿阻塞）；doc-sync 是 churn 信息辅助（浮现候选、不校验对错、不阻塞、exit 恒 0），不同类——不重造 check-docs，不接 CI / pre-commit。
 - **义务落叶子**：合并某叶子 paths 下代码变更时，同切片同步该叶子或显式向 1 报告滞后由 1 裁决延期；guide 不因代码合并触发；检查点跑 doc-sync 复核。
