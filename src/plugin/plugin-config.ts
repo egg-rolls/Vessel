@@ -325,11 +325,12 @@ function applySkillsLibraryIsolation(
 
 /**
  * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files / health /
- * script（health 源 q-health-subscription；script 源 q-subscription-script），
+ * script / doc-lag / code-heaviness（health 源 q-health-subscription；script 源
+ * q-subscription-script；内置检测器专词 q-subscription-script-p1 案 B），
  * basic-tools → lock / conflict（写协调 producer）。
  */
 const ENV_GRANULARITY_SCOPES: Readonly<Record<string, readonly string[]>> = {
-  'doc-subscription': ['files', 'health', 'script'],
+  'doc-subscription': ['files', 'health', 'script', 'doc-lag', 'code-heaviness'],
   'basic-tools': ['lock', 'conflict'],
 };
 

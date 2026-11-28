@@ -42,9 +42,13 @@ const ENV_CADENCE_TABLE = {
   conflict: 'request',
   files: 'run',
   health: 'run',
-  // 订阅脚本（q-subscription-script）：通用检测脚本订阅的兜底 scope 词（案 B 注册制，
-  // 内置专词 doc-lag / code-heaviness P1 加）；默认 run = 每 run 首请求 kickoff/drain。
+  // 订阅脚本（q-subscription-script）：通用检测脚本订阅的兜底 scope 词（案 B 注册制）；
+  // 默认 run = 每 run 首请求 kickoff/drain。
   script: 'run',
+  // 内置检测器专词（q-subscription-script-p1，案 B）：doc-lag = doc-sync --quiet 文档滞后；
+  // code-heaviness = code-size 厚重候选。专词注册制（非每用户脚本一词），用户脚本共享 script。
+  'doc-lag': 'run',
+  'code-heaviness': 'run',
   context: 'request',
   trim: 'run',
   pii: 'request',
