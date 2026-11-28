@@ -29,11 +29,13 @@ import { createSubscribeTool } from './tool.js';
 export { AUTO_SUBSCRIBE_HOOK, createAutoSubscribeHook } from './auto-sub.js';
 export {
   type DocSubscriptionConfig,
+  isValidScriptName,
+  parseDocSubscriptionConfig,
+  parseScriptSpecs,
   REGISTERED_SCRIPT_SCOPES,
   type ScriptSchedule,
   type ScriptSpec,
 } from './config.js';
-export { isValidScriptName, parseDocSubscriptionConfig, parseScriptSpecs } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
 export {
   describeHealthRev,

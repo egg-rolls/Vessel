@@ -468,10 +468,7 @@ function processScriptEntry(
  * - interval：**真 timer**（ScriptRunner.armInterval，idle 也跑）——hook 检查点不再
  *   惰性发起，这里恒 false；hook 只负责幂等 arm / disarm + drain 已完成结果。
  */
-function scriptKickoffDue(
-  schedule: ScriptSchedule,
-  firstRequestOfRun: boolean,
-): boolean {
+function scriptKickoffDue(schedule: ScriptSchedule, firstRequestOfRun: boolean): boolean {
   if (typeof schedule === 'object') return false; // timer-driven
   if (schedule === 'request') return true;
   return firstRequestOfRun;
@@ -544,8 +541,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // script 检测节奏（同框架）：per-scope（通用兜底词 script + 内置专词 doc-lag /
       // code-heaviness，案 B 注册制，q-subscription-script-p1），缺省 'run'；某词 off ⇒
       // 该词下订阅整段静默（不 kickoff / drain / 出卡），词与词互不拖累。
-      const scriptScopeCadence = (scope: string): string =>
-        config.envGranularity?.[scope] ?? 'run';
+      const scriptScopeCadence = (scope: string): string => config.envGranularity?.[scope] ?? 'run';
       const scriptAnyActive = REGISTERED_SCRIPT_SCOPES.some(
         (scope) => scriptScopeCadence(scope) !== 'off',
       );
@@ -675,7 +671,8 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           } else {
             runner.disarmInterval(key);
           }
-          const kickoffDue = spec !== undefined && scriptKickoffDue(spec.schedule, scriptFirstOfRun);
+          const kickoffDue =
+            spec !== undefined && scriptKickoffDue(spec.schedule, scriptFirstOfRun);
           let outcome: ScriptProcessOutcome;
           try {
             outcome = processScriptEntry(entry, spec, runner, sessionId, config, now, kickoffDue);
