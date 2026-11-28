@@ -1,0 +1,7 @@
+{
+  "docs/operations/config-ui.md": {
+    "sha": "8a42f0ef",
+    "reason": "q-subscript-p1：ui-settings.ts 仅注释词数 17→20；ENV_GRANULARITY_SCOPES 派生 Object.keys 自动跟随，机制未变（该叶 lag 窗口仅本批 1 commit，全窗确认）",
+    "at": "2026-11-28"
+  }
+}

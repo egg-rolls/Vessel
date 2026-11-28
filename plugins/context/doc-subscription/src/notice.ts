@@ -40,9 +40,22 @@ export const HEALTH_NOTICE_SCOPE = 'health';
  * 与 `files` / `health` 同一形状（首行 `scope: 摘要` + `  · ` 明细行），Web 环境卡认得它，
  * 卡头标签是「订阅脚本」。词表对拍范围同 files：agent `ENV_INFO_SCOPES` /
  * config `DEFAULT_ENV_CADENCE` / Web 词表（R-10 派生）+ i18n `chat.env.scope.script`。
- * 通用兜底词（案 B 注册制）：任意用户脚本共享本词；内置专词 doc-lag / code-heaviness P1 加。
+ * 通用兜底词（案 B 注册制）：任意用户脚本共享本词；内置检测器专词见下
+ * （DOC_LAG_NOTICE_SCOPE / CODE_HEAVINESS_NOTICE_SCOPE，q-subscription-script-p1）。
  */
 export const SCRIPT_NOTICE_SCOPE = 'script';
+
+/**
+ * 内置检测器专词：文档滞后（doc-sync --quiet）。案 B 注册制（q-subscription-script-p1）：
+ * 内置实例获得精确卡头（「文档滞后」）与 per-scope 节奏/通道热改；词表对拍范围同 script。
+ */
+export const DOC_LAG_NOTICE_SCOPE = 'doc-lag';
+
+/**
+ * 内置检测器专词：代码厚重（code-size）。案 B 注册制（q-subscription-script-p1）；
+ * 卡头「代码厚重」；词表对拍范围同 script。
+ */
+export const CODE_HEAVINESS_NOTICE_SCOPE = 'code-heaviness';
 
 /**
  * 明细行标记：两个空格 + `·`。
@@ -212,6 +225,8 @@ const SCRIPT_INSPECT_HINT =
 export interface ScriptNoticeEntry {
   /** 订阅名（单脚本摘要用） */
   name: string;
+  /** 环境卡 scope 词（spec.scope，已登记词；hook 按它分组，同 scope 折叠一条消息） */
+  scope: string;
   /** 元数据行（`<script name="…" exit="…" bytes="…" change="…" />`） */
   metaLine: string;
   /** 内容行（diff / full 的 stdout 行，不带明细前缀；缺省 = 纯元数据） */
@@ -221,14 +236,19 @@ export interface ScriptNoticeEntry {
 }
 
 /**
- * 一批脚本变化 → 一条 script 通知正文（首行 `script: …`，之后每行 `  · …`）。
+ * 一批脚本变化 → 一条 script 通知正文（首行 `<scope>: …`，之后每行 `  · …`）。
  * 线格式与 files / health 同形（Web 同一张环境卡，scope 决定卡头标签）；
- * 多订阅同 run 都有变化 ⇒ 一条消息多明细行（同 scope 折叠），不每订阅一张卡。
+ * 多订阅同 run 都有变化 ⇒ **同 scope** 一条消息多明细行（折叠），不每订阅一张卡；
+ * 不同 scope（内置专词 vs 通用兜底）由调用方分组后各发一条（q-subscription-script-p1）。
  *
  * 行预算同口径：元数据 ≤8 + 溢出概括 + inspect 提示 + 首行 ≤ 11 行；内容行只跟
  * **第一个**带内容的条目（files line-level 先例），行/字节预算经 fitDiffContentLines。
  */
-export function formatScriptNotice(entries: readonly ScriptNoticeEntry[], total: number): string {
+export function formatScriptNotice(
+  entries: readonly ScriptNoticeEntry[],
+  total: number,
+  scope: string = SCRIPT_NOTICE_SCOPE,
+): string {
   const kept = entries.slice(0, SUBSCRIPTION_NOTICE_DETAILS_MAX);
   const dropped = total - kept.length;
   const details = kept.map((entry) => `${SUBSCRIPTION_NOTICE_DETAIL_MARK}${entry.metaLine}`);
@@ -264,5 +284,5 @@ export function formatScriptNotice(entries: readonly ScriptNoticeEntry[], total:
     total === 1 && first !== undefined
       ? `${first.name} reported changes`
       : `${total} subscribed scripts reported`;
-  return [`${SCRIPT_NOTICE_SCOPE}: ${summary}`, ...details].join('\n');
+  return [`${scope}: ${summary}`, ...details].join('\n');
 }

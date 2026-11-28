@@ -27,8 +27,15 @@ import { SubscriptionStore } from './store.js';
 import { createSubscribeTool } from './tool.js';
 
 export { AUTO_SUBSCRIBE_HOOK, createAutoSubscribeHook } from './auto-sub.js';
-export type { DocSubscriptionConfig, ScriptSchedule, ScriptSpec } from './config.js';
-export { isValidScriptName, parseDocSubscriptionConfig, parseScriptSpecs } from './config.js';
+export {
+  type DocSubscriptionConfig,
+  isValidScriptName,
+  parseDocSubscriptionConfig,
+  parseScriptSpecs,
+  REGISTERED_SCRIPT_SCOPES,
+  type ScriptSchedule,
+  type ScriptSpec,
+} from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
 export {
   describeHealthRev,
@@ -43,6 +50,8 @@ export {
 export { type BeforeLlmHookDeps, createBeforeLlmHook, MAX_FILE_BYTES } from './hook.js';
 export { consumeClearedToolResults } from './lifecycle.js';
 export {
+  CODE_HEAVINESS_NOTICE_SCOPE,
+  DOC_LAG_NOTICE_SCOPE,
   fitDiffContentLines,
   formatHealthNotice,
   formatScriptNotice,
@@ -105,7 +114,8 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
       'Per-session file & node-health & script subscriptions: `subscribe` tool (source file|health|script) + ' +
       'edit/write auto-subscribe (subscribe:false opt-out) + read line-range auto-subscribe + ' +
       'BeforeLlm change notices with line-level diffs and cleared-tool-result lifecycle; ' +
-      'script source runs user-config allowlisted detection commands async (fire-and-forget)',
+      'script source runs user-config allowlisted detection commands async (fire-and-forget; ' +
+      'run/request/interval-real-timer schedules; per-scope env cards: script/doc-lag/code-heaviness)',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const rawConfig = installOptions?.config ?? options.config;
       const config: DocSubscriptionConfig = parseDocSubscriptionConfig(rawConfig);

@@ -99,6 +99,37 @@ function killTree(child: ReturnType<typeof spawn>): void {
 export class ScriptRunner {
   private readonly inFlight = new Map<string, InFlight>();
   private readonly results = new Map<string, ScriptResult[]>();
+  /**
+   * interval 真 timer（q-subscription-script-p1，裁点变更：P0 惰性 interval 正式推翻）：
+   * 每订阅（session+name 键）一个 setInterval，idle 也跑；tick 闭包由 hook 注入
+   * （每次 tick live 重读 allowlist / cadence，删名 / off / 改调度 ⇒ 自 disarm）。
+   * unref：timer 不独自撑住进程（headless 一次性进程照常退出）。
+   */
+  private readonly intervalTimers = new Map<
+    string,
+    { timer: ReturnType<typeof setInterval>; intervalMs: number }
+  >();
+
+  /**
+   * 幂等 arm：同 key 同 intervalMs ⇒ 保留现有 timer（不重置相位）；intervalMs 变化 ⇒
+   * 清旧设新。tick 每次触发先经调用方 live 校验（闭包内），再 kickoff（单飞由 kickoff 保证）。
+   */
+  armInterval(key: string, intervalMs: number, tick: () => void): void {
+    const existing = this.intervalTimers.get(key);
+    if (existing !== undefined && existing.intervalMs === intervalMs) return;
+    if (existing !== undefined) clearInterval(existing.timer);
+    const timer = setInterval(tick, intervalMs);
+    timer.unref?.();
+    this.intervalTimers.set(key, { timer, intervalMs });
+  }
+
+  /** disarm 一个订阅的 interval timer（remove / allowlist 删名 / scope off / 调度变更） */
+  disarmInterval(key: string): void {
+    const existing = this.intervalTimers.get(key);
+    if (existing === undefined) return;
+    clearInterval(existing.timer);
+    this.intervalTimers.delete(key);
+  }
 
   /** 是否有在飞进程（单飞判据） */
   isInFlight(key: string): boolean {
@@ -232,13 +263,15 @@ export class ScriptRunner {
     return queued !== undefined && queued.length > 0 ? queued[queued.length - 1] : undefined;
   }
 
-  /** dispose：kill 全部在飞 + 清 timer + 清队列（不永久禁用，见模块注释） */
+  /** dispose：kill 全部在飞 + 清 timeout / interval timer + 清队列（不永久禁用，见模块注释） */
   dispose(): void {
     for (const { child, timer } of this.inFlight.values()) {
       clearTimeout(timer);
       killTree(child);
     }
     this.inFlight.clear();
+    for (const { timer } of this.intervalTimers.values()) clearInterval(timer);
+    this.intervalTimers.clear();
     this.results.clear();
   }
 

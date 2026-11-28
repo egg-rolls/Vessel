@@ -11,11 +11,12 @@ import * as path from 'node:path';
 import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
 
 /**
- * 订阅脚本调度（q-subscription-script，设计 §2.3）：
+ * 订阅脚本调度（q-subscription-script，设计 §2.3；P1 裁点变更）：
  * - 'run'（缺省）：每 run 首请求 kickoff；
  * - 'request'：每请求检查 kickoff（单飞约束下实际频率 = 脚本时长上限）；
- * - { intervalSeconds: N }：惰性求值 —— 每次 BeforeLlm 检查 now - last_started_at >= N
- *   才发起；无 run 时不跑（真 timer 常驻模式留 P2 host watcher）。
+ * - { intervalSeconds: N }：**真 timer**（q-subscription-script-p1，推翻 P0 裁点 4 惰性）——
+ *   ScriptRunner 每订阅 setInterval，idle 也跑；单飞保持；结果仍在 BeforeLlm drain
+ *   （ambient 非打断）；remove / dispose / allowlist 删名 / scope off ⇒ disarm。
  */
 export type ScriptSchedule = 'run' | 'request' | { intervalSeconds: number };
 
@@ -51,10 +52,11 @@ export const SCRIPT_DEFAULTS = {
 
 /**
  * 已登记的脚本 scope 词（字面量副本；生产侧真相 = config `DEFAULT_ENV_CADENCE`，
- * 依赖方向不能 import config）。P0 只有通用兜底词 'script'（案 B 先行）；
- * P1 内置专词 doc-lag / code-heaviness 登记时同步这里。
+ * 依赖方向不能 import config）。案 B 注册制：通用兜底词 'script' + 内置检测器专词
+ * doc-lag（doc-sync --quiet）/ code-heaviness（code-size）（q-subscription-script-p1）。
+ * 未登记词回落 'script'（fail-closed，防词表无界增长）。
  */
-export const REGISTERED_SCRIPT_SCOPES: readonly string[] = ['script'];
+export const REGISTERED_SCRIPT_SCOPES: readonly string[] = ['script', 'doc-lag', 'code-heaviness'];
 
 /** 订阅名语法（与 node_id / 联邦 principal 同形） */
 const SCRIPT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;

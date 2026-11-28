@@ -33,7 +33,12 @@ import type { Stats } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { evaluatePath, type PathBoundary, splitLines } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
-import type { DocSubscriptionConfig, ScriptSchedule, ScriptSpec } from './config.js';
+import {
+  type DocSubscriptionConfig,
+  REGISTERED_SCRIPT_SCOPES,
+  type ScriptSchedule,
+  type ScriptSpec,
+} from './config.js';
 import { splitDisplayLines, unifiedDiff } from './diff.js';
 import {
   type HealthSnapshot,
@@ -428,6 +433,7 @@ function processScriptEntry(
     next = updated;
     notice = {
       name: entry.path,
+      scope: spec?.scope ?? 'script',
       metaLine: `<script name="${escapeXmlAttr(entry.path)}" exit="0" bytes="${bytes}" change="${change}"${result.truncated ? ' truncated="true"' : ''} />`,
       contentLines,
       maxBytes: config.maxTotalBytesPerRun,
@@ -455,25 +461,15 @@ function processScriptEntry(
 }
 
 /**
- * script 源 kickoff 时机（设计 §2.3 + 裁点 4 惰性 interval）：
- * - 轴 A envGranularity.script='off' ⇒ 整段静默（调用方已 gate）；
+ * script 源 kickoff 时机（设计 §2.3；q-subscription-script-p1 裁点变更：interval 改真 timer）：
+ * - 轴 A per-scope cadence='off' ⇒ 整段静默（调用方已 gate）；
  * - schedule='run'（缺省）：每 run 首请求；
  * - schedule='request'：每请求（单飞约束实际频率）；
- * - interval：惰性 —— 检查点上 now - last_started_at >= N 才发起（idle 不跑）。
- * 轴 A='request' 时 interval 每请求检查；轴 A='run' 时只在 run 边界检查。
+ * - interval：**真 timer**（ScriptRunner.armInterval，idle 也跑）——hook 检查点不再
+ *   惰性发起，这里恒 false；hook 只负责幂等 arm / disarm + drain 已完成结果。
  */
-function scriptKickoffDue(
-  schedule: ScriptSchedule,
-  entry: SubscriptionEntry,
-  scriptCadence: string,
-  firstRequestOfRun: boolean,
-  now: number,
-): boolean {
-  if (typeof schedule === 'object') {
-    if (scriptCadence !== 'request' && !firstRequestOfRun) return false;
-    const last = entry.script?.last_started_at ?? 0;
-    return now - last >= schedule.intervalSeconds * 1000;
-  }
+function scriptKickoffDue(schedule: ScriptSchedule, firstRequestOfRun: boolean): boolean {
+  if (typeof schedule === 'object') return false; // timer-driven
   if (schedule === 'request') return true;
   return firstRequestOfRun;
 }
@@ -491,6 +487,30 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
   const processedScriptRuns = new Set<string>();
   // 执行器：装配层注入（dispose 可达）；裸宿主缺省自建。
   const runner = deps.runner ?? new ScriptRunner();
+
+  // interval 真 timer 的 tick 闭包（q-subscription-script-p1）：每次触发 live 重读
+  // allowlist / cadence —— 删名 / scope off / 调度不再是 interval ⇒ 自 disarm
+  // （idle 期间热改也即时生效，不等到下个 run 边界）；否则 kickoff（单飞由 runner
+  // 保证：在飞 ⇒ 跳过本轮）。结果入队，下个 BeforeLlm drain（ambient 非打断）。
+  const intervalTick =
+    (key: string, name: string): (() => void) =>
+    () => {
+      let cfg = deps.config;
+      if (deps.liveConfig !== undefined) {
+        try {
+          cfg = deps.liveConfig();
+        } catch {
+          cfg = deps.config;
+        }
+      }
+      const spec = cfg.scripts.find((candidate) => candidate.name === name);
+      const cadence = cfg.envGranularity?.[spec?.scope ?? 'script'] ?? 'run';
+      if (spec === undefined || cadence === 'off' || typeof spec.schedule !== 'object') {
+        runner.disarmInterval(key);
+        return;
+      }
+      runner.kickoff(key, spec, spec.cwd ?? cfg.cwd);
+    };
 
   return {
     name: 'doc-subscription',
@@ -518,10 +538,15 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       const filesCadence = config.envGranularity?.files ?? 'run';
       // health 检测节奏（同框架）：缺省 'run'；与 files 独立 gate。
       const healthCadence = config.envGranularity?.health ?? 'run';
-      // script 检测节奏（同框架）：缺省 'run'；off ⇒ 整段静默（不 kickoff / drain / 出卡）。
-      const scriptCadence = config.envGranularity?.script ?? 'run';
-      // off（P2 轴 A）：三源都 off 才整段跳过（不观察、不产卡、不注入）。
-      if (filesCadence === 'off' && healthCadence === 'off' && scriptCadence === 'off') return;
+      // script 检测节奏（同框架）：per-scope（通用兜底词 script + 内置专词 doc-lag /
+      // code-heaviness，案 B 注册制，q-subscription-script-p1），缺省 'run'；某词 off ⇒
+      // 该词下订阅整段静默（不 kickoff / drain / 出卡），词与词互不拖累。
+      const scriptScopeCadence = (scope: string): string => config.envGranularity?.[scope] ?? 'run';
+      const scriptAnyActive = REGISTERED_SCRIPT_SCOPES.some(
+        (scope) => scriptScopeCadence(scope) !== 'off',
+      );
+      // off（P2 轴 A）：所有源都 off 才整段跳过（不观察、不产卡、不注入）。
+      if (filesCadence === 'off' && healthCadence === 'off' && !scriptAnyActive) return;
       const runGate = (cadence: string, processed: Set<string>): boolean => {
         if (cadence === 'off') return false;
         if (cadence === 'request') return true;
@@ -534,16 +559,14 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       const healthDue = runGate(healthCadence, processedHealthRuns);
       // script 段：drain 每请求（结果完成即投递，ambient）；kickoff 时机另按 schedule gate。
       // 便宜路径：run 边界必查；mid-run 只在 runner 有工作（drain）或 allowlist 声明了
-      // request/interval 调度（需每请求检查）时才 load —— 无脚本订阅时零额外开销。
-      const scriptActive = scriptCadence !== 'off';
-      const scriptRunDue = scriptActive && runGate('run', processedScriptRuns);
+      // request 调度（需每请求检查）时才 load —— 无脚本订阅时零额外开销。
+      // interval 真 timer（P1）：kickoff 不经过 hook 检查点，无需每请求检查。
+      const scriptRunDue = scriptAnyActive && runGate('run', processedScriptRuns);
       const scriptNeedsRequestCheck = config.scripts.some(
-        (spec) =>
-          spec.schedule === 'request' ||
-          (scriptCadence === 'request' && typeof spec.schedule === 'object'),
+        (spec) => spec.schedule === 'request' && scriptScopeCadence(spec.scope) !== 'off',
       );
       const scriptHasWork =
-        scriptActive && (scriptRunDue || runner.hasWork() || scriptNeedsRequestCheck);
+        scriptAnyActive && (scriptRunDue || runner.hasWork() || scriptNeedsRequestCheck);
       if (!filesDue && !healthDue && !scriptHasWork) return;
 
       const sessionId = ctx.session_id ?? 'default';
@@ -591,10 +614,10 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // health 源（q-health-subscription）：独立清单 / 计数，与 files 通知分发两条消息。
       const healthLines: string[] = [];
       let healthChangedCount = 0;
-      // script 源（q-subscription-script）：独立清单 / 计数（同 scope 折叠一条消息）。
-      const scriptNotices: ScriptNoticeEntry[] = [];
-      let scriptChangedCount = 0;
-      // 本请求是否 run 首请求（script schedule='run' / interval 的 kickoff 时机）：
+      // script 源（q-subscription-script）：按 scope 分组（案 B 专词 vs 通用兜底词），
+      // 同 scope 折叠一条消息，不同 scope 各一张卡（q-subscription-script-p1）。
+      const scriptNoticeGroups = new Map<string, { entries: ScriptNoticeEntry[]; total: number }>();
+      // 本请求是否 run 首请求（script schedule='run' 的 kickoff 时机；interval 走真 timer）：
       // runGate 已在上方消费并标记，scriptRunDue 即首请求判据。
       const scriptFirstOfRun = scriptRunDue;
 
@@ -627,12 +650,29 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         }
         // script 分支（q-subscription-script）：drain 已完成结果 + 按 schedule kickoff。
         // spec 每次从 live allowlist 重读（热改命令 / 停跑即时生效；订阅本身是用户事实）。
+        // cadence / channel 按 spec.scope per-scope 解析（案 B 专词，P1）。
         if (entry.source === 'script') {
-          if (!scriptActive) continue;
           const spec = config.scripts.find((candidate) => candidate.name === entry.path);
+          const scope = spec?.scope ?? 'script';
+          const key = scriptFlightKey(sessionId, entry.path);
+          // 本词 off ⇒ 整段静默（不 drain / 不出卡）+ disarm timer。
+          if (scriptScopeCadence(scope) === 'off') {
+            runner.disarmInterval(key);
+            continue;
+          }
+          // interval 真 timer（P1）：幂等 arm（interval 变更重设相位）；非 interval 调度 /
+          // allowlist 删名 ⇒ disarm（tick 闭包内另有 live 自校验，idle 热改双保险）。
+          if (spec !== undefined && typeof spec.schedule === 'object') {
+            runner.armInterval(
+              key,
+              spec.schedule.intervalSeconds * 1000,
+              intervalTick(key, entry.path),
+            );
+          } else {
+            runner.disarmInterval(key);
+          }
           const kickoffDue =
-            spec !== undefined &&
-            scriptKickoffDue(spec.schedule, entry, scriptCadence, scriptFirstOfRun, now);
+            spec !== undefined && scriptKickoffDue(spec.schedule, scriptFirstOfRun);
           let outcome: ScriptProcessOutcome;
           try {
             outcome = processScriptEntry(entry, spec, runner, sessionId, config, now, kickoffDue);
@@ -644,8 +684,10 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
             dirty = true;
           }
           if (outcome.notice !== undefined) {
-            scriptChangedCount += 1;
-            if (scriptNotices.length < MAX_NOTICE_ENTRIES) scriptNotices.push(outcome.notice);
+            const group = scriptNoticeGroups.get(scope) ?? { entries: [], total: 0 };
+            group.total += 1;
+            if (group.entries.length < MAX_NOTICE_ENTRIES) group.entries.push(outcome.notice);
+            scriptNoticeGroups.set(scope, group);
           }
           continue;
         }
@@ -810,23 +852,24 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         }
       }
 
-      // script 通知（q-subscription-script）：同一 vessel:notice 通道，scope 词 'script'
-      // 决定卡头标签；多订阅同 run 都有变化 ⇒ 一条消息多明细行（同 scope 折叠）。
-      if (scriptChangedCount > 0) {
+      // script 通知（q-subscription-script）：同一 vessel:notice 通道，scope 词决定卡头
+      // 标签；按 scope 分组各一条消息（同 scope 折叠多明细行；专词 doc-lag / code-heaviness
+      // 与通用兜底词 script 各一张卡，q-subscription-script-p1）；channel per-scope 热改。
+      for (const [scope, group] of scriptNoticeGroups) {
         const message = {
           role: 'user' as const,
           name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
-          content: formatScriptNotice(scriptNotices, scriptChangedCount),
+          content: formatScriptNotice(group.entries, group.total, scope),
           timestamp: now,
         };
-        if (config.envChannels?.script === 'ui-only' && ctx.emitFact !== undefined) {
+        if (config.envChannels?.[scope] === 'ui-only' && ctx.emitFact !== undefined) {
           ctx.emitFact({
             type: 'message.injected',
             run_id: runId,
             data: {
               run_id: runId,
               session_id: ctx.session_id,
-              message: { ...message, message_id: `${runId}:script-notice:${String(now)}` },
+              message: { ...message, message_id: `${runId}:script-notice:${scope}:${String(now)}` },
             },
             ts: now,
           });

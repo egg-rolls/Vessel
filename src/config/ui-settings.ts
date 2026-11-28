@@ -207,7 +207,7 @@ interface ConfigSetTarget {
 
 /**
  * q-env-granularity（P2 §4.3）：env_injection 的 scope 词表。
- * R-10 单源：派生自 config `DEFAULT_ENV_CADENCE`（17 词含 health），与 serve
+ * R-10 单源：派生自 config `DEFAULT_ENV_CADENCE`（20 词含 script / doc-lag / code-heaviness），与 serve
  * SETTABLE_KEYS / Web settings-registry 同一张表，漂移结构上不可能。
  * scopes / channels 两子块各全词表键，三层键（block=env_injection, subBlock=scopes|channels）。
  */

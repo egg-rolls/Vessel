@@ -34,6 +34,9 @@
  * - `script`：订阅脚本检测结果（doc-subscription 的 script 源订阅：用户配置 allowlist
  *   的检测命令异步跑，stdout 差异/清单投递；q-subscription-script，空输出不出卡，
  *   全文在 inspect）；
+ * - `doc-lag`：文档滞后检测（内置订阅脚本 doc-sync --quiet 的专词；q-subscription-script-p1，
+ *   案 B 注册制：内置检测器精确卡头 + per-scope 节奏/通道，用户任意脚本仍共享 script）；
+ * - `code-heaviness`：代码厚重检测（内置订阅脚本 code-size 的专词；同上案 B 注册制）；
  * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）；
  * - `trim`：工具结果被换成占位符（上下文上限；只报条数与 call id，不含工具输出正文）
  *   —— 0.52 起由 core 的 `context/cleared-tool-result.ts` 发同一形状的 `trim: …` 尾消息；
@@ -65,6 +68,8 @@ export const ENV_INFO_SCOPES = [
   'files',
   'health',
   'script',
+  'doc-lag',
+  'code-heaviness',
   'context',
   'trim',
   'pii',

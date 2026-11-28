@@ -1654,6 +1654,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.env.scope.files': 'File changes',
   'chat.env.scope.health': 'Node health',
   'chat.env.scope.script': 'Subscription scripts',
+  'chat.env.scope.doc-lag': 'Doc lag',
+  'chat.env.scope.code-heaviness': 'Code heaviness',
   'chat.env.scope.model': 'Model',
   'chat.env.scope.selfcard': 'Base info',
   'chat.env.scope.context': 'Context',
