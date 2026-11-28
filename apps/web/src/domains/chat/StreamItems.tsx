@@ -33,9 +33,9 @@ import {
   envCardOfPromptContext,
 } from './env-notice';
 import { humanizeRunError } from './error-text';
+import { MessageBlocks } from './block-views';
+import { liftBlocks } from './lift-blocks';
 import { MessageRefs } from './MessageRefs';
-import { QuoteBlock } from './QuoteBlock';
-import { liftQuoteForDisplay } from './quote-ref';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
@@ -150,10 +150,9 @@ export function AssistantText({
   // `.motion-stream`，整段出现的走段级 `.msg-enter`。两者不同时生效，也不随 streaming
   // 翻转改判 —— 否则 run 结束时才补上的 `.msg-enter` 会迟到地播一次。
   const [reveal] = useState(() => (streaming ? 'stream' : entering ? 'enter' : 'none'));
-  // 消息引用（q-message-quote）：AI 回复开头的信封提升成轻量引用块（双向同形）。
-  // 流式期信封未收全时解析返回 null，正文原样渲染；收全后自然提升。
-  const lifted = liftQuoteForDisplay(text);
-  const body = lifted !== null ? lifted.body : text;
+  // 块提升（块 P0）：AI 回复开头的信封提升成块（quote 轻量块 / session-ref 卡，
+  // 双向同形）。流式期信封未收全时解析返回 null，正文原样渲染；收全后自然提升。
+  const { blocks, body } = liftBlocks({ role: 'assistant', content: text });
   return (
     <div
       className={cn(
@@ -169,9 +168,7 @@ export function AssistantText({
         reveal === 'stream' && streaming && 'motion-stream',
       )}
     >
-      {lifted !== null && (
-        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
-      )}
+      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
       <Markdown className="msg-text" text={body} streaming={streaming} />
       {actions}
     </div>
@@ -216,9 +213,9 @@ export function UserBubble({
   onJumpQuote?: (messageId: string) => void;
 }) {
   const clock = formatClock(ts);
-  // 消息引用（q-message-quote）：信封提升成气泡上方的轻量引用块，与历史气泡同形。
-  const lifted = liftQuoteForDisplay(text);
-  const body = lifted !== null ? lifted.body : text;
+  // 块提升（块 P0）：信封提升成气泡上方的块，与历史气泡同形（同一管线）。
+  // refs chip 仍走下面独立的 MessageRefs 线（结构化字段，不进正文管线）。
+  const { blocks, body } = liftBlocks({ role: 'user', content: text });
   return (
     <div
       className={cn(
@@ -226,9 +223,7 @@ export function UserBubble({
         entering && 'msg-enter',
       )}
     >
-      {lifted !== null && (
-        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
-      )}
+      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
       <MessageRefs refs={refs} />
       <div className="msg-bubble">
         {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
