@@ -497,6 +497,56 @@ button.tool-image-thumb:focus-visible {
   border-radius: var(--radius-sm);
 }
 
+/* 附件预览弹窗（q-image-chip-inline）：完整路径行（可选中）+ 复制键 +
+   「临时」badge。路径行只在传了 path 时渲染（工具图卡旧形态零回归）。 */
+.tool-image-lightbox-staging {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-soft, var(--line));
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.tool-image-lightbox-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.tool-image-lightbox-path-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  user-select: text;
+}
+
+.tool-image-lightbox-copy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tool-image-lightbox-copy:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
 /* 原始注记折叠区：默认收起，展开逐字可查（原文不丢）。
    披露三角用浏览器原生 marker（不自绘 ::before —— 避免与后续 notice-block
    选择器的特异性降序冲突，noDescendingSpecificity）。 */

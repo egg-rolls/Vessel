@@ -1464,6 +1464,10 @@ export const messages = {
   'chat.toolImage.unavailable': '预览不可用',
   'chat.toolImage.raw': '原始通知',
   'chat.toolImage.close': '关闭预览',
+  // q-image-chip-inline: attachment lightbox path row + staging badge.
+  'chat.toolImage.copyPath': '复制路径',
+  'chat.toolImage.pathCopied': '路径已复制',
+  'chat.toolImage.staging': '临时（未入池）',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': '只能引用绝对路径：{path}',
   'chat.refs.reject.tooLong': '引用路径超过 {max} 个字符',

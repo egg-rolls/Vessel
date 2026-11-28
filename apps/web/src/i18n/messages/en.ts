@@ -1536,6 +1536,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toolImage.unavailable': 'Preview unavailable',
   'chat.toolImage.raw': 'Raw notice',
   'chat.toolImage.close': 'Close preview',
+  // q-image-chip-inline: attachment lightbox path row + staging badge.
+  'chat.toolImage.copyPath': 'Copy path',
+  'chat.toolImage.pathCopied': 'Path copied',
+  'chat.toolImage.staging': 'temp (not ingested)',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': 'Only absolute paths can be referenced: {path}',
   'chat.refs.reject.tooLong': 'The reference path is longer than {max} characters',

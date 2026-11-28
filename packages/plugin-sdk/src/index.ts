@@ -43,6 +43,12 @@ export interface PluginHostAttachments {
   preview(path: string): Promise<ComposerPreviewResult>;
   /** 浏览器文件 → node 暂存副本（canonical attachments.stage，write）。 */
   stage(files: readonly File[]): Promise<StagedAttachment[]>;
+  /**
+   * 打开宿主标准附件预览弹窗（宿主决定形态：图片 → 既有 ImageLightbox，
+   * 大图 + 完整路径 + 复制）。插件不另造 lightbox，只交路径。
+   * 字节不可用（过期 / 拒绝 / 非图片）⇒ reject，调用方自行 toast。
+   */
+  openPreview(path: string): Promise<void>;
 }
 
 /**
@@ -199,6 +205,14 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost {
           );
         }
         return adapter.attachments.stage(files);
+      },
+      openPreview: (path: string): Promise<void> => {
+        if (adapter.attachments === undefined) {
+          return Promise.reject(
+            new Error('attachments_unavailable: host adapter has no attachments'),
+          );
+        }
+        return adapter.attachments.openPreview(path);
       },
     }),
   };
