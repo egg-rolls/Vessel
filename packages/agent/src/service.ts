@@ -2938,7 +2938,8 @@ export class AgentServiceImpl implements AgentService {
    *
    * 会话绑定：经 sessionId resolve 成员，inbox 按 agentId。占位 `quiet`（永不当 run input）、
    * running 态不可被 read 消费 / 弹出（readable 排除）、list 沉底。完成时
-   * {@link completeAsyncJob} 按 jobId **原位更新同一条目**，不另插一条 —— 单一真相源。
+   * {@link completeAsyncJob} 按 jobId **原位更新占位**（卡片视觉），结果另落独立正常
+   * 条目投递（q-inbox-admit-restore：占位卡与结果投递解耦）。
    *
    * kind 专属细节放 `payload`（机制层不解释）：bash={command,pid,log_path}；ask={question,...}。
    * 占位的 `session_id` 只放进 `async_job` 元数据（展示 / 归属关联），**不**写条目级
