@@ -204,6 +204,8 @@ export interface DoctorCommandArgs {
   json: boolean;
   /** 仅显式给出 `--deep` 时存在（additive） */
   deep?: boolean;
+  /** q-error-e3（§3.10）：`--errors` 近期错误 + 注册表漂移巡检（additive） */
+  errors?: boolean;
 }
 
 /** `logs` 子命令（0.15） */
@@ -665,7 +667,7 @@ export interface CliArgs {
   /** AX 自服务 · 自观：`vessel permission show`；可选以兼容既有 parseArgs 快照测试 */
   permissionCommand?: PermissionCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
-  errorsCommand: { json: boolean; limit?: number } | null;
+  errorsCommand: { json: boolean; limit?: number; id?: string; run?: string } | null;
   /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
   completionCommand: CompletionCommandArgs | null;
   /** 0.22 S9.1：`vessel attention [respond]` */
@@ -5612,6 +5614,8 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
 function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
   let json = false;
   let limit: number | undefined;
+  let id: string | undefined;
+  let run: string | undefined;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
@@ -5636,10 +5640,30 @@ function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    // q-error-e3（§3.9）：--id <error_id> 下钻 / --run <run_id> 按 seq 列表。
+    if (a === '--id') {
+      const value = readFlagValue(rest, i, '--id');
+      if (!value.ok) return value;
+      id = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--run') {
+      const value = readFlagValue(rest, i, '--run');
+      if (!value.ok) return value;
+      run = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for errors: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.errorsCommand = { json, ...(limit !== undefined ? { limit } : {}) };
+  args.errorsCommand = {
+    json,
+    ...(limit !== undefined ? { limit } : {}),
+    ...(id !== undefined ? { id } : {}),
+    ...(run !== undefined ? { run } : {}),
+  };
   return { ok: true, args };
 }
 
@@ -5647,6 +5671,7 @@ function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
 function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
   let json = false;
   let deep = false;
+  let errors = false;
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
     if (a === undefined) continue;
@@ -5662,6 +5687,11 @@ function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
       deep = true;
       continue;
     }
+    // q-error-e3（§3.10）：--errors 近期错误清单 + registry-miss 漂移巡检。
+    if (a === '--errors') {
+      errors = true;
+      continue;
+    }
     // 0.56.1：和 gateway/node 同族命令一致，便于「我现在看的是哪个实例」。
     if (a === '--data-dir') {
       const value = readDataDirFlag(rest, i);
@@ -5673,7 +5703,7 @@ function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
     return { ok: false, error: `Unknown argument for doctor: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.doctorCommand = { json, ...(deep ? { deep: true } : {}) };
+  args.doctorCommand = { json, ...(deep ? { deep: true } : {}), ...(errors ? { errors: true } : {}) };
   return { ok: true, args };
 }
 

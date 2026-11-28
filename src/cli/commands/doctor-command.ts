@@ -30,6 +30,7 @@ import {
   tokenFingerprint,
   type VesselConfig,
 } from '../../../packages/config/src/index';
+import { readTraceEvents } from '../../../packages/core/src/index';
 import { isLoopbackHostname } from '../../../packages/serve/src/index';
 import {
   resolveDataDir,
@@ -453,6 +454,74 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
       checkPort,
     })),
   );
+
+  // q-error-e3（§3.10）：--errors 近期错误清单 + 注册表漂移巡检（本地 trace 只读）。
+  if (options.errors === true) {
+    const errorEventTypes = [
+      'run.failed',
+      'tool.call.failed',
+      'process.error',
+      'shutdown.failed',
+      'hook.error',
+    ];
+    let errorEvents: Array<{ ts?: unknown; data?: unknown }> = [];
+    let traceReadError: string | undefined;
+    try {
+      const tenantPaths = resolveSingleTenantPaths(dataDir, tenantId);
+      errorEvents = await readTraceEvents(tenantPaths.events_dir, {
+        types: errorEventTypes,
+        limit: 500,
+      });
+    } catch (error) {
+      traceReadError = error instanceof Error ? error.message : String(error);
+    }
+    if (traceReadError !== undefined) {
+      checks.push({
+        name: 'errors.recent',
+        status: 'warn',
+        message: `trace read failed: ${traceReadError}`,
+      });
+    } else {
+      const dataOf = (event: { data?: unknown }): Record<string, unknown> =>
+        typeof event.data === 'object' && event.data !== null && !Array.isArray(event.data)
+          ? (event.data as Record<string, unknown>)
+          : {};
+      const recent = [...errorEvents]
+        .sort((a, b) => (typeof b.ts === 'number' ? b.ts : 0) - (typeof a.ts === 'number' ? a.ts : 0))
+        .slice(0, 10)
+        .map((event) => {
+          const data = dataOf(event);
+          const id = typeof data.error_id === 'string' ? data.error_id : '-';
+          const code = typeof data.error_code === 'string' ? data.error_code : '?';
+          return `${id} (${code})`;
+        });
+      checks.push({
+        name: 'errors.recent',
+        status: errorEvents.length > 0 ? 'warn' : 'ok',
+        message:
+          errorEvents.length > 0
+            ? `${errorEvents.length} recent error event(s); latest: ${recent.join('; ')}（vessel errors --id <error_id> 下钻）`
+            : 'no recent error events',
+      });
+      // registry-miss 漂移：未注册码计数 > 0 点名（设计 §3.10）。
+      const missCodes = new Set<string>();
+      let missCount = 0;
+      for (const event of errorEvents) {
+        const data = dataOf(event);
+        if (data.classified_by !== 'registry-miss') continue;
+        missCount += 1;
+        if (typeof data.error_code === 'string') missCodes.add(data.error_code);
+      }
+      checks.push({
+        name: 'errors.registry',
+        status: missCount > 0 ? 'warn' : 'ok',
+        message:
+          missCount > 0
+            ? `${missCount} registry-miss event(s); unregistered codes: ${[...missCodes].sort().join(', ')}（注册表漂移，评审 checklist 项）`
+            : 'no registry-miss drift',
+      });
+    }
+  }
 
   // --deep：只读查询本地 gateway（连接 / runtime / MCP 实际状态）。
   if (options.deep === true) {

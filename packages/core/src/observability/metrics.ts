@@ -38,6 +38,19 @@ export interface MetricsSnapshot {
   };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
+  /**
+   * errors_total{code,category}（q-error-e3 §3.10，additive）。
+   * 来源：`run.failed` / `tool.call.failed` 事件 envelope 的 error_code+category。
+   * **缺省 = 没有任何带稳定码的错误事件**（省略字段，缺省快照逐字节不变）；
+   * 按 code 字典序输出，实时与 rebuildMetrics 形状一致（ADR-047）。
+   */
+  errors?: Array<{ code: string; category: string; count: number }>;
+  /**
+   * degradations_total{component}（q-error-e3 §3.10，additive）。
+   * 来源：事件流内的 `degradation.used`（data.component）；run 外组件的降级
+   * 走结构化日志通道（D7），不入本计数。缺省 = 无降级事件（省略字段）。
+   */
+  degradations?: Array<{ component: string; count: number }>;
 }
 
 /** 非负有限数字；其他值按 0 */
@@ -82,6 +95,10 @@ export class MetricsAccumulator {
   };
   private duration = { total: 0, max: 0 };
   private updatedAt = 0;
+  /** q-error-e3：errors_total{code,category}（键=code；空 map = 快照省略 errors 域） */
+  private errors = new Map<string, { category: string; count: number }>();
+  /** q-error-e3：degradations_total{component}（键=component） */
+  private degradations = new Map<string, number>();
 
   /** 消费一个事件；未知类型只推进 updated_at */
   apply(event: RunEvent): void {
@@ -101,6 +118,7 @@ export class MetricsAccumulator {
         case 'run.failed':
           this.runs.failed += 1;
           this.recordDuration(readData(event)?.duration_ms);
+          this.recordError(readData(event));
           break;
         case 'run.cancelled':
           this.runs.cancelled += 1;
@@ -110,9 +128,13 @@ export class MetricsAccumulator {
           break;
         case 'tool.call.failed':
           this.toolCalls.failed += 1;
+          this.recordError(readData(event));
           break;
         case 'llm.response':
           this.recordLlmResponse(readData(event));
+          break;
+        case 'degradation.used':
+          this.recordDegradation(readData(event));
           break;
         default:
           return;
@@ -125,7 +147,7 @@ export class MetricsAccumulator {
   /** 当前快照（每次返回新对象） */
   snapshot(): MetricsSnapshot {
     const runCount = this.runs.completed + this.runs.failed;
-    return {
+    const snapshot: MetricsSnapshot = {
       runs: { ...this.runs },
       tool_calls: { ...this.toolCalls },
       llm: { ...this.llm },
@@ -136,6 +158,18 @@ export class MetricsAccumulator {
       },
       updated_at: this.updatedAt,
     };
+    // q-error-e3：空 map 省略字段（缺省快照逐字节不变）；字典序保证重建形状一致。
+    if (this.errors.size > 0) {
+      snapshot.errors = [...this.errors.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([code, { category, count }]) => ({ code, category, count }));
+    }
+    if (this.degradations.size > 0) {
+      snapshot.degradations = [...this.degradations.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([component, count]) => ({ component, count }));
+    }
+    return snapshot;
   }
 
   /** 清零计数与时长样本 */
@@ -145,12 +179,36 @@ export class MetricsAccumulator {
     this.llm = { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
     this.duration = { total: 0, max: 0 };
     this.updatedAt = 0;
+    this.errors = new Map();
+    this.degradations = new Map();
   }
 
   private recordDuration(value: unknown): void {
     const duration = nonNegative(value);
     this.duration.total += duration;
     if (duration > this.duration.max) this.duration.max = duration;
+  }
+
+  /** q-error-e3：envelope error_code+category 计数；无稳定码的事件不入 errors_total。 */
+  private recordError(data: Record<string, unknown> | undefined): void {
+    const code = data?.error_code;
+    if (typeof code !== 'string' || code.length === 0) return;
+    const category = typeof data?.category === 'string' ? data.category : 'unknown';
+    const entry = this.errors.get(code);
+    if (entry) {
+      entry.count += 1;
+    } else {
+      this.errors.set(code, { category, count: 1 });
+    }
+  }
+
+  /** q-error-e3：degradation.used 按 component 计数（缺 component 归 'unknown'）。 */
+  private recordDegradation(data: Record<string, unknown> | undefined): void {
+    const component =
+      typeof data?.component === 'string' && data.component.length > 0
+        ? data.component
+        : 'unknown';
+    this.degradations.set(component, (this.degradations.get(component) ?? 0) + 1);
   }
 
   private recordLlmResponse(data: Record<string, unknown> | undefined): void {
@@ -193,7 +251,8 @@ export class MetricsAccumulator {
  * 订阅既有事件并聚合 metrics。
  *
  * 消费事件：`run.started` / `run.completed` / `run.failed` / `run.cancelled` /
- * `tool.call.started` / `tool.call.failed` / `llm.response`。
+ * `tool.call.started` / `tool.call.failed` / `llm.response` /
+ * `degradation.used`（q-error-e3 additive：errors/degradations 计数）。
  */
 export class MetricsCollector {
   private unsubscribe?: Unsubscribe;
