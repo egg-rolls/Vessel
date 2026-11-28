@@ -52,7 +52,7 @@ import {
   startGateway,
   type TenantEventHub,
 } from '../packages/serve/src/index';
-import { listAsyncBashJobs, readAsyncBashJobLogTail } from '../plugins/tools/basic-tools/src/index';
+
 // 0.57：**不**静态导入 Ink REPL。`ink-repl.tsx` 的传递闭包是 React + ink + 十几个组件，
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
@@ -107,11 +107,6 @@ import {
   registerRuntimeNoticeHook,
 } from './config/hot-apply-assembly';
 import { visionSurfaceOf } from './config/vision-settings';
-import {
-  createConfigAttachmentPreviewer,
-  createConfigAttachmentStager,
-} from './data/attachment-staging';
-import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
@@ -183,7 +178,7 @@ import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { createPluginSurface } from './plugin/plugin-surface';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
-import { type BootstrapResult, bootstrap, resolveKanbanBoardPath } from './runtime/bootstrap';
+import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { hasBootRegistryKey } from './runtime/model-registry-wiring';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
@@ -1433,16 +1428,27 @@ async function runWithConfig(result: BootstrapResult) {
       });
     }
 
+    // P2 收集器（ADR-107）：feature 声明的 hotApply scope appliers 在此收编进
+    // reloadAppliers（第二集中注册区的收编接缝——后续 feature 声明 scope 即自动
+    // 流入，主干零改动；本批 kanban 走 config 子应用器，scope 形态暂无贡献）。
+    // 与手写 applier 同名 = 装配错误 fail-closed（与收集器内部键冲突同口径）。
+    for (const [scope, applier] of Object.entries(result.assembly?.hotApply.appliers ?? {})) {
+      if (scope in reloadAppliers) {
+        throw new Error(
+          `assembly collector: hotApply scope "${scope}" conflicts with a hand-written applier (ADR-107 fail-closed)`,
+        );
+      }
+      reloadAppliers[scope] = applier;
+    }
+
     // 0.61：hub 派生的来源集（join 时下发并存档）。读盘失败 / 旧 hub / 未 join
     // ⇒ undefined，行为与今天逐字一致：node 绝不因为 hub 不可达而拒绝启动或放宽白名单。
     // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
     const hubDerivedOrigins = await readHubNodeTrustedOrigins(dataDir);
 
-    // q-kanban-proxy：kanban deps 提为可变对象（同一引用进 gatewayOptions.kanban）。
-    // kanban.* handler 每次调用读 deps.boardPath → 热应用原地改即活生效。
-    // 解析表达式 = bootstrap 导出的 resolveKanbanBoardPath（R-6 起启动装配与热应用、
-    // 网络面与 localDispatcher 面共用的唯一真相；~ 展开、相对进程 cwd → 缺省板）。
-    const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
+    // q-kanban-proxy → P2 收集器（ADR-107）：kanban 可变 deps 由 kanban feature
+    // 单点持有（result.assembly.dispatcher.kanban 与 result.kanbanDeps 同一对象，
+    // 两表面共消费）；热应用经 result.assembly.hotApply.config.applyKanban 注入。
 
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
@@ -1545,19 +1551,13 @@ async function runWithConfig(result: BootstrapResult) {
         }
         return lines;
       },
-      // q-kanban-proxy：kanban 热应用——重解析 boardPath 原地更新 kanbanDeps
-      // （handler 每次调用读 deps.boardPath，下一次 kanban.get/archive 即用新板）。
-      // 解析结果未变（如仅 trim 差异）不产差异行，避免无意义 notice。
-      applyKanban: (next) => {
-        const from = kanbanDeps.boardPath;
-        const to = resolveKanbanBoardPath(next.kanban);
-        kanbanDeps.boardPath = to;
-        // R-6：localDispatcher（vessel op=rpc 路）的 deps 同步原地更新，两路同一语义。
-        if (result.kanbanDeps !== undefined) {
-          result.kanbanDeps.boardPath = to;
-        }
-        return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
-      },
+      // q-kanban-proxy → P2 收集器（ADR-107）：kanban 热应用由 feature 声明
+      // （重解析 boardPath 原地更新单份可变 deps，两表面同一对象即两路活生效；
+      // 差异行格式逐字保留）。缺省（connect 模式等无收集结果）⇒ 变化域进
+      // requires_restart，与迁移前未注入语义一致。
+      ...(result.assembly?.hotApply.config.applyKanban !== undefined
+        ? { applyKanban: result.assembly.hotApply.config.applyKanban }
+        : {}),
       // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
       // 最新 enabled / interval / olderThan / dryRun，cadence 不冻结启动值）；这里把
       // 重载配置喂进调度器持有的活引用并 reschedule 立即重排挂起定时器（O4：热改即
@@ -1641,19 +1641,11 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
       // 0.15：命名实例落到 <dataDir>/instances/<instance>，避免同 dataDir 互相覆盖。
       interactionsDir: ensureInteractionsDir(dataDir, foregroundGatewayInstance),
-      // q-kanban-view：任务看板读面 + 用户验收归档写面（kanban.*）。
-      // 路径 = config kanban.board_path（~ 展开、相对进程 cwd）→ 缺省
-      // <cwd>/docs/dev/kanban/board.json（cwd = repo 根 / 舰队 worktree 根）。
-      // archive.json 恒取板同目录（serve 侧派生，不读文件内指针）。
-      // q-kanban-proxy：kanbanDeps 是可变对象（声明在 reloadRunner 前），
-      // config.set kanban.boardPath / 手改 YAML 经 applyKanban 原地热更新。
-      kanban: kanbanDeps,
-      // q-async-bash-viz：异步 bash 作业只读观察面（jobs.*）。注册表唯一真相源是
-      // basic-tools 的进程级作业表（会话绑定经 sessionId 过滤）；serve 只出形状。
-      jobs: {
-        list: (sessionId) => listAsyncBashJobs(sessionId),
-        logTail: (jobId, maxBytes) => readAsyncBashJobLogTail(jobId, maxBytes),
-      },
+      // q-kanban-view / q-kanban-proxy：kanban.* 已迁 P2 收集器
+      // （src/assembly/features/kanban.ts，经下方 result.assembly.dispatcher 展开；
+      // 可变 deps 与本地面同一对象，applyKanban 热应用原地更新）。
+      // q-async-bash-viz：jobs.* 已迁 P2 收集器（src/assembly/features/jobs.ts，
+      // 经下方 result.assembly.dispatcher 展开；本地面同份 additive 获得 jobs.*）。
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。
       // serve 只做 scope 枚举校验；这里注入 `scope -> applier`。
       reload: reloadRunner.reload,
@@ -1673,8 +1665,8 @@ async function runWithConfig(result: BootstrapResult) {
       // 自重启 Option A：预约受理（写 continuation 标记后立即返回「正在重启」）。
       // 触发者 run 自然完成后由 detached 编排者执行 stop/start（vessel restart --self）。
       ...(result.selfRestart ? { selfRestart: result.selfRestart } : {}),
-      // q-restart-tool：gateway.restart 的完整预约（vessel op=rpc 可达；prompt 可选）。
-      ...(result.gatewayRestart ? { restart: result.gatewayRestart } : {}),
+      // q-restart-tool：gateway.restart 已迁 P2 收集器（src/assembly/features/restart.ts，
+      // 经下方 result.assembly.dispatcher 展开；LateRef 惰性包装，本地面同份）。
       // CONTRACT-hot-apply §7：permissions.setToolPolicy 的写盘面（用户 YAML）。
       permissions: {
         // AX 自服务 · 自观：permissions.show 的只读规则面（additive）。
@@ -1781,13 +1773,11 @@ async function runWithConfig(result: BootstrapResult) {
             askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
-      // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
-      // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
-      listAttachments: createConfigAttachmentLister({ getConfig: () => liveConfig }),
-      // file-ref-ux（A2/A3/A4）：暂存上传 + 预览/过期探针（与 bootstrap 本地
-      // dispatcher 同一份装配；TTL GC 由 bootstrap 统一启动）。
-      stageAttachment: createConfigAttachmentStager({ getConfig: () => liveConfig }),
-      previewAttachment: createConfigAttachmentPreviewer({ getConfig: () => liveConfig }),
+      // P2 收集器（ADR-107）：feature 贡献的 RPC deps 与 bootstrap 本地面共消费
+      // 同一份收集结果（本批 attachments 三键；后续 jobs/kanban/restart 逐个迁入，
+      // 对应下方手写键随之删除）。getConfig 读 liveConfigRef——cli 热应用同步写
+      // 该活引用，网络面语义逐字节不变。
+      ...(result.assembly?.dispatcher ?? {}),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,

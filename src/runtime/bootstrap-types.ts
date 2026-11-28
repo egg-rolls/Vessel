@@ -26,6 +26,7 @@ import type {
 } from '../../packages/serve/src/index';
 import type { ReplContext } from '../../packages/tui/src/index';
 import type { AgentOwnerServer } from '../agent/agent-owner-server';
+import type { CollectedFeatures } from '../assembly/collect';
 import type { FeishuChannelLike, MetricsControlLike } from '../cli/control-plane-types';
 import type { ReplSettingsControlLike } from '../config/ui-settings';
 import type { FederationRuntimeOptions } from '../federation/federation-config';
@@ -224,6 +225,12 @@ export interface BootstrapResult {
    * 缺省 = 无本地 dispatcher 装配（connect 模式等）。
    */
   kanbanDeps?: { boardPath: string };
+  /**
+   * P2 声明式收集器（ADR-107）：dispatcher phase 收集结果（一份 deps + hotApply +
+   * result 透传）。cli 网络面展开同一份——两表面同源，「忘接一路」结构上不可能。
+   * 缺省 = 无本地 dispatcher 装配（connect 模式等）。
+   */
+  assembly?: CollectedFeatures;
   /** nodeId 唯一来源：config.host.nodeId > node.json > 首次生成 */
   nodeId: string;
   /** 节点展示名：config.host.nodeName > node.json > hostname 派生 */
