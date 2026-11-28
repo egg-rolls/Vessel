@@ -558,8 +558,8 @@ function isHttpsRequest(req: Request): boolean {
 /**
  * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
  * script-src 在 `'self'` 之外只放行内联 import map 的冻结 sha256（plugin-embed
- * 契约 §6）；frame-src 仅在传入扩展源时输出，且恒带 `'self'`（同源插件 iframe，
- * 见函数体注释）；其余指令保持基线。
+ * 契约 §6）；frame-src 恒输出且恒带 `'self' blob:`（同源插件 iframe + PDF 预览
+ * blob: iframe，见函数体注释）；其余指令保持基线。
  *
  * 0.56：`facts` 由受信边缘解析（`resolveRequestEdge`）给出。反代后面板
  * `req.url` 恒为 `http:`，只看它会给 https 页面下发 `ws://` 并被浏览器拦掉；
@@ -599,13 +599,15 @@ export function buildContentSecurityPolicy(
     if (url === null) continue;
     if (url.protocol === 'http:' || url.protocol === 'https:') frameSources.add(url.origin);
   }
-  // 有扩展源时 frame-src 必须带上 'self'：兜底同源 framing（legacy 页面同源 =
-  // node，插件 iframe 也是同源）。平台/代理模式的插件 iframe 按 2026-11-23 裁决
-  // 直连 node origin（PluginFrame 取选中节点 api_url），由扩展源里的 node origin
-  // 放行；'self' 不扩大跨源面（frame-ancestors 'none' 不变）。无扩展源时保持旧
-  // 输出（无指令，default-src 'self' 兜底）。
-  const frameDirective =
-    frameSources.size > 0 ? `frame-src 'self' ${[...frameSources].join(' ')}; ` : '';
+  // frame-src 恒带 'self' blob:：'self' 兜底同源 framing（legacy 页面同源 =
+  // node，插件 iframe 也是同源）；blob: 是 PdfLightbox 原生 PDF 查看器必需
+  // （iframe src=blob: URL），blob 同源创建、不扩大跨源面。平台/代理模式的
+  // 插件 iframe 按 2026-11-23 裁决直连 node origin（PluginFrame 取选中节点
+  // api_url），由扩展源里的 node origin 放行；frame-ancestors 'none' 不变。
+  // 无扩展源时同样输出本指令 —— 否则 default-src 'self' 兜底会拦掉 blob: iframe。
+  const frameDirective = `frame-src 'self' blob:${
+    frameSources.size > 0 ? ` ${[...frameSources].join(' ')}` : ''
+  }; `;
   // plugin-embed 契约 §6：内联 import map（apps/web vite.config.ts 注入的冻结
   // JSON，260 字节）受 script-src 约束，这里放行它的 sha256。哈希与 import map
   // 内容互为冻结契约（docs/architecture/plugin-embed.md §6）：改一处必须同步改
