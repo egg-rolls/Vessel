@@ -1465,6 +1465,8 @@ export const messages = {
   'chat.toolImage.copyPath': '复制路径',
   'chat.toolImage.pathCopied': '路径已复制',
   'chat.toolImage.staging': '临时（未入池）',
+  // q-pdf-preview-channel：PDF 预览弹窗（关闭 / 路径复制 / 临时态复用 chat.toolImage.*）。
+  'chat.pdf.previewNamed': '预览 {name}',
   // q-block-cardshell-unify：统一文件卡（正文 vessel-ref token 提升；CardShell 表面）。
   // 放大 / 加载文案复用上面 chat.toolImage.*；投递 chip 复用 chat.refs.image.*。
   'chat.refCard.copyPath': '复制路径',

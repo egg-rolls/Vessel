@@ -103,8 +103,12 @@ const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   'log',
 ]);
 
-/** 图片扩展名 → MIME（preview 的 data URL 用；不认识 = 非图片）。 */
-const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
+/**
+ * 可预览扩展名 → MIME 白名单（preview 的 data URL 用；不认识 = `not_image`）。
+ * 闭集 = image/* + application/pdf（q-pdf-preview-channel）：PDF 走浏览器原生
+ * 查看器，与图片同一条读字节路径 / 边界闸 / size 上限，不另开通道。
+ */
+const PREVIEW_MIME_BY_EXT: Readonly<Record<string, string>> = {
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
@@ -116,6 +120,7 @@ const IMAGE_MIME_BY_EXT: Readonly<Record<string, string>> = {
   avif: 'image/avif',
   tiff: 'image/tiff',
   tif: 'image/tiff',
+  pdf: 'application/pdf',
 };
 
 function extensionOf(name: string): string {
@@ -195,7 +200,8 @@ export function createConfigAttachmentStager(options: AttachmentStagingOptions):
  * 构造 `attachments.preview` 的读回 / 探针函数。
  *
  * 边界 ask/deny ⇒ `denied`（不读）；不存在 ⇒ `gone`（过期态）；
- * 非图片 ⇒ `not_image`；超上限 ⇒ `too_large`；其余读字节出 data URL。
+ * 白名单外（image/* + application/pdf 之外）⇒ `not_image`；超上限 ⇒ `too_large`；
+ * 其余读字节出 data URL（PDF 与图片同路，fail-closed 语义不变）。
  * 暂存根内的路径附带 `staging: true` + `expiresAt`（「临时」徽标 / 过期态的数据源）。
  */
 export function createConfigAttachmentPreviewer(
@@ -222,7 +228,7 @@ export function createConfigAttachmentPreviewer(
     const stagingFields = staging
       ? { staging: true, expiresAt: Math.floor(info.mtimeMs) + STAGING_TTL_MS }
       : {};
-    const mime = IMAGE_MIME_BY_EXT[extensionOf(canonical)];
+    const mime = PREVIEW_MIME_BY_EXT[extensionOf(canonical)];
     if (mime === undefined) {
       return { status: 'not_image', bytes: info.size, ...stagingFields };
     }
