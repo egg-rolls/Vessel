@@ -445,6 +445,7 @@ export const messages = {
   // 思考卡自己的复制动作：复制的是**思考原文**，不是整条消息 ——
   // 与「复制消息」（chat.message.copy）是两件事、两个 key，不要合并。
   'chat.reasoning.copy': '复制思考',
+  'chat.reasoning.copyBody': '复制正文',
   'chat.reasoning.copied': '已复制思考',
   'chat.tool.input': '输入',
   'chat.tool.output': '输出',
@@ -1464,6 +1465,10 @@ export const messages = {
   'chat.toolImage.copyPath': '复制路径',
   'chat.toolImage.pathCopied': '路径已复制',
   'chat.toolImage.staging': '临时（未入池）',
+  // q-tool-card-slot：工具附件结果卡（新锚 [tool media]；legacy 工具图片卡文案不动）。
+  'chat.toolMedia.group': '工具附件',
+  'chat.toolMedia.title': '工具附件',
+  'chat.toolMedia.count': '{count} 项',
   // q-pdf-preview-channel：PDF 预览弹窗（关闭 / 路径复制 / 临时态复用 chat.toolImage.*）。
   'chat.pdf.previewNamed': '预览 {name}',
   // q-block-cardshell-unify：统一文件卡（正文 vessel-ref token 提升；CardShell 表面）。

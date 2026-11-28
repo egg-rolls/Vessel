@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
-import { Button, MessageActions, useMessageCopy } from '../../components/ui';
+import { Button, type MessageAction, MessageActions, useMessageCopy } from '../../components/ui';
 import { formatClock } from '../../format';
 import type { Message, ProjectionSummary } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -497,8 +497,9 @@ export function TranscriptWindow({
   // 「这个 run 有没有思考卡」：**按 run 汇总**判定，不看某条消息自己的渲染。
   // live 的思考是**独立 item**（`run-reasoning`），判据门槛与历史态同一个
   // `hasReasoningCard`（非空白文本才算一张卡），只是这边要先把 item 归到 run 上。
-  // 用途只有一件：这一轮**有**思考卡 ⇒ 时间已经上移到卡头，正文下方的
-  // `MessageActions` 不再重复渲染时间；没有卡的那一轮才把时间放回工具栏。
+  // 用途：这一轮**有**思考卡 ⇒ 时间已上移卡头，且正文下方的远端 `MessageActions`
+  // **整组**不渲染（q-tool-card-slot P1a/P1b：复制正文 / 引用 / 重试上移近端）；
+  // 没有卡的那一轮才把时间放回工具栏、保留远端组。
   const reasoningRunsRef = useRef<Set<string>>(new Set());
   const reasoningRuns = useMemo(() => {
     const runs = new Set<string>();
@@ -542,6 +543,57 @@ export function TranscriptWindow({
     return map;
   }, [items]);
 
+  // 每张 live 思考卡的近端上下文（q-tool-card-slot P1b）：它所属的正文段 = 时间线序
+  // 同 run 的**下一个 run-text**（思考在正文前，与历史侧「思考挂消息内」同序）；
+  // isRunEnd = 该正文段是不是 run 最后一段（与 lastTextKeyByRun 同源）。
+  // 复制正文 / 引用作用于**这一段**的正文（与历史侧逐消息语义一致）；重试只挂
+  // run 最后一张思考卡且流式已结束（与历史侧 run-end 重试同判据）。
+  // 引用稳定策略同 reasoningRuns：内容不变时保留旧 Map 引用（行级 memo st-F1）。
+  const reasoningContextRef = useRef<
+    Map<string, { body: string; bodyStreaming: boolean; isRunEnd: boolean }>
+  >(new Map());
+  const reasoningContext = useMemo(() => {
+    const map = new Map<string, { body: string; bodyStreaming: boolean; isRunEnd: boolean }>();
+    const nextTextByRun = new Map<string, { key: string; text: string; streaming: boolean }>();
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      if (item === undefined) continue;
+      if (item.kind === 'run-text') {
+        nextTextByRun.set(item.runId, {
+          key: item.key,
+          text: item.text,
+          streaming: item.streaming,
+        });
+        continue;
+      }
+      if (item.kind !== 'run-reasoning') continue;
+      const next = nextTextByRun.get(item.runId);
+      if (next === undefined) continue;
+      map.set(item.key, {
+        body: next.text,
+        bodyStreaming: next.streaming,
+        isRunEnd: lastTextKeyByRun.get(item.runId) === next.key,
+      });
+    }
+    const previous = reasoningContextRef.current;
+    if (
+      previous.size === map.size &&
+      [...map].every(([key, value]) => {
+        const before = previous.get(key);
+        return (
+          before !== undefined &&
+          before.body === value.body &&
+          before.bodyStreaming === value.bodyStreaming &&
+          before.isRunEnd === value.isRunEnd
+        );
+      })
+    ) {
+      return previous;
+    }
+    reasoningContextRef.current = map;
+    return map;
+  }, [items, lastTextKeyByRun]);
+
   // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
   // 时的那一行状态。主会话页以前完全没有这句话 —— 只有子 agent transcript 里有，
   // 于是「发出去还没吐字」的那几秒页面上什么都没有，只能看输入框有没有「停止」。
@@ -574,6 +626,24 @@ export function TranscriptWindow({
 
   // 正文 / 思考 item 的复制入口（`chat.message.copy` 那套），与历史消息同一个 hook。
   const copy = useMessageCopy();
+
+  // 这个 run 的人类输入（q-tool-card-slot P1b 重试注入）：优先认领账本
+  // （claimedUserByRun），缺省退回「唯一输入」判据（inputsByRun 恰一条，与
+  // uniqueInputOfRun 同源）；不唯一 / 不在窗口 ⇒ 不给重试（不猜）。下标是绝对
+  // 下标（messageIndexOffset 已含），与历史侧 onRetryMessage 同一口径。
+  const runInputOf = useCallback(
+    (runId: string): { index: number; text: string } | undefined => {
+      const claimed = historyIndex.claims?.claimedUserByRun.get(runId);
+      const indexes = claimed !== undefined ? [claimed] : historyIndex.inputsByRun.get(runId);
+      if (indexes === undefined || indexes.length !== 1) return undefined;
+      const index = indexes[0];
+      if (index === undefined) return undefined;
+      const message = historyIndex.messageByIndex.get(index);
+      if (message === undefined || message.content.trim().length === 0) return undefined;
+      return { index, text: message.content };
+    },
+    [historyIndex],
+  );
 
   // roster 名字表（ChatView 注入，无 Provider 时 undefined）：inbox read 承接卡把
   // principal 地址解析成名字，解析不到退短 id —— 查表不是造名（§5.2 纪律）。
@@ -715,7 +785,10 @@ export function TranscriptWindow({
           //
           // 时间：这一轮**有**思考卡 ⇒ 时间只在卡头（见 `reasoningRuns`），正文下方
           // 不重复；没有思考卡的那一轮才把时间放回工具栏的 meta。
-          const clock = reasoningRuns.has(item.runId) ? '' : formatClock(item.ts);
+          // q-tool-card-slot P1b：有思考卡 ⇒ 远端工具栏**整组**不渲染（复制正文 / 引用 /
+          // 重试已上移思考卡近端，与历史侧 Transcript 同一裁定）；无卡 run 逐字不变。
+          const hasReasoning = reasoningRuns.has(item.runId);
+          const clock = hasReasoning ? '' : formatClock(item.ts);
           const isRunEnd = lastTextKeyByRun.get(item.runId) === item.key;
           return (
             <AssistantText
@@ -724,7 +797,7 @@ export function TranscriptWindow({
               entering={isEntering(item.key)}
               onJumpQuote={jumpToMessage}
               actions={
-                item.text.trim().length > 0 ? (
+                !hasReasoning && item.text.trim().length > 0 ? (
                   <MessageActions
                     className={isRunEnd ? 'mt-1' : undefined}
                     placement={isRunEnd ? 'bottom' : 'side'}
@@ -746,22 +819,50 @@ export function TranscriptWindow({
             />
           );
         }
-        case 'run-reasoning':
+        case 'run-reasoning': {
           // q-msg-visibility：思考过程 toggle（与历史侧 Transcript 同一判定）。
           if (!showReasoning) return null;
           // 思考卡：首次出现走 `.motion-appear`（只动透明度），展开 / 收起由
           // ReasoningBlock 内部的 `.motion-disclosure` 负责（见 styles/motion.css）。
-          // 卡上没有消息工具栏（用户要的），只有一个卡头自带的「复制思考」小按钮，
-          // 由组件自己渲染 —— 这里不需要传任何 actions。
           // `time`：这一段自己的时刻（`startedAt`，也是排序依据，只读），渲染在卡头最右。
+          //
+          // 近端动作组（q-tool-card-slot P1b，与历史侧同一裁定）：单复制菜单
+          // （复制思考 / 复制正文）+ 引用 + 重试。正文 = 本思考段所属的正文段
+          // （reasoningContext，时间线序同 run 下一个 run-text）；引用作用于这一段
+          // （live 段尚未落盘 ⇒ 无 message_id 信封，与旧无 id 消息同形：渲染不跳转）；
+          // 重试只挂 run 最后一张思考卡且流式已结束（run-end 判据与历史侧同源）。
+          const context = reasoningContext.get(item.key);
+          const body = context?.body ?? '';
+          const hasBody = body.trim().length > 0;
+          const nearActions: MessageAction[] = [];
+          if (hasBody && onQuoteMessage !== undefined) {
+            nearActions.push({
+              id: 'quote',
+              label: t('chat.quote.action'),
+              onSelect: () => onQuoteMessage({ role: 'assistant', content: body }),
+            });
+          }
+          if (context?.isRunEnd === true && !context.bodyStreaming && !item.streaming) {
+            const input = runInputOf(item.runId);
+            if (input !== undefined) {
+              nearActions.push({
+                id: 'retry',
+                label: t('chat.message.retry'),
+                onSelect: () => onRetryMessage(input.index, input.text),
+              });
+            }
+          }
           return (
             <ReasoningBlock
               text={item.text}
               streaming={item.streaming}
               entering={isEntering(item.key)}
               {...(item.startedAt !== undefined ? { time: item.startedAt } : {})}
+              actions={nearActions}
+              {...(hasBody ? { onCopyBody: () => copy(body) } : {})}
             />
           );
+        }
         case 'tool':
           // q-msg-visibility：工具卡片 toggle（失败卡永不静默，与 live 同一判定）。
           if (!toolVisible(item.status, verbosity, messageVisibility.tools)) return null;
@@ -868,6 +969,10 @@ export function TranscriptWindow({
       jumpToMessage,
       reasoningRuns,
       lastTextKeyByRun,
+      reasoningContext,
+      runInputOf,
+      onQuoteMessage,
+      onRetryMessage,
       agentNames,
       verbosity,
       messageVisibility,

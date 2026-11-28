@@ -13,8 +13,8 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { BlockView, MessageBlocks } from './block-views';
 import { isIndexUserMessage } from './conversation-index';
-import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
+import { MessageContentSurface } from './MessageContentSurface';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { isCardInputMessage, type TranscriptItem } from './transcript-items';
 
@@ -137,14 +137,22 @@ const TranscriptMessage = memo(function TranscriptMessage({
     }
     // 块提升（块 P0）：一次 liftBlocks 收编 quote / session-ref / image / file 解析；
     // 不是信封时 blocks 为空、body = 原文（零回归）。顺序由注册表 order 决定。
-    // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
-    const { blocks, body, inline } = liftBlocks(message, { messages: quoteTargets });
+    // 块区 + 正文经 MessageContentSurface 统一渲染（P2）：file 内联数据（token 卡 +
+    // 剩余 refs）进气泡内 InlineText（D3），气泡 + 折叠由 wrapBody 包。
+    const lifted = liftBlocks(message, { messages: quoteTargets });
+    const { blocks } = lifted;
     const actions: MessageAction[] = [];
     // 工具图片注入（media view 等）：整条消息成卡（注册表 image 块），替代
     // 「[tool image]…」文本 dump；原始注记收进卡内折叠区（组件内部不动）。
     const imageBlock = blocks.find((block) => block.type === 'image');
     if (imageBlock !== undefined) {
       return <BlockView block={imageBlock} />;
+    }
+    // 新锚工具附件注入（q-tool-card-slot）：整条成 ToolResultCard（注册表
+    // tool-media 块，插槽 = 伪消息同一管线）；旧前缀仍走上面的 legacy image 块。
+    const mediaBlock = blocks.find((block) => block.type === 'tool-media');
+    if (mediaBlock !== undefined) {
+      return <BlockView block={mediaBlock} />;
     }
     if (message.content.trim().length > 0) {
       actions.push({
@@ -171,16 +179,17 @@ const TranscriptMessage = memo(function TranscriptMessage({
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
         {/* 块按注册表顺序在气泡上方：先「回复哪一句」（quote），再会话引用卡。
             文件 chip 已进气泡内（InlineText：token 原位 + 剩余 refs 尾部）。
-            不改正文，也不影响 copy / edit。 */}
-        <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-        {/* 空气泡判据：正文非空 ∨ 有剩余 refs（尾部 chip 行也要有气泡承载）。 */}
-        {(body.length > 0 || (inline?.refs.length ?? 0) > 0) && (
-          <div className="msg-bubble">
-            <MessageFold>
-              <InlineText text={body} match={inline} />
-            </MessageFold>
-          </div>
-        )}
+            不改正文，也不影响 copy / edit。表面统一渲染（P2 MessageContentSurface）。 */}
+        <MessageContentSurface
+          lifted={lifted}
+          messageRole="user"
+          render={{ onJumpQuote }}
+          wrapBody={(node) => (
+            <div className="msg-bubble">
+              <MessageFold>{node}</MessageFold>
+            </div>
+          )}
+        />
         {hasMeta || actions.length > 0 ? (
           <MessageActions className="justify-end" actions={actions} meta={meta} />
         ) : null}
@@ -191,14 +200,47 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const calls = message.tool_calls ?? [];
   // 块提升（块 P0）：AI 回复也可以带信封引用用户消息（双向同形）；session-ref
   // 信封同样提升成卡。一次 liftBlocks，未知正文原样渲染（零回归）。
-  const { blocks, body } = liftBlocks(message, { messages: quoteTargets });
+  const lifted = liftBlocks(message, { messages: quoteTargets });
+  const { blocks, body } = lifted;
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
   // q-msg-visibility：思考过程 toggle / minimal 档关闭时不渲（与 live 同一判定）。
   const reasoning = showReasoning ? historyReasoning(message) : undefined;
-  // 时间归属：这一条**有**思考卡 ⇒ 时间在卡头（`ReasoningBlock` 的 `time`），正文下方
-  // 的工具栏不再重复渲染。判据与 live 同源（`hasReasoningCard`；live 侧先在
-  // `TranscriptWindow` 里按 run 汇总，再落到同一道门槛）。
-  const meta = reasoning === undefined && clock !== '' ? clock : undefined;
+  // 有思考卡（q-tool-card-slot P1a 裁示③）：quote / retry / 复制正文全部上移卡头近端
+  // （ReasoningBlock 复用 MessageActions + 单复制菜单），正文下方远端工具栏**整组不渲染**
+  // （时间已在卡头）。无卡消息走下方原路径，逐字不变。
+  if (reasoning !== undefined) {
+    const hasBody = message.content.trim().length > 0;
+    const nearActions: MessageAction[] = [];
+    if (hasBody && onQuote !== undefined) {
+      nearActions.push({
+        id: 'quote',
+        label: t('chat.quote.action'),
+        onSelect: () => onQuote(message),
+      });
+    }
+    if (calls.length === 0 && previousUser !== undefined && previousUser.text.trim().length > 0) {
+      nearActions.push({
+        id: 'retry',
+        label: t('chat.message.retry'),
+        onSelect: () => onRetry(previousUser.index, previousUser.text),
+      });
+    }
+    return (
+      <div className="msg-assistant group relative max-w-full">
+        <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
+        <ReasoningBlock
+          text={reasoning}
+          streaming={false}
+          time={message.timestamp}
+          actions={nearActions}
+          {...(hasBody ? { onCopyBody: () => onCopy(message.content) } : {})}
+        />
+        {body && <Markdown className="msg-text" text={body} />}
+      </div>
+    );
+  }
+  // 时间归属：无思考卡的消息时间在正文下方工具栏（有卡时已在上面近端分支处理）。
+  const meta = clock !== '' ? clock : undefined;
   const actions: MessageAction[] = [];
   if (message.content.trim().length > 0) {
     actions.push({
@@ -227,22 +269,20 @@ const TranscriptMessage = memo(function TranscriptMessage({
   // - **非 run 结束消息**（带 tool_calls 的中间段，工具栏只有复制）：`placement="side"`
   //   浮在卡右上角内部（absolute，不占下方空间），避免正文下方空开一行造成割裂。
   // 判据与 live 侧同源：live 的「最后一段正文」落盘后就是无 tool_calls 的这条
-  // （见 TranscriptWindow / RunItems 的 lastTextKey）。思考卡上不挂工具栏（用户明确
-  // 去掉）；卡头只有一个独立的「复制思考」小按钮（见 `ReasoningBlock.tsx`）。
+  // （见 TranscriptWindow / RunItems 的 lastTextKey）。**有思考卡的消息走不到这里**
+  // （上面近端分支已整组上移卡头，q-tool-card-slot P1a）；本路径只服务无卡消息。
   // 显隐（hover / focus-within / 触屏常显）在 `MessageActions` 自己身上。
-  // 时间不在这里的例外只有一个：上面那条 `meta`（有思考卡时为空，时间已上移卡头）。
   const isRunEnd = calls.length === 0;
   return (
     <div className="msg-assistant group relative max-w-full">
-      {/* 块在最前：这条回复「针对哪一句」先于思考与正文（注册表顺序）。 */}
-      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。
-          `time` = 这条消息的时刻：有思考卡时，这一轮的时间只出现在卡头最右。 */}
-      {reasoning !== undefined && (
-        <ReasoningBlock text={reasoning} streaming={false} time={message.timestamp} />
-      )}
-      {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
-      {body && <Markdown className="msg-text" text={body} />}
+      {/* 块在最前：这条回复「针对哪一句」先于正文（注册表顺序）。表面统一渲染（P2）：
+          助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
+      <MessageContentSurface
+        lifted={lifted}
+        messageRole="assistant"
+        render={{ onJumpQuote }}
+        bodyClassName="msg-text"
+      />
       {meta !== undefined || actions.length > 0 ? (
         <MessageActions
           className={isRunEnd ? 'mt-1' : undefined}

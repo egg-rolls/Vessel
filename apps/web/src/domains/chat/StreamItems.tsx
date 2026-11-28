@@ -1,6 +1,5 @@
 import { memo, type ReactNode, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
-import { Markdown } from '../../components/Markdown';
 import { StatusChip, StatusGlyph } from '../../components/StatusChip';
 import {
   Button,
@@ -24,7 +23,6 @@ import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
 import { truncateSnippet } from '../../text';
 import { AgentMessageCard } from './AgentMessageCard';
 import { senderOfName } from './agent-sender';
-import { MessageBlocks } from './block-views';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 import { EnvCard } from './EnvCard';
@@ -35,8 +33,8 @@ import {
   envCardOfPromptContext,
 } from './env-notice';
 import { humanizeRunError } from './error-text';
-import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
+import { MessageContentSurface } from './MessageContentSurface';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
@@ -149,7 +147,8 @@ export function AssistantText({
   const [reveal] = useState(() => (streaming ? 'stream' : entering ? 'enter' : 'none'));
   // 块提升（块 P0）：AI 回复开头的信封提升成块（quote 轻量块 / session-ref 卡，
   // 双向同形）。流式期信封未收全时解析返回 null，正文原样渲染；收全后自然提升。
-  const { blocks, body } = liftBlocks({ role: 'assistant', content: text });
+  // 块区 + 正文经 MessageContentSurface 统一渲染（P2，与历史侧同一表面）。
+  const lifted = liftBlocks({ role: 'assistant', content: text });
   return (
     <div
       className={cn(
@@ -165,8 +164,13 @@ export function AssistantText({
         reveal === 'stream' && streaming && 'motion-stream',
       )}
     >
-      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      <Markdown className="msg-text" text={body} streaming={streaming} />
+      <MessageContentSurface
+        lifted={lifted}
+        messageRole="assistant"
+        render={{ onJumpQuote }}
+        streaming={streaming}
+        bodyClassName="msg-text"
+      />
       {actions}
     </div>
   );
@@ -211,14 +215,13 @@ export function UserBubble({
 }) {
   const clock = formatClock(ts);
   // 块提升（块 P0）：信封提升成气泡上方的块，与历史气泡同形（同一管线）。
-  // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
-  const { blocks, body, inline } = liftBlocks({
+  // 块区 + 正文经 MessageContentSurface 统一渲染（P2）：file 内联数据（token 卡 +
+  // 剩余 refs）进气泡内 InlineText（D3）；空气泡判据在表面内（同一口径）。
+  const lifted = liftBlocks({
     role: 'user',
     content: text,
     ...(refs !== undefined ? { refs: [...refs] } : {}),
   });
-  // 空气泡判据：正文非空 ∨ 有剩余 refs（尾部 chip 行也要有气泡承载）。
-  const hasBubble = body.length > 0 || (inline?.refs.length ?? 0) > 0;
   return (
     <div
       className={cn(
@@ -226,17 +229,19 @@ export function UserBubble({
         entering && 'msg-enter',
       )}
     >
-      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      {hasBubble && (
-        <div className="msg-bubble">
-          {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
-              只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。
-              正文 = 纯文本 + 内联 chip（InlineText，绝不 Markdown）。 */}
-          <MessageFold>
-            <InlineText text={body} match={inline} />
-          </MessageFold>
-        </div>
-      )}
+      <MessageContentSurface
+        lifted={lifted}
+        messageRole="user"
+        render={{ onJumpQuote }}
+        wrapBody={(node) => (
+          <div className="msg-bubble">
+            {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
+                只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。
+                正文 = 纯文本 + 内联 chip（InlineText，绝不 Markdown）。 */}
+            <MessageFold>{node}</MessageFold>
+          </div>
+        )}
+      />
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
       <MessageActions
         className="justify-end"
