@@ -12,8 +12,10 @@
 
 import type { AssemblyFeature } from './feature';
 import { attachmentsFeature } from './features/attachments';
+import { jobsFeature } from './features/jobs';
 
 export const ASSEMBLY_FEATURES: readonly AssemblyFeature[] = [
   // id 字典序，一行一 feature（P2 第一批：attachments / jobs / kanban / restart）
   attachmentsFeature,
+  jobsFeature,
 ];
