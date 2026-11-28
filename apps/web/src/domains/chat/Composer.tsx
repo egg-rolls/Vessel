@@ -354,6 +354,8 @@ export function Composer({
             }}
             onKeyDown={(event) => {
               if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+              // chip/原子卡 button 焦点：放行原生激活（Enter 开预览/移除），不吞默认不发送（D-1）。
+              if ((event.target as HTMLElement).closest('button')) return;
               // Ctrl / Cmd + Enter 是显式发送和弦；裸 Enter 保持既有发送行为，
               // Shift+Enter 仍换行（RichComposer 内部插入换行）。三条路径共用 canSend。
               const chord = event.ctrlKey || event.metaKey;
