@@ -13,6 +13,7 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { BlockView, MessageBlocks } from './block-views';
 import { isIndexUserMessage } from './conversation-index';
+import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { isCardInputMessage, type TranscriptItem } from './transcript-items';
@@ -136,7 +137,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
     }
     // 块提升（块 P0）：一次 liftBlocks 收编 quote / session-ref / image / file 解析；
     // 不是信封时 blocks 为空、body = 原文（零回归）。顺序由注册表 order 决定。
-    const { blocks, body } = liftBlocks(message, { messages: quoteTargets });
+    // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
+    const { blocks, body, inline } = liftBlocks(message, { messages: quoteTargets });
     const actions: MessageAction[] = [];
     // 工具图片注入（media view 等）：整条消息成卡（注册表 image 块），替代
     // 「[tool image]…」文本 dump；原始注记收进卡内折叠区（组件内部不动）。
@@ -167,14 +169,16 @@ const TranscriptMessage = memo(function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-        {/* 块按注册表顺序在气泡上方：先「回复哪一句」（quote），再会话引用卡，
-            再「带了什么文件」（refs chip）。不改正文，也不影响 copy / edit。
-            0.56：图片引用同时显示投递三态（从事件派生，服务端随历史下发）。 */}
+        {/* 块按注册表顺序在气泡上方：先「回复哪一句」（quote），再会话引用卡。
+            文件 chip 已进气泡内（InlineText：token 原位 + 剩余 refs 尾部）。
+            不改正文，也不影响 copy / edit。 */}
         <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-        {/* 正文全部被块消费（如只有 vessel-ref token）时不留空气泡。 */}
-        {body.length > 0 && (
+        {/* 空气泡判据：正文非空 ∨ 有剩余 refs（尾部 chip 行也要有气泡承载）。 */}
+        {(body.length > 0 || (inline?.refs.length ?? 0) > 0) && (
           <div className="msg-bubble">
-            <MessageFold>{body}</MessageFold>
+            <MessageFold>
+              <InlineText text={body} match={inline} />
+            </MessageFold>
           </div>
         )}
         {hasMeta || actions.length > 0 ? (

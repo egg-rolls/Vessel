@@ -7,8 +7,9 @@
  * - session-ref：`session-ref.ts#liftSessionRefForDisplay`（本批新补，zh/en 双词）；
  * - image：`transcript-items.ts#toolImageRefsOf`（整条消息成卡）；
  * - notice：`env-notice.ts#runtimeEnvCard`（统一装配入口的包装）；
- * - file：结构化 `Message.refs` + 正文 vessel-ref token（token 成卡剥出正文，
- *   按 path occurrence 与 refs 去重；工具图片卡已含非图 refs 时不重复出 chip）；
+ * - file：结构化 `Message.refs` + 正文 vessel-ref token（**不剥正文**：token 留
+ *   body 原位，match 结果经 `inline` 字段喂 InlineText 气泡内渲 chip；按 path
+ *   occurrence 与 refs 去重；工具图片卡已含非图 refs 时不重复出 chip）；
  * - vessel-block：`vessel-block.ts#parseVesselBlockFence`（块 P1 试点：整条正文
  *   单闭合 fence + table/code schema（P2 扩），坏 payload / 未闭合一律原文渲染）。
  *
@@ -29,19 +30,25 @@ import {
   type LiftedBlock,
   registerBlockType,
 } from './block-registry';
-import { blockViews } from './block-views';
+import { blockViews, type FileBlockPayload } from './block-views';
 import { runtimeEnvCard } from './env-notice';
-import { liftFileTokens, matchFileTokens } from './file-token';
+import { type FileTokenMatch, matchFileTokens, scanFileTokens } from './file-token';
 import { composeQuoteText, liftQuoteForDisplay } from './quote-ref';
 import { composeSessionRefText, liftSessionRefForDisplay } from './session-ref';
 import { toolImageRefsOf } from './transcript-items';
 import { parseVesselBlockFence } from './vessel-block';
 
 export interface LiftBlocksResult {
-  /** 按注册表 order 排好的块（quote 最前 → session-ref → image/notice → file → vessel-block）。 */
+  /** 按注册表 order 排好的块（quote 最前 → session-ref → image/notice → vessel-block）。 */
   blocks: LiftedBlock[];
   /** 剥掉所有被消费信封后的剩余正文（无块时 = 原文，逐字节）。 */
   body: string;
+  /**
+   * 用户侧 file 内联数据（图片内嵌气泡精炼 D3）：token 卡 + 剩余 refs。
+   * file 块不再进块区 / 不剥正文 —— token 留 body 原位，消费点把本字段喂给
+   * InlineText 在气泡内渲 chip（剩余 refs 尾部 chip 行）。
+   */
+  inline?: FileTokenMatch;
 }
 
 /**
@@ -51,13 +58,24 @@ export interface LiftBlocksResult {
 export function liftBlocks(message: Message, ctx: LiftCtx = {}): LiftBlocksResult {
   let body = message.content;
   const blocks: LiftedBlock[] = [];
+  let inline: FileTokenMatch | undefined;
   for (const spec of blockTypesInOrder()) {
     for (const block of spec.lift({ message, body }, ctx)) {
+      // file 块渲染位置在气泡内（D3）：分流到 inline，不进块区、不动 body。
+      if (block.type === 'file') {
+        const payload = block.payload as FileBlockPayload;
+        inline = {
+          cards: payload.tokens ?? [],
+          refs: payload.refs,
+          ...(payload.imageDelivery !== undefined ? { imageDelivery: payload.imageDelivery } : {}),
+        };
+        continue;
+      }
       blocks.push(block);
       if (block.body !== undefined) body = block.body;
     }
   }
-  return { blocks, body };
+  return { blocks, body, ...(inline !== undefined ? { inline } : {}) };
 }
 
 // ── 宿主原生 type 注册（启动即注册；owner='host'，不参与插件注销）──────────────
@@ -153,14 +171,14 @@ registerBlockType({
     if (message.role !== 'user') return [];
     // 工具图片卡内部已渲非图 refs（MessageRefs）：整条成卡时不重复出 chip。
     if (toolImageRefsOf(message) !== undefined) return [];
-    // 正文 vessel-ref token 提升（用户新 UI 方向①）：完整 token 成卡、剥出正文；
-    // 半截形状不命中 ⇒ 原文保留（流式逐字不闪）。与结构化 refs 按 path occurrence
-    // 匹配去重（镜像 composer refsToAttachmentsFiltered）：被 token 消费的 ref 不
-    // 再出 chip，剩余 refs 照旧 chip —— 每个 occurrence 恰渲一次。
-    const lifted = liftFileTokens(body);
+    // 正文 vessel-ref token **不剥正文**（图片内嵌气泡精炼 D3）：token 留 body
+    // 原位由 InlineText 内联成 chip；半截形状不命中（流式逐字不闪）。与结构化
+    // refs 按 path occurrence 匹配去重（镜像 composer refsToAttachmentsFiltered）：
+    // 被 token 消费的 ref 不再出 chip，剩余 refs 进气泡尾部 chip 行。
+    const tokens = scanFileTokens(body);
     const refs = message.refs ?? [];
-    if (lifted === null && refs.length === 0) return [];
-    const match = matchFileTokens(lifted?.tokens ?? [], refs, message.image_delivery);
+    if (tokens.length === 0 && refs.length === 0) return [];
+    const match = matchFileTokens(tokens, refs, message.image_delivery);
     return [
       {
         type: 'file',
@@ -169,7 +187,6 @@ registerBlockType({
           ...(match.imageDelivery !== undefined ? { imageDelivery: match.imageDelivery } : {}),
           ...(match.cards.length > 0 ? { tokens: match.cards } : {}),
         },
-        ...(lifted !== null ? { body: lifted.body } : {}),
       },
     ];
   },

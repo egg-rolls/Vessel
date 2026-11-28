@@ -35,6 +35,7 @@ import {
   envCardOfPromptContext,
 } from './env-notice';
 import { humanizeRunError } from './error-text';
+import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
@@ -210,13 +211,14 @@ export function UserBubble({
 }) {
   const clock = formatClock(ts);
   // 块提升（块 P0）：信封提升成气泡上方的块，与历史气泡同形（同一管线）。
-  // refs 一并交给管线（q-block-cardshell-unify）：file 块统一做 token 卡 + chip
-  // 的 occurrence 去重 —— 不再另挂独立 MessageRefs 线（否则 chip 双出）。
-  const { blocks, body } = liftBlocks({
+  // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
+  const { blocks, body, inline } = liftBlocks({
     role: 'user',
     content: text,
     ...(refs !== undefined ? { refs: [...refs] } : {}),
   });
+  // 空气泡判据：正文非空 ∨ 有剩余 refs（尾部 chip 行也要有气泡承载）。
+  const hasBubble = body.length > 0 || (inline?.refs.length ?? 0) > 0;
   return (
     <div
       className={cn(
@@ -225,12 +227,14 @@ export function UserBubble({
       )}
     >
       <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      {/* 正文全部被块消费（如只有 token）时不留空气泡。 */}
-      {body.length > 0 && (
+      {hasBubble && (
         <div className="msg-bubble">
           {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
-              只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
-          <MessageFold>{body}</MessageFold>
+              只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。
+              正文 = 纯文本 + 内联 chip（InlineText，绝不 Markdown）。 */}
+          <MessageFold>
+            <InlineText text={body} match={inline} />
+          </MessageFold>
         </div>
       )}
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}

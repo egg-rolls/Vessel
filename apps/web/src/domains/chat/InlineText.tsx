@@ -48,13 +48,25 @@ export function InlineText({ text, match }: { text: string; match?: FileTokenMat
     const segments = segmentByKnownSchemes(text, known);
     // token ↔ ref 按 path occurrence 消费（与 matchFileTokens 同序同口径）。
     const consumed = new Set<number>();
-    return segments.map((segment, index) => {
-      if (segment.type === 'text') return <span key={index}>{segment.text}</span>;
+    // key = 段在原文里的字符偏移（流式只在尾部追加 ⇒ 前缀段 key 稳定）。
+    let offset = 0;
+    return segments.map((segment) => {
+      const key = `s${offset}`;
+      offset += segment.type === 'text' ? segment.text.length : segment.token.length;
+      if (segment.type === 'text') {
+        // pre-wrap 段内自持：会话气泡容器已 pre-wrap（幂等），团队气泡容器
+        // 无 pre-wrap（Markdown 口径）—— 纯文本换行 / 缩进逐字保留靠这里。
+        return (
+          <span key={key} className="whitespace-pre-wrap">
+            {segment.text}
+          </span>
+        );
+      }
       if (segment.scheme !== HOST_SCHEME) {
-        return <PluginInlineSegment key={index} segment={segment} />;
+        return <PluginInlineSegment key={key} segment={segment} />;
       }
       // 空 path token 不成 chip（镜像 liftFileTokens：原文保留）。
-      if (segment.target.length === 0) return <span key={index}>{segment.token}</span>;
+      if (segment.target.length === 0) return <span key={key}>{segment.token}</span>;
       const cardIndex = cards.findIndex(
         (card, i) => !consumed.has(i) && card.path === segment.target,
       );
@@ -64,7 +76,7 @@ export function InlineText({ text, match }: { text: string; match?: FileTokenMat
         path: segment.target,
       };
       if (matched !== undefined) consumed.add(cardIndex);
-      return <InlineRefChip key={index} card={card} />;
+      return <InlineRefChip key={key} card={card} />;
     });
   }, [text, known, cards]);
 

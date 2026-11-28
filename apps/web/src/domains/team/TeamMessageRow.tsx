@@ -4,6 +4,7 @@
  * 系统消息只按 `system_event` 本地化；未知事件回退原始 `content`，
  * 不解析正文里的 from / to / epoch。回复与日志都按 `message_id` 由上层去重。
  */
+import { useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { useOptionalToast } from '../../components/ToastProvider';
@@ -17,6 +18,8 @@ import {
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
+import { matchFileTokens, scanFileTokens } from '../chat/file-token';
+import { InlineText } from '../chat/InlineText';
 import { MessageRefs } from '../chat/MessageRefs';
 
 export interface TeamMessageView extends TeamMessage {
@@ -152,6 +155,17 @@ export function TeamMessageRow({
   const toast = useOptionalToast();
   const copy = useMessageCopy(t('common.copied'));
 
+  // 人发侧 token ↔ refs occurrence 匹配（与会话页同口径；团队页无 lift 管线，
+  // 直接扫正文）。非人发 undefined（走 Markdown 路径）。必须在 system 早退前
+  // （hook 顺序恒定）。
+  const humanMatch = useMemo(
+    () =>
+      message.from === 'human'
+        ? matchFileTokens(scanFileTokens(message.content), message.refs ?? [])
+        : undefined,
+    [message.from, message.content, message.refs],
+  );
+
   if (message.kind === 'system') {
     return <SystemNotice message={message} senderLabel={senderLabel} />;
   }
@@ -269,14 +283,20 @@ export function TeamMessageRow({
         )}
       </div>
 
-      {/* 引用（只有路径）在气泡上方一行：与会话页 `Transcript` 同一组件、同一位置。
-          团队气泡自带底色，chip 行不进气泡（不混正文，也不影响 copy / 折叠）。 */}
-      <MessageRefs refs={message.refs} />
+      {/* 人发侧：文件 chip 进气泡内（InlineText：token 原位 + 剩余 refs 尾部，
+          与会话页用户气泡同口径）；agent / 回复侧 refs 仍在气泡上方一行。 */}
+      {!isHuman && <MessageRefs refs={message.refs} />}
 
       <div className="team-message-bubble">
-        {/* 折叠与会话页同一套组件 / 阈值（`.msg-fold*`）：人发与 agent 回复都折。 */}
+        {/* 折叠与会话页同一套组件 / 阈值（`.msg-fold*`）：人发与 agent 回复都折。
+            人发 = 纯文本 + 内联 chip（绝不 Markdown，ADR-061 同口径）；
+            agent 回复保留 Markdown（vessel-ref 由宿主原生 enhancer 接管，P-B）。 */}
         <MessageFold>
-          <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
+          {isHuman ? (
+            <InlineText text={message.content} match={humanMatch} />
+          ) : (
+            <Markdown className="text-base leading-relaxed wrap-anywhere" text={message.content} />
+          )}
         </MessageFold>
       </div>
 

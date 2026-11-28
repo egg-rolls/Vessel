@@ -104,6 +104,25 @@ export function liftFileTokens(body: string): { tokens: FileToken[]; body: strin
   return { tokens, body: kept.join('\n') };
 }
 
+/**
+ * 正文 → token 列表（**不剥正文**，图片内嵌气泡精炼：token 留 body 原位由
+ * InlineText 内联成 chip）。与 liftFileTokens 同一 TOKEN_RE / 同一命中口径
+ * （空 path 不算、半截不命中），occurrence 顺序一致 —— matchFileTokens 的
+ * 消费语义不变，只是卡的渲染位置从块区移进气泡。
+ */
+export function scanFileTokens(body: string): FileToken[] {
+  const tokens: FileToken[] = [];
+  TOKEN_RE.lastIndex = 0;
+  for (let match = TOKEN_RE.exec(body); match !== null; match = TOKEN_RE.exec(body)) {
+    const name = match[1] ?? '';
+    const path = match[2] ?? '';
+    if (path.length === 0) continue;
+    tokens.push({ name: name.trim() || pathBasename(path), path });
+  }
+  TOKEN_RE.lastIndex = 0;
+  return tokens;
+}
+
 /** 一张 token 卡：token 本身 + 匹配到的结构化 ref（可缺）+ 该 ref 的投递状态。 */
 export interface FileTokenCard extends FileToken {
   /** 同 path 的结构化 ref（按 occurrence 消费）；有它才有 sha256 / 权威 kind / 字节数。 */
@@ -113,11 +132,11 @@ export interface FileTokenCard extends FileToken {
 }
 
 export interface FileTokenMatch {
-  cards: FileTokenCard[];
-  /** 未被 token 消费的 refs（照旧走 MessageRefs chip）。 */
-  refs: MessageRef[];
+  cards: readonly FileTokenCard[];
+  /** 未被 token 消费的 refs（气泡内尾部内联 chip）。 */
+  refs: readonly MessageRef[];
   /** 剩余 refs 中 image 项的投递状态（同序；入参缺省时缺省）。 */
-  imageDelivery?: ImageDelivery[];
+  imageDelivery?: readonly ImageDelivery[];
 }
 
 /**
