@@ -343,6 +343,11 @@ src/cli/
    （`--json` 形状、退出码、稳定码）在移动中**零变化**。
 5. 本文是纯设计；代码落地另起任务，落地时把对应章节从〔提案〕翻〔现行〕并同步
    [cli-wiring.md](cli-wiring.md) 的 paths。
+6. **bootstrap.ts 拆分与声明式收集器同循本规则**（[ADR-107](../adr/ADR-107-assembly-feature-collector.md)，accepted）：
+   9 批 strangler 拆分（设计稿 §4），纯移动批零行为变更、每批独立 commit 可回滚；
+   唯一行为变更批（P0 共享工厂 `createPluginSurface`，本地表面补 child 行 + pluginCatalog）
+   单独验收（网络面逐字节不变）；P2 收集器先迁 kanban/jobs/restart/attachments 四个
+   事故模式 feature 验证。顺序承重脊柱留主干显式代码，永不进收集器。
 
 ## 9. 兼容与演进规则
 
