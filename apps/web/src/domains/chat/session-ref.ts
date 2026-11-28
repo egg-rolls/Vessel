@@ -168,3 +168,72 @@ export function composeSessionRefText(text: string, chips: readonly SessionRefCh
   });
   return `[${t('chat.sessionRef.header')}]\n${lines.join('\n')}\n\n${text}`;
 }
+
+/**
+ * 信封头部（块 P0 display lift）：compose 用 `t()` 随 UI locale 写头，历史消息里
+ * zh / en 两种拼法都真实存在 —— 解析**双词必认**（legacy 永久保留，不回填不改写）。
+ * locale 固定标记是 P1 的事（main 裁④），本批只补读取侧。
+ */
+const SESSION_REF_HEADERS = ['[引用会话]', '[Referenced sessions]'] as const;
+
+/** 解析出的会话引用信封：chips 至少一条；body 是信封之后的正文（可为空串）。 */
+export interface ParsedSessionRefEnvelope {
+  chips: SessionRefChip[];
+  body: string;
+}
+
+/** 一行 `- 「title」 · k: v · … · session_id: id` → chip；形状不对返回 null。 */
+function parseSessionRefLine(line: string): SessionRefChip | null {
+  const match = /^- 「(.*?)」(?: · (.*))?$/.exec(line);
+  if (match === null) return null;
+  const rawTitle = match[1] ?? '';
+  const fields = new Map<string, string>();
+  for (const part of (match[2] ?? '').split(' · ')) {
+    const sep = part.indexOf(': ');
+    if (sep <= 0) continue;
+    fields.set(part.slice(0, sep), part.slice(sep + 2));
+  }
+  const sessionId = fields.get('session_id');
+  if (sessionId === undefined || sessionId.length === 0) return null;
+  const agentName = fields.get('agent');
+  const team = fields.get('团队') ?? fields.get('team');
+  const node = fields.get('节点') ?? fields.get('node');
+  return {
+    sessionId,
+    title: rawTitle.length > 0 ? rawTitle : sessionId,
+    ...(agentName !== undefined && agentName.length > 0 ? { agentName } : {}),
+    ...(team !== undefined && team.length > 0 ? { team } : {}),
+    ...(node !== undefined && node.length > 0 ? { node } : {}),
+  };
+}
+
+/**
+ * 严格解析正文开头的会话引用信封；不是信封返回 null（按原文渲染，零回归）。
+ * 只认完整形状：头部行 + ≥1 条 `- …session_id: …` 行 + 空行。
+ * **流式硬约束**：信封未收全（缺空行 / 行不完整）同样返回 null —— 与
+ * `parseQuoteEnvelope` 逐字同语义，不提升半截信封（否则流式闪烁回归）。
+ */
+export function parseSessionRefEnvelope(content: string): ParsedSessionRefEnvelope | null {
+  const header = SESSION_REF_HEADERS.find((candidate) => content.startsWith(`${candidate}\n`));
+  if (header === undefined) return null;
+  const rest = content.slice(header.length + 1);
+  const end = rest.indexOf('\n\n');
+  if (end < 0) return null;
+  const lines = rest.slice(0, end).split('\n');
+  if (lines.length === 0) return null;
+  const chips: SessionRefChip[] = [];
+  for (const line of lines) {
+    const chip = parseSessionRefLine(line);
+    if (chip === null) return null;
+    chips.push(chip);
+  }
+  return { chips, body: rest.slice(end + 2) };
+}
+
+/**
+ * 渲染提升（块 P0，修与 quote 的不对称）：正文 → 会话引用卡数据 + 剩余正文。
+ * 不是信封返回 null。与 `liftQuoteForDisplay` 同族：消费点经 liftBlocks 管线调用。
+ */
+export function liftSessionRefForDisplay(content: string): ParsedSessionRefEnvelope | null {
+  return parseSessionRefEnvelope(content);
+}

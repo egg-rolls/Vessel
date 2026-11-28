@@ -11,7 +11,7 @@ children: [cli-wiring.md, gateway-lifecycle.md, federation-hub.md, tools.md, ext
 
 ## 装配域叶子
 
-- [cli-wiring.md](cli-wiring.md) —— CLI 入口分发 / 参数互斥 / headless 退出码 / REPL 职责边界 / bootstrap 装配序 / 工厂 wiring / update / 用户可见命令行为。
+- [cli-wiring.md](cli-wiring.md) —— CLI 入口分发 / 参数互斥 / headless 退出码 / REPL 职责边界 / bootstrap 装配序 / 工厂 wiring / 声明式 feature 收集器与插件表面共享（ADR-107）/ update / 用户可见命令行为。
 - [gateway-lifecycle.md](gateway-lifecycle.md) —— gateway 单点启动与进程生命周期：`src/gateway/` 监督 / adopt / 停止语义 / engine 池 / watchdog / reload。
 - [federation-hub.md](federation-hub.md) —— Hub 控制面与 federation：`src/hub/`、hub-command / hub-wiring / node-url。
 - [tools.md](tools.md) —— 工具与权限边界：`src/tools-engine/` 执行引擎（child + pool 双模式）。

@@ -121,6 +121,7 @@
 | 104 | 会话级上下文投射模式（passthrough / placeholder / externalize / archive_notice） | proposed | 2026-11-14 | context, tools, projection, session, audit, gate, cache, compaction, extension-boundary | [ADR-104-context-projection-policy.md](ADR-104-context-projection-policy.md) |
 | 105 | 会话 timeline 单一真相（append-only / 全局单调 timeline_seq / 块级 chunk / 单游标握手） | accepted | 2026-11-15 | session, timeline, replay, wal, seq, storage, index, handshake, idempotency, migration | [ADR-105-session-timeline-single-source.md](ADR-105-session-timeline-single-source.md) |
 | 106 | engine 池执行平面（gateway 控制面 + node 客户端 LB） | accepted | 2026-11-19 | tools, engine, pool, gateway, control-plane, load-balance, affinity, crash-recovery, write-lock | [ADR-106-engine-pool.md](ADR-106-engine-pool.md) |
+| 107 | 装配层声明式 feature 收集器（AssemblyFeature）与 plugin 机制边界 | accepted | 2026-11-28 | assembly, bootstrap, declarative, deps, harness, boundary | [ADR-107-assembly-feature-collector.md](ADR-107-assembly-feature-collector.md) |
 
 ## 编写约定
 
