@@ -10,35 +10,34 @@ paths: [packages/core/src/runtime/tool-calling-loop.ts, packages/core/src/runtim
 
 <a id="loop"></a>
 
-### `toolCallingLoop()`：循环骨架
+### `runToolCallingLoop()`：循环骨架
 
-签名 `toolCallingLoop(execution, signal)`；run id / session / usage 全部取自 `Run`，不读实例字段。
+签名 `runToolCallingLoop(ctx: LoopContext)`；run id / session / usage 取自 `ctx.execution`（Run），controls / window / events 全是注入端口，不读实例字段。
 
 ```
 loop:
     signal.aborted?                     → 抛错（Esc 中断）
     用量 / 终止 90% 预警（每 key 每 run 一次） → 事件 + `vessel:limit` 尾部消息
     终止 / 硬上限检查（maxIterations / maxRuntimeSeconds / request / token / cost，仅显式配置时检查）→ 抛错
-    autoCompactAsync                    → 压缩时设 PrefixGuard reason=compaction
-    # system 冻结：hook 只读 hookCtx.systemPrompt；动态注入只走 hookCtx.messages
-    # 旧 additionalContext 自动转 vessel:hook
-    hookCtx = { run_id, session_id, systemPrompt: <会话基底> }
+    # run 内不压缩：段起点压缩由 EU 在本 run 第一条请求前调 autoCompactAsync；成功设 PrefixGuard reason=compaction
+    # system 冻结：hook 只读 hookCtx.systemPrompt；动态注入只走 hookCtx.messages（旧 additionalContext 自动转 vessel:hook）
+    hookCtx = { run_id, session_id, request_index, model, providerName?, refs?, emitFact, systemPrompt: <会话基底，只读> }
     await hooks.run(BeforeLlm, hookCtx)
     appendInjectedMessages(hookCtx.messages)   # 每 run 去重
     appendPiiDeadNotice()                      # 句柄失效 env 卡（进本次请求）
     appendToolSurfaceNotice()                  # diff live 工具面 vs 已报面，非空 ⇒ 追加 tools env 卡；首请求完成懒 pin
-    messages = buildRequestMessages(<会话基底>)
-    # 归一化：丢弃孤儿 role:tool；残缺 tool_calls 降级；缺 system 时补回基底（ADR-035）
+    messages = buildRequestMessages(<会话基底>)  # 归一化：丢弃孤儿 role:tool；残缺 tool_calls 降级；缺 system 补回基底（ADR-035）
     tools = ensureToolPin(sessionId).schemas   # 会话起点快照（首请求懒捕获；session_switch / 压缩成功重 pin）；执行侧仍 live getTool
-    PrefixGuard.check({ system, tools, messages, reason? })
-    # 非纯追加且无 reason → prompt.prefix_changed；STRICT 抛 PromptPrefixChangedError
+    PrefixGuard.check({ system, tools, messages, reason? })  # 非纯追加且无 reason → prompt.prefix_changed；STRICT 抛错
     发 llm.request（messages 在发布前剥离 reasoning_content，ADR-038）
     response = provider.chat({ messages, tools, stream: true, on_chunk → 发 llm.stream.chunk })
-    # 传输层断开 / 过载且本次请求零增量 → 退避重试（见下方「Provider 重试」）
-    # response.reasoning_content（thinking 模型）由 Provider 累积；不进 on_chunk / 事件流
+    # 传输层断开 / 过载且本次请求零增量 → 退避重试（见下方「Provider 重试」）；reasoning_content 由 Provider 累积，不进 on_chunk / 事件流
     累计 token 用量；context.updateRealTokens(本次 prompt_tokens + completion_tokens)
     发 llm.response
     await hooks.run(AfterLlm, hookCtx)
+    # 空响应兜底：无 content 且无 tool_calls ⇒ seamless 重调（缺省 2 次，丢弃空轮，llm.empty_response action=seamless）
+    #   → 耗尽升级一次 nudge（注入 vessel:notice 继续消息）→ 仍空 ⇒ 空轮原样写回 + 抛 EmptyResponseExhaustedError
+    #   （run failed，peer 链路通知 parent）；enabled=false 回落原始终止路径
     if finish_reason == 'stop':
         应用 Output guardrail，被阻止 → 抛错
         finalContent = replacement 是字符串 ? replacement : response.content
@@ -46,8 +45,7 @@ loop:
         return finalContent
 
     if finish_reason == 'tool_calls':
-        # 先对全部调用过 ToolCall guardrail（replacement 可改写），再写 assistant 消息，
-        # 保证上下文里的 tool_calls 与后续 role:tool 结果严格配对
+        # 先对全部调用过 ToolCall guardrail（replacement 可改写），再写 assistant 消息，保证 tool_calls 与 role:tool 结果严格配对
         effectiveCalls = []
         for toolCall of response.tool_calls:
             incrementToolCall()
@@ -57,19 +55,17 @@ loop:
 
         for toolCall of effectiveCalls:
             发 tool.call.started
-            # 参数只解析一次；失败按工具失败折回，不终止 run（ADR-035）
-            try: args = JSON.parse(toolCall.function.arguments)
+            try: args = JSON.parse(toolCall.function.arguments)   # 只解析一次；失败按工具失败折回，不终止 run（ADR-035）
             catch: 发 tool.call.failed; addContext(role:tool, `Error: Invalid JSON...`); continue
             await hooks.run(BeforeTool, hookCtx)
             try:
-                # 统一工具执行管道（0.8.2，ADR-058）：getTool → permission → handler → ToolResult guardrail。
-                # 外层已处理 ToolCall guardrail / BeforeTool / AfterTool，故在管道里关闭这三阶段。
+                # 统一工具执行管道（ADR-058）：getTool → permission → handler → ToolResult guardrail；外层已处理 ToolCall guardrail / BeforeTool / AfterTool，管道里关闭这三阶段
                 outcome = toolPipeline.execute({
                     runId, sessionId, toolCall, args, messages: context.messages, signal,
                     stages: { toolCallGuardrail: false, beforeToolHook: false, afterToolHook: false },
                 })
                 outcome.ok == false → 抛错（工具不存在 / 权限拒绝 / handler 超时 / 结果被阻断）
-                finalResult = outcome.content
+                finalResult = gateToolResult(outcome)   # 出口闸 ≤16k token：头 30% / 尾 70% + 落盘路径省略标注；bounded 回执幂等不重裁
                 发 tool.call.completed
                 await hooks.run(AfterTool, hookCtx)
                 addContext({ role: 'tool', tool_call_id, content: finalResult })
@@ -79,8 +75,9 @@ loop:
                 addContext({ role: 'tool', tool_call_id, content: `Error: ${msg}` })
                 # 工具失败不中断循环——错误文本折回语言空间，模型自行决定下一步
 
-        # 一轮 tool-call 全部处理完：写 checkpoint（durable 开启时；发 run.checkpoint）
-        writeCheckpoint(execution, 'running')
+        # 整批写回后：附图（只已入池 sha256）追加一条带 refs 的 user 消息；typed blocks 按 type 分条 toolBlockMessages
+        #   （信封 / fence 见 blocks.md）；均经 appendInjectedMessages（身份盖章 / message.injected / 落盘复用；末尾追加 ⇒ 前缀守卫满足）
+        writeCheckpoint(execution, 'running')    # 一轮 tool-call 全部处理完写 checkpoint（durable 开启时；发 run.checkpoint）
 
     else:  # 例如 finish_reason == 'length'
         addContext(assistant 消息，带上 response.reasoning_content)
@@ -104,8 +101,8 @@ loop:
 - **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改本 Run 的 `WorkingContext` 窗口。
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
 - **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
-- **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，默认不超时，只有显式正数 `timeoutMs` 才超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
-- **Hook 注入只允许追加**：`Hook.run` 可返回 `HookResult`（`block` / `updatedInput`）；`additionalContext` 已弃用，动态上下文统一写 `HookContext.messages`。`systemPrompt` 只读，写入被忽略。
+- **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，默认不超时，只有显式正数 `timeoutMs` 才超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。工具手搓审批的事实事件走 `ctx.emitFact`（journal → 时间线双写，Web 才收得到卡），`waitFor` 仍用 `events`；缺省未注入退回 `events.publish`。
+- **Hook 注入只允许追加**：`Hook.run` 可返回 `HookResult`（`block` / `updatedInput` / BeforeLlm `requestExtras`→`ChatRequest.extra_headers/extra_params`，合并闸见 [runtime-api](runtime-api.md)）；`additionalContext` 已弃用，动态上下文统一写 `HookContext.messages`。`systemPrompt` 只读，写入被忽略。
 - **durable checkpoint 只由 Run 经 `RunJournal` 写**（唯一写者）。装配层按 node 用 `createRunJournalFactory({ eventLog, session, runStore, fenceOf })` 构造工厂；主执行面与成员 `ExecutionUnit` 共用同一 profile 的 journalFactory，禁止双写（ADR-040 / ADR-098 C1）。
 - **单 run 守卫与唯一终态路径**见 [runtime-lifecycle.md](runtime-lifecycle.md#run) 与 [#finalize](runtime-lifecycle.md#finalize)：`activeRun` 在 await 前同步占位，第二个 run 抛 `run_already_running`；终态只经 `finalizeRun`。
 - **插件故障隔离**（ADR-054）：单个 Hook 抛错发 `hook.failed` + `hook.error` 并继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `reason: 'guardrail_error'`，发 `guardrail.error`），不把原始异常冒泡成 run 失败。
