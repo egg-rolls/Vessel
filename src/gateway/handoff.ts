@@ -73,7 +73,9 @@ export async function writeHandoffMarker(
   await writeFile(tmp, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
   try {
     await chmod(tmp, 0o600);
-  } catch { /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */ }
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */
+  }
   try {
     await rename(tmp, filePath);
   } catch (error) {
@@ -83,7 +85,9 @@ export async function writeHandoffMarker(
   }
   try {
     await chmod(filePath, 0o600);
-  } catch { /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */ }
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */
+  }
 }
 
 /** 删除 marker（非 handoff 停止前清理陈旧残留；不存在时静默）。 */

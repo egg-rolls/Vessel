@@ -19,8 +19,8 @@
 import { loadConfig, type VesselConfig } from '../../../packages/config/src/index';
 import {
   lookupErrorCode,
-  readTraceEvents,
   type ReadTraceOptions,
+  readTraceEvents,
   type TenantPaths,
 } from '../../../packages/core/src/index';
 import { formatConfigErrors } from '../../config/config-error-format';
@@ -414,10 +414,9 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
     .map((event) => summarizeErrorEvent(event))
     .filter((event): event is ErrorSummary => event !== null);
   // q-error-e3：--run 按 seq 升序；缺省最新优先。
-  const events = (drillRun !== undefined ? sortSeqAsc(summaries) : sortNewestFirst(summaries)).slice(
-    0,
-    limit,
-  );
+  const events = (
+    drillRun !== undefined ? sortSeqAsc(summaries) : sortNewestFirst(summaries)
+  ).slice(0, limit);
 
   const payload = {
     as_of: new Date(now()).toISOString(),

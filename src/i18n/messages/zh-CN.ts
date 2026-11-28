@@ -833,15 +833,19 @@ export const zhCN = {
   // S1：冻结 RPC 码 + CODE_META 既有码。命令/配置键均对实际 CLI/config 查证。
   'error.hint.unauthorized.what': 'RPC 请求被网关拒绝（未认证）。',
   'error.hint.unauthorized.why': 'token 缺失、过期或与目标节点不匹配。',
-  'error.hint.unauthorized.fix': '核对连接 token：vessel token list 看指纹、vessel node token 看来源；--connect 时传正确的 --connect-token。',
-  'error.hint.unauthorized.verify': 'vessel errors --id <error_id> 看详情；vessel logs tail 看网关日志。',
+  'error.hint.unauthorized.fix':
+    '核对连接 token：vessel token list 看指纹、vessel node token 看来源；--connect 时传正确的 --connect-token。',
+  'error.hint.unauthorized.verify':
+    'vessel errors --id <error_id> 看详情；vessel logs tail 看网关日志。',
   'error.hint.forbidden.what': '请求被权限策略拒绝。',
   'error.hint.forbidden.why': 'token 的权限级不足以调用该方法（read/write/admin）。',
-  'error.hint.forbidden.fix': '换用权限足够的 token，或调整该方法的权限要求；本地回环核对 gateway.token 配置。',
+  'error.hint.forbidden.fix':
+    '换用权限足够的 token，或调整该方法的权限要求；本地回环核对 gateway.token 配置。',
   'error.hint.forbidden.verify': 'vessel errors --id <error_id>；vessel doctor。',
   'error.hint.not_found.what': '目标资源不存在。',
   'error.hint.not_found.why': 'id 错误或资源已被删除。',
-  'error.hint.not_found.fix': '用对应 list 命令核对 id（如 vessel agents、vessel kanban list）；details.candidates 存在时从候选中选。',
+  'error.hint.not_found.fix':
+    '用对应 list 命令核对 id（如 vessel agents、vessel kanban list）；details.candidates 存在时从候选中选。',
   'error.hint.not_found.verify': 'vessel errors --id <error_id> 看 details.candidates。',
   'error.hint.invalid_params.what': 'RPC 参数未通过校验。',
   'error.hint.invalid_params.why': '缺必填字段、类型不符或互斥字段同给。',
@@ -849,7 +853,8 @@ export const zhCN = {
   'error.hint.invalid_params.verify': 'vessel errors --id <error_id> 看 details 字段级原因。',
   'error.hint.data_locked.what': '数据被另一进程锁定。',
   'error.hint.data_locked.why': '另一个 gateway/node 实例持有同一 dataDir 的锁。',
-  'error.hint.data_locked.fix': 'vessel ps / vessel gateway ps 查进程；vessel gateway stop 停重复实例，或改用不同 dataDir。',
+  'error.hint.data_locked.fix':
+    'vessel ps / vessel gateway ps 查进程；vessel gateway stop 停重复实例，或改用不同 dataDir。',
   'error.hint.data_locked.verify': 'vessel doctor（锁检查）。',
   'error.hint.quota_exceeded.what': '配额超限。',
   'error.hint.quota_exceeded.why': '达到平台/团队配额上限。',
@@ -861,11 +866,13 @@ export const zhCN = {
   'error.hint.conflict.verify': 'vessel errors --id <error_id>；vessel status。',
   'error.hint.internal.what': '网关内部错误。',
   'error.hint.internal.why': '服务端未分类异常。',
-  'error.hint.internal.fix': 'vessel logs tail 看网关日志；vessel doctor --errors 查注册表漂移；持续出现请上报。',
+  'error.hint.internal.fix':
+    'vessel logs tail 看网关日志；vessel doctor --errors 查注册表漂移；持续出现请上报。',
   'error.hint.internal.verify': 'vessel errors --id <error_id> 看 cause 链。',
   'error.hint.not_supported.what': '网关不支持该能力。',
   'error.hint.not_supported.why': '目标构建过旧或该能力未装配。',
-  'error.hint.not_supported.fix': '升级目标 node/gateway 到支持该方法的版本；vessel rpc list 查可用方法。',
+  'error.hint.not_supported.fix':
+    '升级目标 node/gateway 到支持该方法的版本；vessel rpc list 查可用方法。',
   'error.hint.not_supported.verify': 'vessel errors --id <error_id> 看 details.method。',
   'error.hint.expired.what': '凭证或会话已过期。',
   'error.hint.expired.why': 'token/会话超过有效期。',
@@ -873,11 +880,13 @@ export const zhCN = {
   'error.hint.expired.verify': 'vessel errors --id <error_id>。',
   'error.hint.run_ended.what': 'run 已结束，无法再操作。',
   'error.hint.run_ended.why': 'run 已完成/失败/取消，不再接受输入。',
-  'error.hint.run_ended.fix': '发起新 run（runs.start），或恢复可恢复的 run（vessel --resume-run）。',
+  'error.hint.run_ended.fix':
+    '发起新 run（runs.start），或恢复可恢复的 run（vessel --resume-run）。',
   'error.hint.run_ended.verify': 'vessel errors --run <run_id> 看该 run 事件。',
   'error.hint.session_not_found.what': '会话不存在。',
   'error.hint.session_not_found.why': 'session_id 错误，或会话已删除/不在当前 dataDir。',
-  'error.hint.session_not_found.fix': 'vessel --resume 列出会话再选；核对 dataDir/tenant 是否一致。',
+  'error.hint.session_not_found.fix':
+    'vessel --resume 列出会话再选；核对 dataDir/tenant 是否一致。',
   'error.hint.session_not_found.verify': 'vessel errors --id <error_id>。',
   'error.hint.compact_unavailable.what': '会话压缩（compact）不可用。',
   'error.hint.compact_unavailable.why': '会话存储不支持 compact 或会话状态不足。',
@@ -901,7 +910,8 @@ export const zhCN = {
   'error.hint.marker_failed.verify': 'vessel errors --id <error_id> 看 cause 链。',
   'error.hint.restart_reserve_failed.what': '重启预留失败。',
   'error.hint.restart_reserve_failed.why': '重启名额被占用或状态不允许。',
-  'error.hint.restart_reserve_failed.fix': 'vessel node status 查节点状态；稍后重试或 vessel gateway restart。',
+  'error.hint.restart_reserve_failed.fix':
+    'vessel node status 查节点状态；稍后重试或 vessel gateway restart。',
   'error.hint.restart_reserve_failed.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.legacy_session_unsupported.what': '旧格式会话不被支持。',
   'error.hint.legacy_session_unsupported.why': '会话是 timeline 之前的旧格式，当前读路径不支持。',
@@ -909,7 +919,8 @@ export const zhCN = {
   'error.hint.legacy_session_unsupported.verify': 'vessel errors --id <error_id>；vessel doctor。',
   'error.hint.timeline_unavailable.what': 'timeline 不可用。',
   'error.hint.timeline_unavailable.why': 'timeline 存储未装配或读取失败。',
-  'error.hint.timeline_unavailable.fix': '核对 dataDir 为根布局（vessel doctor）；升级/重启 gateway。',
+  'error.hint.timeline_unavailable.fix':
+    '核对 dataDir 为根布局（vessel doctor）；升级/重启 gateway。',
   'error.hint.timeline_unavailable.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.method_not_found.what': '未知的 RPC 方法。',
   'error.hint.method_not_found.why': '方法名错误或目标网关没有该方法。',
@@ -933,12 +944,14 @@ export const zhCN = {
   'error.hint.run_store_required.verify': 'vessel doctor；vessel errors --id <error_id>。',
   'error.hint.agent_not_found.what': 'agent 不存在。',
   'error.hint.agent_not_found.why': '成员 id 错误或已关闭。',
-  'error.hint.agent_not_found.fix': 'vessel agents 列出成员再选；details.candidates 存在时从候选中选。',
+  'error.hint.agent_not_found.fix':
+    'vessel agents 列出成员再选；details.candidates 存在时从候选中选。',
   'error.hint.agent_not_found.verify': 'vessel errors --id <error_id> 看 details.candidates。',
   'error.hint.session_corrupt.what': '会话数据损坏。',
   'error.hint.session_corrupt.why': '会话文件损坏或格式异常。',
   'error.hint.session_corrupt.fix': '备份后新开会话；不要手工编辑会话文件。',
-  'error.hint.session_corrupt.verify': 'vessel errors --id <error_id> 看 cause 链；vessel logs tail。',
+  'error.hint.session_corrupt.verify':
+    'vessel errors --id <error_id> 看 cause 链；vessel logs tail。',
   'error.hint.atomic_write_failed.what': '原子写入失败。',
   'error.hint.atomic_write_failed.why': '磁盘满、权限不足或文件被占用。',
   'error.hint.atomic_write_failed.fix': '检查 dataDir 磁盘空间与权限；重试（可重试）。',
@@ -949,7 +962,8 @@ export const zhCN = {
   'error.hint.limit_blocked.verify': 'vessel errors --id <error_id> 看 details。',
   'error.hint.empty_response_exhausted.what': '空响应重试耗尽。',
   'error.hint.empty_response_exhausted.why': '模型连续多次返回空内容。',
-  'error.hint.empty_response_exhausted.fix': 'vessel model test 测连通性；换模型（vessel model set-default）或检查 prompt。',
+  'error.hint.empty_response_exhausted.fix':
+    'vessel model test 测连通性；换模型（vessel model set-default）或检查 prompt。',
   'error.hint.empty_response_exhausted.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.pii_unknown_handle.what': '未知的 PII 占位符。',
   'error.hint.pii_unknown_handle.why': 'handle 不存在或从未签发。',
@@ -973,7 +987,8 @@ export const zhCN = {
   'error.hint.invalid_input.verify': 'vessel errors --id <error_id> 看 details。',
   'error.hint.unknown_member.what': '未知成员。',
   'error.hint.unknown_member.why': '成员 id 不在本团队名册。',
-  'error.hint.unknown_member.fix': 'vessel agents 列出成员核对 id；details.candidates 存在时从候选中选。',
+  'error.hint.unknown_member.fix':
+    'vessel agents 列出成员核对 id；details.candidates 存在时从候选中选。',
   'error.hint.unknown_member.verify': 'vessel errors --id <error_id> 看 details.candidates。',
   'error.hint.member_closed.what': '成员已关闭。',
   'error.hint.member_closed.why': '目标成员已被 release，不再接受消息。',
@@ -985,7 +1000,8 @@ export const zhCN = {
   'error.hint.member_stale.verify': 'vessel errors --id <error_id>。',
   'error.hint.member_not_visible.what': '成员不可见。',
   'error.hint.member_not_visible.why': '成员为私有且不在你的可见范围（wire 不泄漏存在性）。',
-  'error.hint.member_not_visible.fix': '核对成员 id 与可见性；改用团队可见成员或请所有者调整 visibility。',
+  'error.hint.member_not_visible.fix':
+    '核对成员 id 与可见性；改用团队可见成员或请所有者调整 visibility。',
   'error.hint.member_not_visible.verify': 'vessel agents；vessel errors --id <error_id>。',
   'error.hint.no_parent.what': '没有父 agent。',
   'error.hint.no_parent.why': '操作要求父级（如 hire），但当前成员无父。',
@@ -993,7 +1009,8 @@ export const zhCN = {
   'error.hint.no_parent.verify': 'vessel errors --id <error_id>。',
   'error.hint.spawn_failed.what': 'agent 启动失败。',
   'error.hint.spawn_failed.why': '创建/激活时启动 prompt 投递或 body 初始化失败（不回滚记录）。',
-  'error.hint.spawn_failed.fix': 'vessel errors --id <error_id> 看 cause 链定位根因；修复后重试创建或向该成员发消息。',
+  'error.hint.spawn_failed.fix':
+    'vessel errors --id <error_id> 看 cause 链定位根因；修复后重试创建或向该成员发消息。',
   'error.hint.spawn_failed.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.team_full.what': '团队已满。',
   'error.hint.team_full.why': '成员数达到团队上限。',
@@ -1009,7 +1026,8 @@ export const zhCN = {
   'error.hint.invalid_state_transition.verify': 'vessel errors --id <error_id> 看 details。',
   'error.hint.budget_exceeded.what': '会话预算超限。',
   'error.hint.budget_exceeded.why': ' hops/turns/tokens/墙钟之一达到 teams[].budget 上限。',
-  'error.hint.budget_exceeded.fix': '调整 teams[].budget（maxHops/maxTurns/maxTokens/maxWallClockSeconds）或拆分任务。',
+  'error.hint.budget_exceeded.fix':
+    '调整 teams[].budget（maxHops/maxTurns/maxTokens/maxWallClockSeconds）或拆分任务。',
   'error.hint.budget_exceeded.verify': 'vessel errors --id <error_id> 看 details 维度。',
   'error.hint.budget_unavailable.what': '预算存储不可用。',
   'error.hint.budget_unavailable.why': '预算计数器存储读写失败。',
@@ -1028,17 +1046,22 @@ export const zhCN = {
   'error.hint.node_draining.fix': '稍后重试（可重试）；vessel node status 看 drain 进度。',
   'error.hint.node_draining.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.node_drain_no_record.what': 'drain 跳过：找不到节点记录。',
-  'error.hint.node_drain_no_record.why': 'gateway.pid 缺失或 pid 不匹配；节点可能已崩溃或在 supervisor 之外启动。',
-  'error.hint.node_drain_no_record.fix': '查节点日志确认进程状态；必要时手工停止残留进程后重启节点。',
-  'error.hint.node_drain_no_record.verify': 'vessel errors --id <error_id>；节点日志（vessel logs tail）。',
+  'error.hint.node_drain_no_record.why':
+    'gateway.pid 缺失或 pid 不匹配；节点可能已崩溃或在 supervisor 之外启动。',
+  'error.hint.node_drain_no_record.fix':
+    '查节点日志确认进程状态；必要时手工停止残留进程后重启节点。',
+  'error.hint.node_drain_no_record.verify':
+    'vessel errors --id <error_id>；节点日志（vessel logs tail）。',
   'error.hint.node_drain_unauthorized.what': 'drain 跳过：停止凭证被拒。',
   'error.hint.node_drain_unauthorized.why': '停止凭证 401 被拒，且匿名回环回退也失败。',
-  'error.hint.node_drain_unauthorized.fix': '核对 gateway.token / VESSEL_NODE_TOKEN 与目标节点配置一致。',
+  'error.hint.node_drain_unauthorized.fix':
+    '核对 gateway.token / VESSEL_NODE_TOKEN 与目标节点配置一致。',
   'error.hint.node_drain_unauthorized.verify': 'vessel errors --id <error_id>；vessel node token。',
   'error.hint.node_drain_method_not_found.what': 'drain 跳过：目标不支持 shutdown 方法。',
   'error.hint.node_drain_method_not_found.why': '目标 gateway 构建未暴露 gateway.shutdown。',
   'error.hint.node_drain_method_not_found.fix': '升级该节点，或手工停止。',
-  'error.hint.node_drain_method_not_found.verify': 'vessel errors --id <error_id>；vessel rpc list。',
+  'error.hint.node_drain_method_not_found.verify':
+    'vessel errors --id <error_id>；vessel rpc list。',
   'error.hint.node_drain_network.what': 'drain 跳过：节点网络不可达。',
   'error.hint.node_drain_network.why': '连接被拒/超时，够不到节点 gateway。',
   'error.hint.node_drain_network.fix': '检查节点进程与 gateway.pid 的 host:port 是否正确。',
@@ -1048,12 +1071,14 @@ export const zhCN = {
   'error.hint.node_drain_timeout.fix': 'runs.list 查活跃 run；等待排空完成或强制停止。',
   'error.hint.node_drain_timeout.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.node_drain_quiesce_timeout.what': 'drain 跳过：静默后未在窗口内退出。',
-  'error.hint.node_drain_quiesce_timeout.why': '节点已静默但 post-quiesce 窗口内未退出，被强制 kill。',
+  'error.hint.node_drain_quiesce_timeout.why':
+    '节点已静默但 post-quiesce 窗口内未退出，被强制 kill。',
   'error.hint.node_drain_quiesce_timeout.fix': '检查 shutdown hooks 是否阻塞退出。',
   'error.hint.node_drain_quiesce_timeout.verify': 'vessel errors --id <error_id>；节点日志。',
   'error.hint.team_not_found.what': '团队不存在。',
   'error.hint.team_not_found.why': 'team_id 错误或团队已删除。',
-  'error.hint.team_not_found.fix': '核对 team_id（teams.list）；details.candidates 存在时从候选中选。',
+  'error.hint.team_not_found.fix':
+    '核对 team_id（teams.list）；details.candidates 存在时从候选中选。',
   'error.hint.team_not_found.verify': 'vessel errors --id <error_id> 看 details.candidates。',
   'error.hint.team_conversation_not_found.what': '团队会话不存在。',
   'error.hint.team_conversation_not_found.why': '会话 id 错误或不属于该团队。',
@@ -1062,11 +1087,13 @@ export const zhCN = {
   'error.hint.team_log_write_failed.what': '团队日志写入失败。',
   'error.hint.team_log_write_failed.why': '团队日志存储写入异常（磁盘/权限）。',
   'error.hint.team_log_write_failed.fix': '检查 dataDir 磁盘空间与权限；重试。',
-  'error.hint.team_log_write_failed.verify': 'vessel errors --id <error_id> 看 cause 链；vessel doctor。',
+  'error.hint.team_log_write_failed.verify':
+    'vessel errors --id <error_id> 看 cause 链；vessel doctor。',
   'error.hint.team_binding_requires_name.what': '团队绑定需要名称。',
   'error.hint.team_binding_requires_name.why': '绑定操作缺必填的 name 字段。',
   'error.hint.team_binding_requires_name.fix': '补上 name 字段后重试。',
-  'error.hint.team_binding_requires_name.verify': 'vessel errors --id <error_id>；vessel rpc list <method>。',
+  'error.hint.team_binding_requires_name.verify':
+    'vessel errors --id <error_id>；vessel rpc list <method>。',
   'error.hint.team_already_in_team.what': '成员已在团队中。',
   'error.hint.team_already_in_team.why': '重复加入同一团队。',
   'error.hint.team_already_in_team.fix': '无需重复加入；核对成员当前团队归属。',
@@ -1113,23 +1140,28 @@ export const zhCN = {
   'error.hint.cursor_out_of_window.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.timeline_write_failed.what': 'timeline 写入失败。',
   'error.hint.timeline_write_failed.why': '事件落盘异常（磁盘/权限/存储损坏）。',
-  'error.hint.timeline_write_failed.fix': '检查 dataDir 磁盘空间与权限；vessel doctor；持续失败请上报。',
-  'error.hint.timeline_write_failed.verify': 'vessel errors --id <error_id> 看 cause 链；vessel logs tail。',
+  'error.hint.timeline_write_failed.fix':
+    '检查 dataDir 磁盘空间与权限；vessel doctor；持续失败请上报。',
+  'error.hint.timeline_write_failed.verify':
+    'vessel errors --id <error_id> 看 cause 链；vessel logs tail。',
   'error.hint.timeline_record_too_large.what': 'timeline 记录过大。',
   'error.hint.timeline_record_too_large.why': '单条事件超过存储上限。',
-  'error.hint.timeline_record_too_large.fix': '减小产生该事件的内容体积（如工具输出截断）；不要手工改存储。',
+  'error.hint.timeline_record_too_large.fix':
+    '减小产生该事件的内容体积（如工具输出截断）；不要手工改存储。',
   'error.hint.timeline_record_too_large.verify': 'vessel errors --id <error_id> 看 details。',
   'error.hint.timeline_event_type_excluded.what': '事件类型被排除。',
   'error.hint.timeline_event_type_excluded.why': '该事件类型不在 timeline 收录白名单。',
   'error.hint.timeline_event_type_excluded.fix': '属预期过滤则无需处理；确需收录请评审白名单变更。',
-  'error.hint.timeline_event_type_excluded.verify': 'vessel errors --id <error_id> 看 details.type。',
+  'error.hint.timeline_event_type_excluded.verify':
+    'vessel errors --id <error_id> 看 details.type。',
   'error.hint.timeline_writer_closed.what': 'timeline writer 已关闭。',
   'error.hint.timeline_writer_closed.why': '存储 writer 已关闭后仍有写入（多为关停竞态）。',
   'error.hint.timeline_writer_closed.fix': '重启 gateway 恢复 writer；频繁出现请上报。',
   'error.hint.timeline_writer_closed.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.timeline_index_invalid.what': 'timeline 索引无效。',
   'error.hint.timeline_index_invalid.why': '索引文件损坏或与事件不一致。',
-  'error.hint.timeline_index_invalid.fix': 'vessel doctor 检查存储；必要时按运维流程重建索引，不要手工编辑。',
+  'error.hint.timeline_index_invalid.fix':
+    'vessel doctor 检查存储；必要时按运维流程重建索引，不要手工编辑。',
   'error.hint.timeline_index_invalid.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.timeline_archive_failed.what': 'timeline 归档失败。',
   'error.hint.timeline_archive_failed.why': '归档/压缩存储操作异常。',
@@ -1137,11 +1169,14 @@ export const zhCN = {
   'error.hint.timeline_archive_failed.verify': 'vessel errors --id <error_id> 看 cause 链。',
   'error.hint.unknown_ref.what': '模型引用未知。',
   'error.hint.unknown_ref.why': 'provider/model 引用不在模型注册表。',
-  'error.hint.unknown_ref.fix': 'vessel model list 查可用引用；vessel model set-default 设正确默认；details.candidates 存在时从候选中选。',
-  'error.hint.unknown_ref.verify': 'vessel errors --id <error_id> 看 details.candidates；vessel doctor。',
+  'error.hint.unknown_ref.fix':
+    'vessel model list 查可用引用；vessel model set-default 设正确默认；details.candidates 存在时从候选中选。',
+  'error.hint.unknown_ref.verify':
+    'vessel errors --id <error_id> 看 details.candidates；vessel doctor。',
   'error.hint.provider_auth.what': '模型供应商认证失败。',
   'error.hint.provider_auth.why': 'API key 缺失/无效/过期。',
-  'error.hint.provider_auth.fix': 'vessel model credential set 配置凭证；核对 provider.apiKeyEnv 指向的环境变量有值。',
+  'error.hint.provider_auth.fix':
+    'vessel model credential set 配置凭证；核对 provider.apiKeyEnv 指向的环境变量有值。',
   'error.hint.provider_auth.verify': 'vessel model test；vessel errors --id <error_id>。',
   'error.hint.provider_rate_limit.what': '供应商限流。',
   'error.hint.provider_rate_limit.why': '请求频率超过供应商速率限制。',
@@ -1149,7 +1184,8 @@ export const zhCN = {
   'error.hint.provider_rate_limit.verify': 'vessel errors --id <error_id>；vessel logs tail。',
   'error.hint.provider_quota_exceeded.what': '供应商配额耗尽。',
   'error.hint.provider_quota_exceeded.why': '账户配额/余额用尽。',
-  'error.hint.provider_quota_exceeded.fix': '充值或提升供应商配额；换用其他模型（vessel model set-default）。',
+  'error.hint.provider_quota_exceeded.fix':
+    '充值或提升供应商配额；换用其他模型（vessel model set-default）。',
   'error.hint.provider_quota_exceeded.verify': 'vessel model test；vessel errors --id <error_id>。',
   'error.hint.provider_timeout.what': '供应商请求超时。',
   'error.hint.provider_timeout.why': '模型响应超过超时阈值。',
@@ -1165,7 +1201,8 @@ export const zhCN = {
   'error.hint.provider_unavailable.verify': 'vessel model test；vessel errors --id <error_id>。',
   'error.hint.provider_http_error.what': '供应商 HTTP 错误。',
   'error.hint.provider_http_error.why': '供应商返回非预期 HTTP 状态。',
-  'error.hint.provider_http_error.fix': 'vessel errors --id <error_id> 看 http_status 与 cause；核对 baseUrl 与凭证。',
+  'error.hint.provider_http_error.fix':
+    'vessel errors --id <error_id> 看 http_status 与 cause；核对 baseUrl 与凭证。',
   'error.hint.provider_http_error.verify': 'vessel model test；vessel logs tail。',
   'error.hint.provider_network.what': '供应商网络错误。',
   'error.hint.provider_network.why': 'DNS/连接/TLS 等网络层失败。',
@@ -1178,10 +1215,12 @@ export const zhCN = {
   'error.hint.tool_timeout.what': '工具调用超时。',
   'error.hint.tool_timeout.why': '工具执行超过超时阈值。',
   'error.hint.tool_timeout.fix': '重试（可重试）；拆分长任务或检查工具实现。',
-  'error.hint.tool_timeout.verify': 'vessel errors --id <error_id> 看 tool_name；vessel logs tail。',
+  'error.hint.tool_timeout.verify':
+    'vessel errors --id <error_id> 看 tool_name；vessel logs tail。',
   'error.hint.tool_not_found.what': '工具不存在。',
   'error.hint.tool_not_found.why': '工具名错误或未装配。',
-  'error.hint.tool_not_found.fix': '核对工具名与装配（tools 配置）；details.candidates 存在时从候选中选。',
+  'error.hint.tool_not_found.fix':
+    '核对工具名与装配（tools 配置）；details.candidates 存在时从候选中选。',
   'error.hint.tool_not_found.verify': 'vessel errors --id <error_id> 看 details.candidates。',
   'error.hint.tool_invalid_arguments.what': '工具参数非法。',
   'error.hint.tool_invalid_arguments.why': '参数不符合工具 schema。',
@@ -1189,7 +1228,8 @@ export const zhCN = {
   'error.hint.tool_invalid_arguments.verify': 'vessel errors --id <error_id> 看 details。',
   'error.hint.tool_blocked.what': '工具被拦截。',
   'error.hint.tool_blocked.why': '权限策略禁止该工具调用。',
-  'error.hint.tool_blocked.fix': '核对 permission.neverAutoApprove / 工具白名单配置；确需放行请调整策略。',
+  'error.hint.tool_blocked.fix':
+    '核对 permission.neverAutoApprove / 工具白名单配置；确需放行请调整策略。',
   'error.hint.tool_blocked.verify': 'vessel errors --id <error_id>；权限日志。',
   'error.hint.tool_error.what': '工具执行错误。',
   'error.hint.tool_error.why': '工具内部异常。',
@@ -1197,7 +1237,8 @@ export const zhCN = {
   'error.hint.tool_error.verify': 'vessel logs tail；vessel errors --run <run_id>。',
   'error.hint.permission_timeout.what': '权限审批超时。',
   'error.hint.permission_timeout.why': '无人值守审批超过等待窗口。',
-  'error.hint.permission_timeout.fix': '调整 teams[].permission.unattended / denyAfterSeconds；或人工及时审批。',
+  'error.hint.permission_timeout.fix':
+    '调整 teams[].permission.unattended / denyAfterSeconds；或人工及时审批。',
   'error.hint.permission_timeout.verify': 'vessel errors --id <error_id>；权限日志。',
   'error.hint.permission_cancelled.what': '权限审批被取消。',
   'error.hint.permission_cancelled.why': '审批请求被主动取消。',
@@ -1209,19 +1250,23 @@ export const zhCN = {
   'error.hint.permission_denied.verify': 'vessel errors --id <error_id>；权限日志。',
   'error.hint.permission_error.what': '权限系统错误。',
   'error.hint.permission_error.why': '权限审批/策略执行内部异常。',
-  'error.hint.permission_error.fix': 'vessel errors --id <error_id> 看 cause 链；vessel doctor；持续出现请上报。',
+  'error.hint.permission_error.fix':
+    'vessel errors --id <error_id> 看 cause 链；vessel doctor；持续出现请上报。',
   'error.hint.permission_error.verify': 'vessel logs tail；权限日志。',
   'error.hint.config_error.what': '配置错误。',
   'error.hint.config_error.why': '配置校验失败或加载异常。',
-  'error.hint.config_error.fix': '按报错路径修正配置（vessel doctor 定位）；vessel gateway reload 热加载。',
+  'error.hint.config_error.fix':
+    '按报错路径修正配置（vessel doctor 定位）；vessel gateway reload 热加载。',
   'error.hint.config_error.verify': 'vessel doctor；vessel errors --id <error_id>。',
   'error.hint.gateway_error.what': '网关错误。',
   'error.hint.gateway_error.why': '网关层未细分异常。',
-  'error.hint.gateway_error.fix': 'vessel logs tail 看网关日志；vessel doctor --errors；必要时 vessel gateway restart。',
+  'error.hint.gateway_error.fix':
+    'vessel logs tail 看网关日志；vessel doctor --errors；必要时 vessel gateway restart。',
   'error.hint.gateway_error.verify': 'vessel errors --id <error_id> 看 cause 链。',
   'error.hint.internal_error.what': '内部错误。',
   'error.hint.internal_error.why': '未分类内部异常。',
-  'error.hint.internal_error.fix': 'vessel errors --id <error_id> 看 cause 链；vessel doctor --errors 查漂移；上报。',
+  'error.hint.internal_error.fix':
+    'vessel errors --id <error_id> 看 cause 链；vessel doctor --errors 查漂移；上报。',
   'error.hint.internal_error.verify': 'vessel logs tail。',
   'error.hint.checkpoint_failed.what': '检查点写入失败。',
   'error.hint.checkpoint_failed.why': 'run 检查点落盘异常。',

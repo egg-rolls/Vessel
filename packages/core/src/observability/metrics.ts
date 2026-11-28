@@ -205,9 +205,7 @@ export class MetricsAccumulator {
   /** q-error-e3：degradation.used 按 component 计数（缺 component 归 'unknown'）。 */
   private recordDegradation(data: Record<string, unknown> | undefined): void {
     const component =
-      typeof data?.component === 'string' && data.component.length > 0
-        ? data.component
-        : 'unknown';
+      typeof data?.component === 'string' && data.component.length > 0 ? data.component : 'unknown';
     this.degradations.set(component, (this.degradations.get(component) ?? 0) + 1);
   }
 

@@ -231,7 +231,9 @@ export async function writeGatewayPid(
   await writeFile(tmp, body, { mode: 0o600 });
   try {
     await chmod(tmp, 0o600);
-  } catch { /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */ }
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */
+  }
   try {
     await rename(tmp, filePath);
   } catch (error) {
@@ -241,7 +243,9 @@ export async function writeGatewayPid(
   }
   try {
     await chmod(filePath, 0o600);
-  } catch { /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */ }
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */
+  }
 }
 export type GatewayRecordState = 'running' | 'degraded' | 'stale' | 'unknown';
 export interface GatewayRecordClassification {

@@ -169,7 +169,14 @@ export function diffRestartFields(current: VesselConfig, next: VesselConfig): st
  * 的顶层块（如 observability/ui/limits）。行为修复（补进 restart 清单或加热 applier）
  * 归 hardening；本期只报告。node 块按残差比较（tls/token/port/allowedOrigins 已有归属）。
  */
-const COVERED_TOP_BLOCKS = new Set(['provider', 'models', 'federation', 'kanban', 'autoPrune', 'agent']);
+const COVERED_TOP_BLOCKS = new Set([
+  'provider',
+  'models',
+  'federation',
+  'kanban',
+  'autoPrune',
+  'agent',
+]);
 
 function nodeResidual(config: VesselConfig): unknown {
   const node = config.node;
@@ -315,8 +322,14 @@ export function createGatewayReloadRunner(
               const lines = await options.applyProviderModel(modelFrom, modelTo, next);
               if (Array.isArray(lines)) modelLines.push(...lines);
               appliedReport.push({
-                field: providerChanged && modelsChanged ? 'provider+models' : providerChanged ? 'provider' : 'models',
-                reason: 'hot-applied: node default model rebuilt; live bodies keep construction snapshot until next body',
+                field:
+                  providerChanged && modelsChanged
+                    ? 'provider+models'
+                    : providerChanged
+                      ? 'provider'
+                      : 'models',
+                reason:
+                  'hot-applied: node default model rebuilt; live bodies keep construction snapshot until next body',
               });
             } else {
               if (providerChanged) restartFields.push('provider');

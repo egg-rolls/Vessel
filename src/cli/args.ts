@@ -5703,7 +5703,11 @@ function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
     return { ok: false, error: `Unknown argument for doctor: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.doctorCommand = { json, ...(deep ? { deep: true } : {}), ...(errors ? { errors: true } : {}) };
+  args.doctorCommand = {
+    json,
+    ...(deep ? { deep: true } : {}),
+    ...(errors ? { errors: true } : {}),
+  };
   return { ok: true, args };
 }
 

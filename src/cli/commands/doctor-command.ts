@@ -487,7 +487,9 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
           ? (event.data as Record<string, unknown>)
           : {};
       const recent = [...errorEvents]
-        .sort((a, b) => (typeof b.ts === 'number' ? b.ts : 0) - (typeof a.ts === 'number' ? a.ts : 0))
+        .sort(
+          (a, b) => (typeof b.ts === 'number' ? b.ts : 0) - (typeof a.ts === 'number' ? a.ts : 0),
+        )
         .slice(0, 10)
         .map((event) => {
           const data = dataOf(event);
