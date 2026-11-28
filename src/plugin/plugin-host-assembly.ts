@@ -287,6 +287,41 @@ export function registerInProcessPluginEntries(options: {
   return rows;
 }
 
+/**
+ * q-plugin-lifecycle §6.2 R1 读写联动：按活配置同步已登记 in-process 插件的
+ * 登记态（enabled + RPC / 贡献面）。manager.enable/disable 是现成实现（此前零生产
+ * 调用方），这里接线 —— 热 disable → 翻 enabled + 注销 RPC + 贡献面收口；enable 反之。
+ * 读面随后读同一活配置同口径，四面一致。child 的启停由 manager.reload（enabled 进
+ * 指纹）负责，不在此重复。
+ *
+ * bootstrap 顺手项（设计稿 §5.3.5）：自 cli tools applier 抽出的共享单实现——
+ * cli 网络面与 bootstrap 本地面共消费同一函数（getConfig 各读自身活配置），
+ * 消除双份漂移。逐行读 getConfig()（与 cli 原闭包逐行读 liveConfig 同语义）。
+ */
+export async function syncInProcessRegistrationState(options: {
+  manager: PluginHostManager | undefined;
+  rows: ReadonlyArray<{ name: string }>;
+  getConfig: () => VesselConfig;
+}): Promise<string[]> {
+  const { manager, rows, getConfig } = options;
+  if (manager === undefined) return [];
+  const lines: string[] = [];
+  const statusById = new Map(manager.statuses().map((status) => [status.id, status]));
+  for (const row of rows) {
+    const desired = pluginEntryEnabled(getConfig().plugins, row.name);
+    const current = statusById.get(row.name)?.enabled;
+    if (current === undefined || current === desired) continue;
+    if (desired) {
+      manager.enable(row.name);
+      lines.push(`plugins: ${row.name} enabled`);
+    } else {
+      await manager.disable(row.name);
+      lines.push(`plugins: ${row.name} disabled`);
+    }
+  }
+  return lines;
+}
+
 /** 重新扫描的 loader 端口（`rescan()` 返回最新描述符） */
 export interface PluginReloaderOptions {
   loader: Pick<PluginLoader, 'rescan' | 'list'>;
