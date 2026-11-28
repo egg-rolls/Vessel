@@ -256,7 +256,14 @@ function validateTermination(
 
 /** 校验 context 块（0.34 S2：阈值与窗口配置的字段范围） */
 function validateContext(context: ContextConfig, errors: ConfigValidationError[]): void {
-  const { maxTokens, maxMessages, autoCompact, compactThreshold, toolResultWhitelist } = context;
+  const {
+    maxTokens,
+    maxMessages,
+    autoCompact,
+    compactThreshold,
+    toolResultWhitelist,
+    compositionRecord,
+  } = context;
 
   if (
     maxTokens !== undefined &&
@@ -337,6 +344,15 @@ function validateContext(context: ContextConfig, errors: ConfigValidationError[]
         }
       }
     }
+  }
+
+  // q-context-composition：布尔开关（缺省 = 开；显式 false = 关）。
+  if (compositionRecord !== undefined && typeof compositionRecord !== 'boolean') {
+    errors.push({
+      path: 'context.compositionRecord',
+      message: 'context.compositionRecord must be a boolean',
+      value: compositionRecord,
+    });
   }
 }
 

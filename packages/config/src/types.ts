@@ -237,6 +237,16 @@ export interface ContextConfig {
    * CLI set，WebUI 只读展示；构造期注入，重启生效。
    */
   toolResultWhitelist?: { tool: string; action?: string }[];
+  /**
+   * 请求组成快照开关（q-context-composition；YAML `context.composition_record`）。
+   *
+   * 每次真实 LLM 请求落一条 `context.composition` 事实事件：请求视图的 token
+   * 按成分分解（system / 历史 user/assistant/tool / 占位 / 环境卡 / 图片 / 摘要 /
+   * 工具声明 / 开销），供 `sessions.composition` introspection 与上下文增长分析。
+   * 缺省 = 开（快照只有几百字节，价值/成本比高）；显式 false = 关（不算不发）。
+   * 构造期注入，重启生效（同 toolResultWhitelist 先例）。
+   */
+  compositionRecord?: boolean;
 }
 
 /**
