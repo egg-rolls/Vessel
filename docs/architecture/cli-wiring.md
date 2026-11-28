@@ -2,7 +2,7 @@
 title: CLI 入口与装配 wiring
 kind: current
 triggers: [bootstrap, cli, args, wiring, repl, headless, resume, update, eval, feishu, factory, ReplContext, 装配, 启动, 命令行, 参数, 无头, 恢复会话, 退出码, 工厂]
-paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-spec.ts, src/cli/commands/cli-update.ts, src/runtime/bootstrap.ts, src/cli/headless-runner.ts, src/cli/commands/resume-command.ts, src/tools-engine/tools-list.ts, src/cli/commands/**, src/update/**, src/session/session-factory.ts, src/run/run-record-store-factory.ts, src/gateway/transport-factory.ts, src/plugin/mcp-wiring.ts, src/run/durable-wiring.ts, src/gateway/serve-config.ts, src/runtime/tenant-runtime-factory.ts, src/agent/local-run-adapter.ts, src/cli/commands/eval-command.ts, src/plugin/eval-wiring.ts, src/cli/feishu-command.ts]
+paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-spec.ts, src/cli/commands/cli-update.ts, src/runtime/bootstrap.ts, src/cli/headless-runner.ts, src/cli/commands/resume-command.ts, src/tools-engine/tools-list.ts, src/cli/commands/**, src/update/**, src/session/session-factory.ts, src/run/run-record-store-factory.ts, src/gateway/transport-factory.ts, src/plugin/mcp-wiring.ts, src/run/durable-wiring.ts, src/gateway/serve-config.ts, src/runtime/tenant-runtime-factory.ts, src/agent/local-run-adapter.ts, src/cli/commands/eval-command.ts, src/plugin/eval-wiring.ts, src/cli/feishu-command.ts, src/plugin/plugin-surface.ts]
 ---
 
 # CLI 入口与装配 wiring（`src/`）
@@ -37,7 +37,7 @@ paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-s
 > 决策见 [ADR-107](../adr/ADR-107-assembly-feature-collector.md)（accepted）；设计稿与分期见外层仓 `docs/dev/reports/architecture-block-bootstrap-design.md` §3-§6。本节区分〔现行〕/〔实施中〕/〔提案〕，落地时翻标签并同步 frontmatter paths。
 
 - 〔现行〕**两调用方手写 deps 是冲突与缺口的结构性根源**：`cli.ts`（网络面）与 `bootstrap.ts`（本地面，`createLocalRpcDispatcher` = `startGateway({localOnly:true})`，`packages/serve/src/local.ts`）各自手写一份 `GatewayOptions`。实证：并行 feature 反复撞 opts 尾部同一区域（merge 冲突）；R-1/R-6 两次「只接网络面、忘本地面」bug；双份 `plugins()` 数据源漂移（cli 读活配置有 disabled 补行，bootstrap 读启动配置没有，且跳过 child 行、未传 `pluginCatalog`）。
-- 〔实施中，q-bootstrap-p0-surface〕**P0 共享工厂**：`src/plugin/plugin-surface.ts:createPluginSurface(input) → { entries(), catalog() }`，抽 cli 的 pluginRuntimeEntries / bundlePluginEntries / pluginCatalog 装配为两表面同源工厂（纯移动 + 参数化 `getConfig`）；bootstrap 本地面换源补 child 行与 `pluginCatalog`。验收硬闸：网络面输出逐字节不变 + 本地面 marketplace/usage 行可见 + catalog 非空。不改 serve 兜底（装配层拥有清单的契约边界）。
+- 〔现行，f2f2a335 合入〕**P0 共享工厂**：`src/plugin/plugin-surface.ts:createPluginSurface(input) → { entries(), catalog() }`，抽 cli 的 pluginRuntimeEntries / bundlePluginEntries / pluginCatalog 装配为两表面同源工厂（纯移动 + 参数化 `getConfig`）；bootstrap 本地面换源补 child 行与 `pluginCatalog`，双份手写 `plugins()` 漂移消灭。验收已过：网络面输出逐字节不变（独立 cmp）+ 本地面 marketplace/usage 行可见 + catalog 非空（验证 kit 见外层仓 `docs/dev/reports/forge-bootstrap-p0-verification.md`）。不改 serve 兜底（装配层拥有清单的契约边界）。
 - 〔提案，P2 未实施〕**AssemblyFeature 声明式收集器**：`src/assembly/`（装配层，非 core），每宿主原生 feature 声明 `register(ctx) → Partial<GatewayOptions> + hotApply + result + shutdown`，装配层收集成一份 deps 两表面共消费。显式 import 清单（拒目录扫描/装饰器）；phase 硬闸（host → startOwner → dispatcher → surface）保 spawn 快照不变式；deps 值惰性活引用；键冲突 fail-closed；顺序承重脊柱永不进收集器。
 - 〔提案〕**边界红线**（ADR-107 决策 6）：收集器只收编宿主原生 harness 接线面；能力注册（tool/provider/guardrail/hook）一律仍经 `Plugin.install(host)` 含宿主原生能力；插件永不进 feature 清单（loader/manifest/install 单一路径不变）；收集器不在 core、core 不感知。
 

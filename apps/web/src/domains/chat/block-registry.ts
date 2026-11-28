@@ -5,7 +5,7 @@
  * 注册/注销即热更新，组件订阅 version 重渲染；不另造第二套注册机制。
  *
  * 一张表收编所有「消息正文里的结构化块」：
- * - 宿主原生 type（quote / session-ref / image / file / notice）启动即注册（见 lift-blocks.ts）；
+ * - 宿主原生 type（quote / session-ref / image / file / notice / vessel-block）启动即注册（见 lift-blocks.ts）；
  * - 插件贡献 type 经 composer-extensions 既有桥映射为 `x:<pluginId>:<scheme>` 进同一张表
  *   （inline 表面；正文内渲染仍走 link-enhancers 查表，这里只登记治理身份，不重复渲染）。
  *
@@ -72,7 +72,7 @@ export interface BlockTypeSpec<P = unknown> {
   /** 组装回 wire 文本（只有文本信封类有；refs 类结构化字段不需要）。签名各异，表内擦除。 */
   // biome-ignore lint/suspicious/noExplicitAny: 与 specs Map 同一判据：出入口由调用方保证
   compose?: (...args: any[]) => string;
-  /** 渲染/lift 顺序（小者在前）：quote 最前 → session-ref → image/notice → file → body。 */
+  /** 渲染/lift 顺序（小者在前）：quote 最前 → session-ref → image/notice → file → vessel-block → body。 */
   order: number;
   /** 注册来源（宿主 = 'host'；插件 = pluginId），注销按它整组撤。 */
   owner: string;
