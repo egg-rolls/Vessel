@@ -1559,6 +1559,19 @@ export interface PeerStopChange {
 /** 装配层注入的成员停下通知端口；缺省不报（纯内存 / 测试）。 */
 export type PeerStopSink = (change: PeerStopChange) => void;
 
+/**
+ * 装配层注入的人类求救投递端口（q-distress-message 顶层 fallback）。
+ *
+ * 把遇难求救写进面向人类的本机 Team 日志（`to:['human']`、零 dispatch）。
+ * `from` = 遇难 agent id（自身身份）；`teamId` = 遇难者所在 Team，缺省由装配层
+ * 解析默认 Team。投递失败抛错（service 记日志，不覆盖原始 run 错误）。
+ */
+export type HumanDistressSink = (input: {
+  from: string;
+  content: string;
+  teamId?: string;
+}) => Promise<void>;
+
 /** AgentService 构造参数 */
 export interface AgentServiceOptions {
   /** 一个实例只服务一个 tenant */
@@ -1666,6 +1679,18 @@ export interface AgentServiceOptions {
    * 缺省 undefined = 不报（纯内存测试 / 未挂通知总线的入口）。
    */
   peerStops?: PeerStopSink;
+  /**
+   * 遇难求救的人类兜底端口（q-distress-message 顶层 fallback；内部装配 / 非 wire）。
+   *
+   * 顶层 / 无 parent / 无最近 agent 发送者的遇难者（depth-0 peer、main 自身、
+   * 远程节点根 agent）没有成员收件人 —— 求救改投面向**人类**的本机 Team 日志
+   * （`to:['human']`、空 mentions、零 dispatch，与 0.27 本机人类投递同形），
+   * 人在 Web Team 面板看到并回信。装配层注入（team.post + 默认 Team 解析）。
+   *
+   * 防循环天然成立：人类不跑 run，不会触发新的 distress。缺省 undefined =
+   * 无人类通道（纯内存 / 未装配），此时成员候选皆无才落 `no_recipient` 日志。
+   */
+  humanDistress?: HumanDistressSink;
   /**
    * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 的注册 ref 校验口（与 gateway
    * `agents.create|update` 参数闸同一注入面）。create/hire（单条与 batch 逐条）与
