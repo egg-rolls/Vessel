@@ -179,4 +179,54 @@
     outline: 2px solid var(--accent);
     outline-offset: 1px;
   }
+
+  /* ── A1 逐卡「随消息发送图像」开关（file-ref-ux delta）─────────────────
+     小 switch：默认关（灰轨）；开 ⇒ accent 轨 + 旋钮右移。真 button +
+     role="switch" / aria-checked，键盘可达；与 × 兄弟不嵌套。行内 1em 级，
+     不撑行盒。 */
+  .file-ref-inline {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .file-ref-inline-track {
+    display: inline-flex;
+    align-items: center;
+    width: 18px;
+    height: 10px;
+    padding: 1px;
+    border-radius: 6px;
+    background: var(--line);
+    transition: background 0.15s ease;
+  }
+
+  .file-ref-inline-knob {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition:
+      transform 0.15s ease,
+      background 0.15s ease;
+  }
+
+  .file-ref-inline.is-on .file-ref-inline-track {
+    background: var(--accent);
+  }
+
+  .file-ref-inline.is-on .file-ref-inline-knob {
+    transform: translateX(8px);
+    background: var(--surface-raised, var(--raised));
+  }
+
+  .file-ref-inline:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-radius: 6px;
+  }
 }

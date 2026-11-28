@@ -77,6 +77,26 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
     onRemove();
   };
 
+  // A1 逐卡「随消息发送图像」开关（file-ref-ux delta）：默认关；开 ⇒ refs[].inline=true
+  // （只写 true 键，P1a 同口径），发送时经 ingest 入池内联。能力探测：旧宿主端口无
+  // updateRef ⇒ 不渲染开关（诚实降级）。过期 / 瞬态态不渲染。
+  // 已知局限：同路径双引用取 findIndex 首条（与 remove 同口径）。
+  const canInline =
+    !isTransient &&
+    !expired &&
+    kind === 'image' &&
+    port !== undefined &&
+    typeof port.updateRef === 'function';
+  const inlineIndex = canInline ? port.refs().findIndex((ref) => ref.path === target) : -1;
+  const inlineOn = inlineIndex >= 0 && port?.refs()[inlineIndex]?.inline === true;
+  const toggleInline = () => {
+    if (port === undefined) return;
+    const index = port.refs().findIndex((ref) => ref.path === target);
+    if (index < 0) return;
+    const on = port.refs()[index]?.inline === true;
+    port.updateRef(index, { inline: !on });
+  };
+
   // 宿主标准预览弹窗（大图 + 路径 + 复制）；字节不可用 ⇒ 插件侧 toast。
   const openPreview = () => {
     void host.attachments.openPreview(target).catch(() => {
@@ -156,6 +176,21 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
         </button>
       ) : (
         body
+      )}
+      {canInline && (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={inlineOn}
+          className={`file-ref-inline${inlineOn ? ' is-on' : ''}`}
+          aria-label={t('card.inline', { name: displayName })}
+          title={t('card.inline', { name: displayName })}
+          onClick={toggleInline}
+        >
+          <span className="file-ref-inline-track" aria-hidden="true">
+            <span className="file-ref-inline-knob" />
+          </span>
+        </button>
       )}
       <button
         type="button"
