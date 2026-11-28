@@ -787,6 +787,22 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(fu
     return () => observer.disconnect();
   }, [resize]);
 
+  // beforeinput 同步退 placeholder：input 事件在字符插入后才触发，空态下首字符
+  // 会与 placeholder 同帧重叠。这里在浏览器插入前按 updateEmpty 同一口径
+  // （serializeRoot 判空）先置 data-empty=false；删尽回空由 input→updateEmpty
+  // 恢复 true。IME 路径同样受益（insertCompositionText 也走 beforeinput），
+  // composingRef 时序不受影响。用原生 listener：React 的 onBeforeInput 是
+  // 合成 polyfill，时机不保证在 DOM 变更之前。
+  useEffect(() => {
+    const element = rootRef.current;
+    if (element === null) return;
+    const onBeforeInput = () => {
+      if (serializeRoot(element) === '') element.dataset.empty = 'false';
+    };
+    element.addEventListener('beforeinput', onBeforeInput);
+    return () => element.removeEventListener('beforeinput', onBeforeInput);
+  }, []);
+
   const syncCaret = useCallback(() => {
     const root = rootRef.current;
     if (root === null) return;
