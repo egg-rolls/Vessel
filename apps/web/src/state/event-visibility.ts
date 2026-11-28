@@ -18,13 +18,13 @@
  *   `noticeView`），**绝不落裸 JSON 卡**。这是对门禁管不到的边界（第三方插件 / 上游事件 /
  *   旧 trace）的兜底 —— 漏登记最坏也只是一行折叠的内部提示。
  * - **失败类永不进 `observe`**：任何集合都在 `ui.errorLevel` 之前过滤，塞进静默档等于
- *   静默真失败。`scripts/check-event-visibility.ts` 的 fixture 钉死这条（`observe` 里
- *   出现 `isErrorEventType` 就 FAIL）。
+ *   静默真失败。这条靠评审核对钉死（`observe` 里出现 `isErrorEventType` 必须驳回；
+ *   原 fixture 门禁脚本已按宪法删除）。
  *
  * **口径契约**：新增事件 → 先在这里登记（`live: true`），再在
- * `docs/architecture/events.md` 的 `event-visibility` marker 表里写一行；
- * `bun run check:event-visibility` 把「扫到未登记的事件名」「表里有、代码里没有」
- * 「文档与表不一致」「双链（团队日志 vs `SYSTEM_KEYS`）漂移」都变成 FAIL。
+ * `docs/architecture/event-visibility.md` 的注册表里写一行；
+ * 「扫到未登记的事件名」「表里有、代码里没有」「文档与表不一致」
+ * 「双链（团队日志 vs `SYSTEM_KEYS`）漂移」靠评审核对钉住（原门禁脚本已按宪法删除）。
  * **不要在渲染层（`EventRow` / `StreamItems` / `run-detail`）另写可见性判断**。
  */
 import { type ErrorVisibility, errorLevelOf, isErrorEventType } from './error-visibility';
@@ -44,7 +44,7 @@ export type EventTeamLog = 'system' | 'reply' | 'none';
 
 export interface EventSpec {
   tier: EventTier;
-  /** 本仓还有生产者。`false` = 只读历史（门禁的「表腐烂」反向断言用它）。 */
+  /** 本仓还有生产者。`false` = 只读历史（评审的「表腐烂」反向核对用它）。 */
   live: boolean;
   /** 有 typed notice / 专用卡片 / 团队日志行 / DTO 承接（决定「能不能藏」）。 */
   承接?: EventCarrier;
@@ -54,7 +54,7 @@ export interface EventSpec {
    * 保留原始事件行（`kind: 'event'`）是**正确的**。
    *
    * 只给 `guardrail.blocked` 这种「内容要在时间线上看到、但明细只能是原始事件」的类型；
-   * 其余 `content` 类型必须有专用卡片或 typed notice（门禁 fixture 据此断言）。
+   * 其余 `content` 类型必须有专用卡片或 typed notice（评审核对据此断言）。
    */
   rawCard?: true;
 }
@@ -65,10 +65,10 @@ export interface EventSpec {
  * + 0.53 U2 的三条投射审计（`context.projection_*`），再减去 0.51 删掉的 rotate 三条死类型，
  * + q-empty-response 的 `llm.empty_response`（空响应兜底过程信号），
  * + inbox 统一批的 `agent.inbox.changed`（agent 级 inbox 变更触发信号），
- * 共 117 条（分档计数由 `scripts/check-event-visibility.ts` 的 A4 影子断言钉死）。
+ * 共 117 条（分档计数靠评审核对钉住；原门禁影子断言脚本已按宪法删除）。
  *
  * 顺序按域分组（run/llm/tool → 上下文 → 会话/进程 → agent → 插件 → 子 agent），
- * 与 `docs/architecture/events.md` 的 marker 表同一顺序（门禁只比键集，顺序是人读的）。
+ * 与 `docs/architecture/event-visibility.md` 的注册表同一顺序（评审只比键集，顺序是人读的）。
  */
 export const EVENT_TIERS: Readonly<Record<string, EventSpec>> = {
   // ── run / llm / tool：对话主体（content）
