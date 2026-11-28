@@ -2,7 +2,7 @@
 title: 消息块协议（信封规范 / type 注册表 / vessel-block fence）
 kind: current
 triggers: [block, envelope, quote, session-ref, vessel-block, fence, lift, registry, 块, 信封, 引用, 会话引用, 提升, 注册表, 固定标记, legacy]
-paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx, apps/web/src/domains/chat/InlineText.tsx, apps/web/src/domains/chat/InlineRefChip.tsx, apps/web/src/domains/chat/use-ref-preview.ts, apps/web/src/domains/chat/use-in-view.ts, apps/web/src/domains/chat/attachment-preview-cache.ts, packages/core/src/runtime/tool-attachment.ts, packages/core/src/runtime/tool-calling-loop.ts]
+paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx, apps/web/src/domains/chat/InlineText.tsx, apps/web/src/domains/chat/InlineRefChip.tsx, apps/web/src/domains/chat/use-ref-preview.ts, apps/web/src/domains/chat/use-in-view.ts, apps/web/src/domains/chat/attachment-preview-cache.ts, apps/web/src/domains/chat/ToolResultCard.tsx, apps/web/src/domains/chat/ToolImageCard.tsx, apps/web/src/domains/chat/MessageContentSurface.tsx, packages/core/src/runtime/tool-attachment.ts, packages/core/src/runtime/tool-calling-loop.ts]
 ---
 
 # 消息块协议
@@ -67,8 +67,9 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
    |---|---|---|
    | quote | `[引用消息 <id>]` / `[引用消息]` + `> snippet` | quote-ref.ts#parseQuoteEnvelope |
    | session-ref | `[引用会话]` / `[Referenced sessions]` 双词 + `- 「title」 · k: v …` 行 | session-ref.ts#parseSessionRefEnvelope |
-   | tool image | `[tool image]` 注记 + 结构化 refs | transcript-items.ts#toolImageRefsOf |
-   | tool file | `[tool file]` 注记 + 结构化 refs（P2） | 无专用解析器：file lift 按 refs 出 chip，注记为正文 |
+   | tool image（legacy） | `[tool image]` 注记 + 结构化 refs | transcript-items.ts#toolImageRefsOf（ToolImageCard 冻结 legacy 渲染器，零改动） |
+   | tool file（legacy） | `[tool file]` 注记 + 结构化 refs | file lift 按 refs 出 chip，注记为正文 |
+   | tool media（现态） | `[tool media] N … from tool X:` 锚 + 每 ref 一行 `[basename](<vessel-ref:path>)` token + refs | tool-media lift（order35）剥锚行伪消息过 liftBlocks → ToolResultCard（StreamCard 基座）内容插槽 |
    | refs 尾注 | `[refs] N attachments: …` | refs-notice-hook（服务端注入，Web 按 name 识别） |
    | runtime notice | `[runtime] <summary>` + `  · ` details 行 | env-notice.ts#runtimeEnvCard |
    | file token | `vessel-ref:` scheme markdown 链接 | 用户正文：InlineText/InlineRefChip 内联 chip（file lift 停剥正文，`liftBlocks().inline` 分流）；助手正文：宿主 vessel-ref enhancer / 插件 FileRefLinkCard |
@@ -129,9 +130,15 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
   （2.2.4 宿主 PDF 字节预览通道，`use-ref-preview.ts` isPdf，RefCard/InlineRefChip
   两侧同形）**。历史只读：只解析投影，不回填不改写 `Message.content`
   （复制 / 编辑 / quote 仍拿原文逐字节）。
-- **[tool image] 注记保留折叠**（裁示②）：ToolImageCard 图条目换 InlineRefChip
-  同形（字节 meta 收 hover），注记原文收卡内折叠区；零模型侧变化（token 化
-  远期另批）。`toolImageRefsOf` 判定函数与非渲染消费点不动。
+- **工具附件 token 化**（q-tool-card-slot，取代内嵌批裁示②「注记保留折叠」）：
+  工具返回改 `[tool media] N … from tool X:` 锚 + 每 ref 一行 vessel-ref token，
+  经 tool-media lift 剥锚行伪消息过 liftBlocks → `ToolResultCard`（StreamCard 基座）
+  内容插槽（token 原位 chip + delivery 三态 chip 经 matchFileTokens 继承）。
+  refs 通道原样 ⇒ vision/plan 只读 refs，传输/内联零变化（与 composer 用户附图同形）。
+  `ToolImageCard` **冻结为 legacy 渲染器**（只认旧 `[tool image]` 前缀，历史双认永久，
+  零改动；PDF 点击预览经 use-ref-preview isPdf 共享路径不回归）。`toolImageRefsOf`
+  判定函数扩「旧前缀 ∨ 新锚」，3 非渲染消费点（isCardInputMessage/inputsByRun/lastUserTs）
+  自动双认。ToolCard 自身输出分区纯 pre 不动（任意工具输出不得默认 markdown）。
 
 ## 4. 双向发送路径
 
@@ -140,15 +147,16 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
 | type | 路径 | 状态 |
 |---|---|---|
 | quote | 模仿信封（双向同形已通）；工具经 `attachToolBlocks` surface 时 loop 注入信封原文 | 现态（P2 泛化） |
-| image | media view → attachToolImages WeakMap 回执 → loop 追加带 refs 的 user 消息 | 现态；P2 已泛化为 `attachToolBlocks` 特例（image 消息逐字节旧形状） |
-| file | `[name](<vessel-ref:path>)` markdown 链接；工具经 `attachToolBlocks` surface 时 loop 注入 `[tool file]` 注记 + refs | 现态（P2 泛化） |
+| image | media view → attachToolImages WeakMap 回执 → loop 追加带 refs 的 user 消息；content 改 `[tool media]` 锚 + vessel-ref token（q-tool-card-slot），refs 原样 ⇒ 传输零变化 | 现态；P2 泛化为 `attachToolBlocks` 特例 |
+| file | `[name](<vessel-ref:path>)` markdown 链接；工具经 `attachToolBlocks` surface 时 loop 注入 `[tool media]` 锚 + token + refs（q-tool-card-slot 取代 `[tool file]` 注记） | 现态 |
 | table/code | markdown 原生；结构化场景 AI 产出 vessel-block fence；工具经 `attachToolBlocks` surface 时 loop 每块注入单闭合 fence | 现态（P2 泛化；fence spec 见 §5） |
 | notice | 宿主 hook 注入，**不开放给业务块** | 现态 |
 
 P2 注入形状（`tool-calling-loop.ts#toolBlockMessages`）：本批工具结果全部写回后
 **按 type 分条**经既有 `appendInjectedMessages` 追加 user 消息（身份盖章 / 事件 /
-落盘全复用；末尾追加 ⇒ 前缀守卫天然满足）。分条是硬要求：image lift 按
-「`[tool image] ` 前缀 + image refs」整条成卡（吞正文），fence 试点要求整条正文恰为
+落盘全复用；末尾追加 ⇒ 前缀守卫天然满足）。分条是硬要求：legacy image lift 按
+「`[tool image] ` 前缀 + image refs」整条成卡（吞正文），新 `[tool media]` 锚经
+tool-media lift 剥锚行成 ToolResultCard 插槽，fence 试点要求整条正文恰为
 单闭合 fence —— 混合内容塞一条会被卡吞掉。回执入口严格形状校验
 （`tool-attachment.ts`，table/quote/code schema 与前端 vessel-block.ts 同口径），
 坏条目静默丢；handler 签名不变（工具零感知）。
@@ -232,7 +240,8 @@ node-local 路径，地址（2/3 段）/ human / 裸名跨节点升级路显式�
 |---|---|
 | quote 信封 | 格式不变；lift 已收编注册表 |
 | session-ref 信封 | 新消息固定标记（§3.1）；旧消息双词 + zh field legacy 永久 |
-| [tool image] 注记 + refs | 不动；ToolImageCard 经注册表消费 |
+| [tool image] 注记 + refs（legacy） | 不动；ToolImageCard 冻结 legacy 渲染器（历史双认永久，PDF 不回归） |
+| [tool media] 锚 + token + refs（现态） | tool-media lift → ToolResultCard 插槽（q-tool-card-slot）；旧 [tool image]/[tool file] 永久双认 |
 | vessel-ref token + 插件卡 | 用户正文 token 内联 chip（InlineText/InlineRefChip，§3.2）；助手正文宿主 vessel-ref enhancer 优先（x:file-refs:vessel-ref 登记不变），插件 bundle 零改动 |
 | vessel:notice / [refs] / [runtime] | wire 不动；notice lift 收编 |
 | 历史消息（无 message_id / 旧 locale 头部） | 全走 legacy 解析器 + 既有降级；**不回填不改写** |
