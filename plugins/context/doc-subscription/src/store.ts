@@ -27,6 +27,7 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { healthSubscriptionKey, isValidHealthTarget } from './health.js';
 
 /**
  * 一条 read 引用（line-level 订阅）。不存 tool_call_id（AfterTool 拿不到）：
@@ -80,10 +81,17 @@ export interface MemberPointer {
 export interface SubscriptionEntry {
   /** `sha256(canonicalPath).slice(0, 12)` */
   id: string;
-  /** 规范化绝对路径 */
+  /** 规范化绝对路径（source='health' 时 = 订阅目标：node_id 或联邦地址） */
   path: string;
   /** 用户原始输入（相对路径 / `~` 形式，仅用于展示） */
   input: string;
+  /**
+   * 订阅源类型（q-health-subscription，additive）：缺省 'file'（旧状态零回归）。
+   * 'health' 条目：状态键 = `health:<target>`（healthSubscriptionKey），rev = 健康签名
+   * （healthSignature：`down` / `up:<version>:<started_at>:<node_id>`），
+   * size / reads / snapshot / last_writer 不用；观察读宿主落的快照文件（health.ts）。
+   */
+  source?: 'file' | 'health';
   /** 最近一次观察到的状态：sha256 hex / `deleted` / `too_large:<size>:<mtime>` / `binary:<hash>` */
   rev: string;
   /** 最近一次短通知里的 rev；`''` = 尚未通知 */
@@ -115,7 +123,7 @@ export interface SubscriptionEntry {
 export interface SessionSubscriptionState {
   v: 1;
   session_id: string;
-  /** key = canonicalPath */
+  /** key = canonicalPath（file 源）/ `health:<target>`（health 源，q-health-subscription） */
   subscriptions: Record<string, SubscriptionEntry>;
   /** 单调增长的已消费清除 id ledger（缺省 []）；边缘触发释放，同 id 再现不重复释放 */
   cleared_consumed: string[];
@@ -219,11 +227,17 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     if (!isRecord(value)) continue;
     const canonical = readString(value, 'path', '');
     if (canonical === '') continue;
+    // health 源（q-health-subscription，additive）：path = 订阅目标；非法目标丢弃。
+    // 旧状态无 source ⇒ 'file'，键与行为逐字节不变（零回归）。
+    const source = value.source === 'health' ? 'health' : 'file';
+    if (source === 'health' && !isValidHealthTarget(canonical)) continue;
     const rev = readString(value, 'rev', '');
     const entry: SubscriptionEntry = {
       id: readString(value, 'id', '') || subscriptionId(canonical),
       path: canonical,
       input: readString(value, 'input', canonical),
+      // 只在 health 时落字段：file 条目序列化形状与旧版逐字节一致（零回归）。
+      ...(source === 'health' ? { source: 'health' as const } : {}),
       rev,
       // 旧状态（只有 rev / delivered_at）按“已通知”迁移，避免升级后重复通知。
       notified_rev: readString(value, 'notified_rev', rev),
@@ -240,7 +254,8 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     const lastWriter = normalizeChangeOrigin(value.last_writer);
     if (lastWriter !== undefined) entry.last_writer = lastWriter;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。
-    subscriptions[canonical] = entry;
+    // health 条目键空间隔离（health:<target>），不与文件路径键碰撞。
+    subscriptions[source === 'health' ? healthSubscriptionKey(canonical) : canonical] = entry;
   }
   return {
     v: 1,

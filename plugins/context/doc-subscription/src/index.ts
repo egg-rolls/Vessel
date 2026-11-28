@@ -3,7 +3,9 @@
  * @module @vessel-agent/doc-subscription
  *
  * 提供三件东西：
- * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无目录、无自动发现）。
+ * - `subscribe` 工具：显式 add / remove / list / inspect 具体文件（无 glob、无目录、无自动发现）；
+ *   source:'health' 泛化（q-health-subscription）：订阅 node 健康（本机 node_id 或联邦地址），
+ *   观察宿主 node-health-watch 落的快照文件，reachable 翻转 / 版本 / 重启（started_at）变化通知。
  * - `AfterTool` hook：edit/write 自动订阅所改文件（subscribe:false 可 opt-out；蜂群 Phase 1 第二重）；
  *   read 自动订阅所读行范围（line-level，subscribe:false 可 opt-out；蜂群协作增强）。
  * - `BeforeLlm` hook：每个 run 第一次 LLM 请求前先消费会话壳清除集合（read 引用释放 / 过期，
@@ -27,11 +29,23 @@ export { AUTO_SUBSCRIBE_HOOK, createAutoSubscribeHook } from './auto-sub.js';
 export type { DocSubscriptionConfig } from './config.js';
 export { parseDocSubscriptionConfig } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
+export {
+  describeHealthRev,
+  type HealthSnapshot,
+  healthSignature,
+  healthSnapshotPath,
+  healthSubscriptionKey,
+  healthTargetNodeId,
+  isValidHealthTarget,
+  readHealthSnapshot,
+} from './health.js';
 export { type BeforeLlmHookDeps, createBeforeLlmHook, MAX_FILE_BYTES } from './hook.js';
 export { consumeClearedToolResults } from './lifecycle.js';
 export {
   fitDiffContentLines,
+  formatHealthNotice,
   formatSubscriptionNotice,
+  HEALTH_NOTICE_SCOPE,
   SUBSCRIPTION_NOTICE_DETAIL_MARK,
   SUBSCRIPTION_NOTICE_DETAILS_MAX,
   SUBSCRIPTION_NOTICE_DIFF_TRUNCATED,
@@ -73,11 +87,11 @@ export const DOC_SUBSCRIPTION_PLUGIN_NAME = 'doc-subscription';
 export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOptions = {}): Plugin {
   return {
     name: DOC_SUBSCRIPTION_PLUGIN_NAME,
-    version: '0.26.2',
+    version: '0.27.0',
     description:
-      'Per-session file subscriptions: `subscribe` tool + edit/write auto-subscribe ' +
-      '(subscribe:false opt-out) + read line-range auto-subscribe + BeforeLlm change notices ' +
-      'with line-level diffs and cleared-tool-result lifecycle',
+      'Per-session file & node-health subscriptions: `subscribe` tool (source file|health) + ' +
+      'edit/write auto-subscribe (subscribe:false opt-out) + read line-range auto-subscribe + ' +
+      'BeforeLlm change notices with line-level diffs and cleared-tool-result lifecycle',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
       const config: DocSubscriptionConfig = parseDocSubscriptionConfig(
         installOptions?.config ?? options.config,

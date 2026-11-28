@@ -70,6 +70,7 @@ export const ENV_NOTICE_SCOPES = [
   'lock',
   'conflict',
   'files',
+  'health',
   'context',
   'trim',
   'selfcard',
