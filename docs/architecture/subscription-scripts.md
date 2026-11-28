@@ -49,7 +49,8 @@ camelCase/snake_case 双拼写；非法值回落默认；重名首条生效。ca
 - **kickoff fire-and-forget**（BeforeLlm hook 内，await 路径零子进程等待）：`run` = 每 run
   首请求；`request` = 每请求；`interval` = **真 timer**（P1 裁点变更，推翻 P0 惰性）：
   ScriptRunner 每订阅（session+name 键）setInterval，**idle 也跑**，unref 不独自撑进程；
-  hook 每 run 幂等 arm（重启后首 run 重新 arm），tick 内 live 重读 allowlist/cadence。
+  hook 每 run 幂等 arm（重启后首 run 重新 arm），tick 内 live 重读 allowlist/cadence，
+  周期变更 tick 内幂等重 arm（同周期保留相位；idle 热改 intervalSeconds 下个 tick 即生效）。
 - **单飞**：每订阅同时最多一个在飞进程（在飞 ⇒ 跳过本轮）；超时 kill（POSIX 进程组 /
   Windows taskkill /T）；stdout 超上限截断 + 标记；spawn 失败/崩溃/超时全 catch 不阻塞 run。
 - **drain 每请求**（只读已完成结果，绝不等待）：结果在完成后下一个 BeforeLlm 投递（ambient）；
@@ -57,9 +58,11 @@ camelCase/snake_case 双拼写；非法值回落默认；重名首条生效。ca
   可接受——检测会重跑）。
 - **disarm 四路**：工具 remove / 插件 dispose / allowlist 删名或调度变更 / 本词 cadence off
   （hook 检查点 + tick live 自校验双保险，idle 热改也即时停）。
-- **live getter**：cadence / channel / scripts / budgets 每次 hook run / 工具调用经
-  `deps.liveConfig()` 重新解析（装配 `buildPluginConfigMap` 注入，三消费点同源）；成员持父
-  hook 引用也读活配置（hot-gate 同族修复）。dispose 不永久禁用执行器（成员旧 hook 续活）。
+- **live getter**：cadence / channel / scripts / budgets / cwd / stateDir 每次 hook run /
+  工具调用 / **自动订阅入口**（edit/write/read AfterTool）经 `deps.liveConfig()` 重新解析
+  （装配 `buildPluginConfigMap` 注入，消费点同源；q-doc-subscription-hot-gate 收口残留：
+  工具 add(file/health) 与 auto-sub 曾读 install 快照）；成员持父 hook 引用也读活配置
+  （hot-gate 同族修复）。dispose 不永久禁用执行器（成员旧 hook 续活）。
 
 ## 降噪与投递（轴 B 实例）
 
