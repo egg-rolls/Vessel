@@ -80,8 +80,9 @@ export interface PluginPanelItem {
 /**
  * 输入框工具栏贡献项（0.51 additive）。
  *
- * 插件只声明「有这么一个按钮」；点击由宿主按 `id` 映射，宿主没有对应回调时
- * 该项被丢弃（不渲染死按钮）。因为拿不到宿主回调，v1 不支持插件内联执行。
+ * 点击三档：action（插件 embed 具名导出，宿主注入 ComposerEditorPort 调用，
+ * file-ref P3 additive）/ menu（RPC 绑定菜单）/ 缺省宿主按 `id` 映射回调。
+ * 宿主没有对应动作（无回调/无导出/无端口）时该项被丢弃（不渲染死按钮）。
  */
 export interface PluginToolbarItem {
   pluginId: string;
@@ -94,6 +95,8 @@ export interface PluginToolbarItem {
   order: number;
   /** 通用 RPC 绑定菜单（additive，P3）；缺省 = 普通按钮（宿主按 id 映射回调）。 */
   menu?: PluginToolbarMenu;
+  /** 插件自持点击动作（file-ref P3 additive）：embed 具名导出函数名。 */
+  action?: string;
 }
 
 /** 菜单档位项（归一化后）。 */
@@ -406,6 +409,8 @@ function byOrder(a: { order: number; title?: string; id: string }, b: typeof a):
 /**
  * 工具栏条目归一化：slot 走白名单，`label` 缺失回退 `id`；id 为空整项丢弃。
  * 图标同样只接受领域图标白名单，不把任意字符串传进渲染层。
+ * action（file-ref P3 additive）：JS 标识符形状 + 与 menu 互斥；违规 ⇒ 丢
+ * action 保留普通按钮声明（单项丢弃口径，与 menu 同款）。
  */
 function toolbarOf(
   plugin: PluginListItem,
@@ -418,6 +423,11 @@ function toolbarOf(
   if (icon === null) return null;
   const titleKey = text(item.titleKey);
   const menu = toolbarMenuOf(plugin, item.menu);
+  const actionRaw = text(item.action);
+  const action =
+    actionRaw !== '' && TOOLBAR_ACTION_RE.test(actionRaw) && menu === undefined
+      ? actionRaw
+      : undefined;
   return {
     pluginId: plugin.name,
     pluginName: plugin.name,
@@ -428,8 +438,12 @@ function toolbarOf(
     ...(icon !== undefined ? { icon } : {}),
     order: orderOf(item.order),
     ...(menu !== undefined ? { menu } : {}),
+    ...(action !== undefined ? { action } : {}),
   };
 }
+
+/** action 形状：embed 具名导出（JS 标识符，与 manifest loader 同口径）。 */
+const TOOLBAR_ACTION_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 /** 菜单档位上限 / 值长度上限（与 manifest loader 同口径）。 */
 const TOOLBAR_MENU_MAX_ITEMS = 16;

@@ -302,6 +302,17 @@ export type ComposerDropHandler = (
   at: { offset: number | null },
 ) => void | Promise<void>;
 
+/**
+ * toolbar `action` 档处理器（file-ref P3 additive）：插件自持点击动作。
+ * 宿主在用户点击时注入编辑端口 + 插件 host 面调用（与 drop 槽同款接缝，宿主
+ * 零功能名）；插件可直调浏览器 API（embed 运行宿主同上下文）并经端口落草稿
+ * 引用，host 提供 theme / toast / i18n / rpc 等通用能力。
+ */
+export type ComposerToolbarActionHandler = (
+  port: ComposerEditorPort,
+  host: VesselPluginHost,
+) => void | Promise<void>;
+
 /** 原子卡片渲染器 props（refs 槽；host 由宿主注入，port 是编辑端口）。 */
 export interface ComposerCardProps {
   scheme: string;

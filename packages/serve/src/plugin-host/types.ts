@@ -153,7 +153,8 @@ export interface PluginPanelContribution {
 /**
  * `contributes.toolbar[]`（0.51 additive）：输入框工具栏的 declarative 按钮。
  *
- * 没有 `entry`：插件不挂 iframe，只声明 id + 文案；点击由宿主按 id 映射。
+ * 没有 `entry`：插件不挂 iframe，只声明 id + 文案。点击三档：action（插件
+ * embed 具名导出，宿主注入端口调用）/ menu（RPC 绑定菜单）/ 缺省宿主按 id 映射。
  */
 export interface PluginToolbarContribution {
   slot: string;
@@ -164,6 +165,11 @@ export interface PluginToolbarContribution {
   order?: number;
   /** 通用 RPC 绑定菜单（additive，q-thinking-plugin P3）；缺省 = 普通按钮。 */
   menu?: PluginToolbarMenu;
+  /**
+   * 插件自持点击动作（file-ref P3 additive）：embed 具名导出函数名，与 menu
+   * 互斥，须 JS 标识符形状 + ui.embed（fail-closed，与 composer handler 同款）。
+   */
+  action?: string;
 }
 
 /** 菜单档位项（additive）。 */
@@ -330,6 +336,8 @@ export interface PluginRenderContributions {
     icon?: PluginIconName;
     order: number;
     menu?: PluginToolbarMenu;
+    /** file-ref P3 additive：插件自持点击动作（embed 具名导出）。 */
+    action?: string;
   }>;
   /** file-ref-ux additive：输入框内嵌贡献（refs / drop / link 槽；embed 组件/处理器）。 */
   composer?: Array<{

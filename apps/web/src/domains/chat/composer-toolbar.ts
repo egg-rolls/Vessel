@@ -1,20 +1,24 @@
 /**
  * 输入框工具栏的扩展槽接线（会话 / 团队共用）。
  *
- * 插件侧只有 declarative 声明（`contributes.toolbar[]`：slot / id / label），
- * 点击由宿主映射成宿主回调：
- * - 宿主没给 handler 的条目**直接丢弃**，不渲染点了没反应的死按钮；
- * - 插件拿不到宿主回调（拿不到文件选择、拿不到路由），因此 v1 不做插件内联执行；
- *   需要「打开文件选择」这类宿主动作时，在 {@link COMPOSER_TOOLBAR_HOST_ACTIONS}
- *   里按 id 登记，插件只声明同一个 id + 文案。0.52 已登记 `attach-file`：
- *   宿主按钮与插件条目共用同一个「引用文件」弹层（回调由 composer 注入，
- *   见 {@link composerHostActions}）。
+ * 插件侧 declarative 声明（`contributes.toolbar[]`），点击三档：
+ * - action 档（file-ref P3 additive）：插件 embed 具名导出，宿主注入编辑端口
+ *   调用（composer-extensions bridge 注册）——插件自持点击动作，宿主零功能名；
+ * - menu 档：RPC 绑定菜单（{@link useComposerToolbarMenuActions}）；
+ * - 缺省档：宿主按 id 映射成宿主回调，没给 handler 的条目**直接丢弃**，
+ *   不渲染点了没反应的死按钮。0.52 登记的 `attach-file` 属缺省档
+ *   （file-ref P3 退役，见 D4）。
  */
+import type { ComposerEditorPort } from '@vessel-agent/plugin-sdk';
 import type { ComposerToolbarAction } from '@vessel-agent/plugin-ui';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { PluginI18n } from '../../gateway/types';
 import { getLocale, t, useLocale } from '../../i18n';
+import {
+  type ComposerToolbarActionRegistration,
+  useComposerExtensions,
+} from '../plugins/composer-extensions';
 import { type PluginToolbarItem, pluginT } from '../plugins/plugin-contributions';
 import { toolbarForSlot, usePluginContributions } from '../plugins/usePluginContributions';
 
@@ -65,21 +69,43 @@ export function composerHostActions(
 /**
  * 插件贡献项 + 宿主回调表 → toolbar 组件认识的 declarative 动作。
  *
- * 回调表是唯一开关：宿主没给回调的 id 直接丢弃（含插件条目），不渲染死按钮。
+ * 点击三档（file-ref P3 additive 后）：
+ * - action 档：插件 embed 具名导出（经 composer-extensions bridge 注册），
+ *   宿主注入编辑端口调用；无注册导出 / 无端口 ⇒ 条目丢弃（不渲染死按钮）；
+ * - 缺省档：宿主回调表按 id 映射，没给回调的 id 直接丢弃（含插件条目）。
  */
 export function composerToolbarActions(
   items: readonly PluginToolbarItem[],
   handlers: ComposerToolbarHostActions,
   i18nByPlugin: ReadonlyMap<string, PluginI18n> = new Map(),
   locale: string = getLocale(),
+  toolbarActions: readonly ComposerToolbarActionRegistration[] = [],
+  port?: ComposerEditorPort,
 ): ComposerToolbarAction[] {
   const actions: ComposerToolbarAction[] = [];
   for (const item of items) {
+    const fullId = `${item.pluginId}:${item.id}`;
+    const label = pluginT(i18nByPlugin, item.pluginId, item.titleKey, locale, item.label, item.id);
+    if (item.action !== undefined) {
+      const registration = toolbarActions.find((entry) => entry.id === fullId);
+      if (registration === undefined || port === undefined) continue;
+      const handler = registration.handler;
+      const editorPort = port;
+      const host = registration.host;
+      actions.push({
+        id: fullId,
+        label,
+        text: label,
+        onSelect: () => {
+          void handler(editorPort, host);
+        },
+      });
+      continue;
+    }
     const onSelect = handlers[item.id];
     if (onSelect === undefined) continue;
-    const label = pluginT(i18nByPlugin, item.pluginId, item.titleKey, locale, item.label, item.id);
     actions.push({
-      id: `${item.pluginId}:${item.id}`,
+      id: fullId,
       label,
       text: label,
       onSelect,
@@ -91,16 +117,26 @@ export function composerToolbarActions(
 /**
  * 读插件贡献并映射成工具栏动作。内部读的是与导航 / panel 同一份
  * `plugins.list` 结果（`usePluginContributions`），不新开轮询 / 新 RPC。
+ * port（file-ref P3 additive）：页面侧编辑端口；缺省 ⇒ action 档条目不渲染。
  */
 export function useComposerToolbarActions(
   handlers: ComposerToolbarHostActions,
+  port?: ComposerEditorPort,
 ): ComposerToolbarAction[] {
   const { toolbar, i18nByPlugin } = usePluginContributions();
+  const { toolbarActions } = useComposerExtensions();
   const locale = useLocale();
   return useMemo(
     () =>
-      composerToolbarActions(toolbarForSlot(toolbar, 'composer'), handlers, i18nByPlugin, locale),
-    [toolbar, handlers, i18nByPlugin, locale],
+      composerToolbarActions(
+        toolbarForSlot(toolbar, 'composer'),
+        handlers,
+        i18nByPlugin,
+        locale,
+        toolbarActions,
+        port,
+      ),
+    [toolbar, handlers, i18nByPlugin, locale, toolbarActions, port],
   );
 }
 

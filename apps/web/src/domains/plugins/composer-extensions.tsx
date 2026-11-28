@@ -6,10 +6,13 @@
  * - drop 槽 → OS 文件 drop / 截图粘贴处理器（宿主 Composer 分流后调用）；
  * - link 槽 → 消息 Markdown link 增强器（外部 store，Markdown 渲染消费）。
  *
+ * file-ref P3 additive：`contributes.toolbar[].action`（插件自持点击动作）
+ * 同走此 bridge——embed 具名导出函数，宿主点击时注入 ComposerEditorPort。
+ *
  * 加载机制复用 plugin-embed 既有件（loadPluginEmbed / usePluginHost /
- * usePluginSurface / disposePluginHost）：每个有 composer 贡献的插件一个
- * 隐形 bridge，模块就绪 + 授权面落定后注册；卸载 / 热更新 / 禁用 ⇒ 注销（A9）。
- * 宿主零功能名：只认 scheme / 具名导出，不认识「文件引用」。
+ * usePluginSurface / disposePluginHost）：每个有 composer / toolbar action
+ * 贡献的插件一个隐形 bridge，模块就绪 + 授权面落定后注册；卸载 / 热更新 /
+ * 禁用 ⇒ 注销（A9）。宿主零功能名：只认 scheme / 具名导出，不认识「文件引用」。
  */
 
 import type {
@@ -17,7 +20,9 @@ import type {
   ComposerDropHandler,
   ComposerEditorPort,
   ComposerLinkCardProps,
+  ComposerToolbarActionHandler,
   PluginModule,
+  VesselPluginHost,
 } from '@vessel-agent/plugin-sdk';
 import {
   type ComponentType,
@@ -38,22 +43,41 @@ import type { PluginListItem } from '../../gateway/types';
 import { registerBlockType, unregisterBlockTypes } from '../chat/block-registry';
 import { disposeEmbedModule, loadPluginEmbed } from './embed-loader';
 import { disposePluginHost, usePluginHost, usePluginSurface } from './host-factory';
-import { type PluginComposerItem, pluginEmbedAssetUrl } from './plugin-contributions';
+import {
+  type PluginComposerItem,
+  type PluginToolbarItem,
+  pluginEmbedAssetUrl,
+} from './plugin-contributions';
 import { usePluginContributions } from './usePluginContributions';
 
 // ── 注册聚合（provider）─────────────────────────────────────────────────
 
+/** toolbar action 注册项：id 是宿主渲染用的全名（pluginId:itemId）。 */
+export interface ComposerToolbarActionRegistration {
+  id: string;
+  handler: ComposerToolbarActionHandler;
+  /** 插件 host 面（theme / toast / i18n / rpc）：点击时随端口一并注入。 */
+  host: VesselPluginHost;
+}
+
 interface ComposerRegistration {
   schemes: AtomicScheme[];
   drops: ComposerDropHandler[];
+  toolbarActions: ComposerToolbarActionRegistration[];
 }
 
 export interface ComposerExtensions {
   atomicSchemes: readonly AtomicScheme[];
   dropHandlers: readonly ComposerDropHandler[];
+  /** 插件自持 toolbar 点击动作（file-ref P3 additive；按全名 id 查表）。 */
+  toolbarActions: readonly ComposerToolbarActionRegistration[];
 }
 
-const EMPTY_EXTENSIONS: ComposerExtensions = { atomicSchemes: [], dropHandlers: [] };
+const EMPTY_EXTENSIONS: ComposerExtensions = {
+  atomicSchemes: [],
+  dropHandlers: [],
+  toolbarActions: [],
+};
 const ComposerExtensionsContext = createContext<ComposerExtensions>(EMPTY_EXTENSIONS);
 
 export function useComposerExtensions(): ComposerExtensions {
@@ -64,10 +88,13 @@ export function useComposerExtensions(): ComposerExtensions {
 function ComposerPluginBridge({
   plugin,
   items,
+  toolbarItems,
   onRegister,
 }: {
   plugin: PluginListItem;
   items: readonly PluginComposerItem[];
+  /** toolbar action 档声明（file-ref P3 additive；已归一化，action 必在）。 */
+  toolbarItems: readonly PluginToolbarItem[];
   onRegister: (pluginId: string, registration: ComposerRegistration | null) => void;
 }) {
   const pluginId = plugin.name;
@@ -90,7 +117,7 @@ function ComposerPluginBridge({
   const runtimeSdk = embed?.runtime.sdk;
   const moduleUrl =
     embedEntry !== undefined ? pluginEmbedAssetUrl(nodeUrl, pluginId, embedEntry) : null;
-  const firstExport = items[0]?.component ?? items[0]?.handler ?? '';
+  const firstExport = items[0]?.component ?? items[0]?.handler ?? toolbarItems[0]?.action ?? '';
   const [module, setModule] = useState<PluginModule | null>(null);
 
   useEffect(() => {
@@ -130,6 +157,20 @@ function ComposerPluginBridge({
     if (module === null || !surfaceReady) return;
     const schemes: AtomicScheme[] = [];
     const drops: ComposerDropHandler[] = [];
+    const toolbarActions: ComposerToolbarActionRegistration[] = [];
+    // toolbar action 档（file-ref P3 additive）：embed 具名导出函数；无导出 ⇒
+    // 不注册（宿主侧条目丢弃，不渲染死按钮）。
+    for (const item of toolbarItems) {
+      const name = item.action;
+      if (name === undefined) continue;
+      const exported = module[name];
+      if (typeof exported !== 'function') continue;
+      toolbarActions.push({
+        id: `${pluginId}:${item.id}`,
+        handler: exported as ComposerToolbarActionHandler,
+        host,
+      });
+    }
     for (const item of items) {
       const name = item.component ?? item.handler ?? '';
       const exported = module[name];
@@ -180,13 +221,13 @@ function ComposerPluginBridge({
         ),
       });
     }
-    onRegister(pluginId, { schemes, drops });
+    onRegister(pluginId, { schemes, drops, toolbarActions });
     return () => {
       onRegister(pluginId, null);
       unregisterLinkEnhancers(pluginId);
       unregisterBlockTypes(pluginId);
     };
-  }, [module, surfaceReady, items, host, onRegister, pluginId]);
+  }, [module, surfaceReady, items, toolbarItems, host, onRegister, pluginId]);
 
   return null;
 }
@@ -196,7 +237,7 @@ function ComposerPluginBridge({
  * 无 composer 贡献 / 旧 gateway ⇒ 空注册（输入框 = 纯文本富编辑）。
  */
 export function ComposerExtensionsProvider({ children }: { children: ReactNode }) {
-  const { plugins, composer } = usePluginContributions();
+  const { plugins, composer, toolbar } = usePluginContributions();
   const [registrations, setRegistrations] = useState<Record<string, ComposerRegistration>>({});
 
   const onRegister = useCallback((pluginId: string, registration: ComposerRegistration | null) => {
@@ -221,25 +262,44 @@ export function ComposerExtensionsProvider({ children }: { children: ReactNode }
     return map;
   }, [composer]);
 
+  // toolbar action 档（file-ref P3 additive）：只取声明了 action 的 composer 槽
+  // 条目；无 action 的普通按钮 / menu 按钮不走 embed bridge（宿主回调 / RPC 档）。
+  const toolbarByPlugin = useMemo(() => {
+    const map = new Map<string, PluginToolbarItem[]>();
+    for (const item of toolbar) {
+      if (item.slot !== 'composer' || item.action === undefined) continue;
+      const list = map.get(item.pluginId);
+      if (list === undefined) map.set(item.pluginId, [item]);
+      else list.push(item);
+    }
+    return map;
+  }, [toolbar]);
+
   const value = useMemo<ComposerExtensions>(() => {
     const atomicSchemes: AtomicScheme[] = [];
     const dropHandlers: ComposerDropHandler[] = [];
+    const toolbarActions: ComposerToolbarActionRegistration[] = [];
     for (const registration of Object.values(registrations)) {
       atomicSchemes.push(...registration.schemes);
       dropHandlers.push(...registration.drops);
+      toolbarActions.push(...registration.toolbarActions);
     }
-    return { atomicSchemes, dropHandlers };
+    return { atomicSchemes, dropHandlers, toolbarActions };
   }, [registrations]);
 
   return (
     <ComposerExtensionsContext.Provider value={value}>
       {plugins
-        .filter((plugin) => plugin.enabled && byPlugin.has(plugin.name))
+        .filter(
+          (plugin) =>
+            plugin.enabled && (byPlugin.has(plugin.name) || toolbarByPlugin.has(plugin.name)),
+        )
         .map((plugin) => (
           <ComposerPluginBridge
             key={plugin.name}
             plugin={plugin}
             items={byPlugin.get(plugin.name) ?? []}
+            toolbarItems={toolbarByPlugin.get(plugin.name) ?? []}
             onRegister={onRegister}
           />
         ))}

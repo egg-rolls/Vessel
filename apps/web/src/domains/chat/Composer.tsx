@@ -336,6 +336,7 @@ export function Composer({
           contextUsage={contextUsage}
           attach={attach}
           sessionId={sessionId}
+          port={port}
           slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (

@@ -4,6 +4,7 @@
  * 会话 `Composer` 与团队 `TeamComposer` 都只从这里取组件，样式与无障碍语义
  * 只有一份；两页的差异（草稿、mention、发送禁用条件）留在各自的 composer 里。
  */
+import type { ComposerEditorPort } from '@vessel-agent/plugin-sdk';
 import {
   type ComposerAttachment,
   ComposerAttachments,
@@ -241,6 +242,7 @@ export function ComposerToolbarBar({
   children,
   className,
   sessionId,
+  port,
 }: {
   contextUsage?: ComposerContextUsage;
   /** 右侧主按钮（发送 / 配置连接），由页面传入。 */
@@ -252,8 +254,10 @@ export function ComposerToolbarBar({
   className?: string;
   /** 当前会话 id（P3 菜单 sessionScoped write 注入）；缺省（草稿态）菜单按全局默认。 */
   sessionId?: string;
+  /** 编辑端口（file-ref P3 additive）：插件 toolbar action 档点击时注入；缺省不渲染。 */
+  port?: ComposerEditorPort;
 }) {
-  const hostToolbarActions = useComposerToolbarActions(hostActions);
+  const hostToolbarActions = useComposerToolbarActions(hostActions, port);
   const menuActions = useComposerToolbarMenuActions(sessionId);
   return (
     <ComposerToolbar
@@ -352,6 +356,7 @@ export function ComposerField({
   slot,
   attach,
   sessionId,
+  port,
 }: {
   /** 输入框：各页自绘（Enter / IME / mention 行为留在页面里），样式共用 `.composer-input`。 */
   children: ReactNode;
@@ -372,6 +377,8 @@ export function ComposerField({
   attach?: ComposerAttachBinding;
   /** 当前会话 id（P3 菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
   sessionId?: string;
+  /** 编辑端口（file-ref P3 additive）：插件 toolbar action 档点击时注入。 */
+  port?: ComposerEditorPort;
 }) {
   const [attachOpen, setAttachOpen] = useState(false);
   const dialogId = useId();
@@ -401,6 +408,7 @@ export function ComposerField({
         primary={primary}
         hostActions={actions}
         sessionId={sessionId}
+        port={port}
       >
         {attach !== undefined && (
           <ComposerAttachButton

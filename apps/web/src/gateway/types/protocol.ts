@@ -200,6 +200,11 @@ export interface PluginContributionToolbar {
   order?: number;
   /** 通用 RPC 绑定菜单（additive，q-thinking-plugin P3）；旧 gateway 不返回。 */
   menu?: PluginContributionToolbarMenu;
+  /**
+   * 插件自持点击动作（file-ref P3 additive）：embed 具名导出函数名，宿主注入
+   * ComposerEditorPort 调用；与 menu 互斥；旧 gateway 不返回。
+   */
+  action?: string;
 }
 
 /** 菜单档位项 wire 形状（additive）。 */

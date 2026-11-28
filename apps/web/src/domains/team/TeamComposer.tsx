@@ -285,6 +285,7 @@ export function TeamComposer({
       <ComposerField
         contextUsage={contextUsage}
         attach={attach}
+        port={port}
         primary={
           <ComposerSendButton
             label={sending ? t('team.composer.sending') : t('team.composer.send')}
