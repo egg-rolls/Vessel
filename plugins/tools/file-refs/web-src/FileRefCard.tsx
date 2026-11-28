@@ -6,12 +6,13 @@
  * q-image-chip-inline：图片 kind 落定态 chip 体 = 真 button（原生键盘可达），
  * 点击经 host.attachments.openPreview 开宿主标准弹窗（既有 ImageLightbox：
  * 大图 + 完整路径 + 复制 + 临时态）。× 是兄弟 button，不嵌套、不冒泡误触。
+ * q-pdf-preview-channel：PDF 同走 openPreview（宿主分流 PdfLightbox 原生查看器）。
  */
 
 import type { ComposerCardProps, ComposerPreviewResult } from '@vessel-agent/plugin-sdk';
 import { useEffect, useMemo, useState } from 'react';
 import { translator } from './i18n';
-import { CloseIcon, displayNameOf, kindOfPath, RefIcon } from './icons';
+import { CloseIcon, displayNameOf, isPdfPath, kindOfPath, RefIcon } from './icons';
 import { makeThumbnail } from './thumbnail';
 
 function useHostLang(host: ComposerCardProps['host']): string {
@@ -44,7 +45,12 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
       .then((result) => {
         if (!active) return;
         setPreview(result);
-        if (result.status === 'ok' && result.dataUrl !== undefined) {
+        // 缩略图只对图片尝试（PDF 字节解不出 Image，不浪费解码；q-pdf-preview-channel）。
+        if (
+          result.status === 'ok' &&
+          result.dataUrl !== undefined &&
+          kindOfPath(target) === 'image'
+        ) {
           void makeThumbnail(result.dataUrl).then((url) => {
             if (active) setThumb(url);
           });
@@ -139,7 +145,7 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
       title={target}
       data-kind={kind}
     >
-      {kind === 'image' && !expired ? (
+      {(kind === 'image' || isPdfPath(target)) && !expired ? (
         <button
           type="button"
           className="file-ref-body"
