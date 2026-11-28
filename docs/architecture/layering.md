@@ -2,7 +2,7 @@
 title: 分层与核心边界
 kind: current
 triggers: [architecture, layering, dependency, kernel, module, adapter, core, philosophy, ports, subpath, PluginHost, WorkingContext, 分层, 依赖, 内核, 模块, 适配器, 哲学, 三层, 插槽, 语言空间, 边界, 注入]
-paths: [packages/*/package.json, packages/core/src/index.ts, packages/core/package.json, packages/core/src/runtime/plugin-host.ts, packages/core/src/types/context.ts, packages/core/src/types/plugin.ts, apps/web/package.json, plugins/mcp/client/package.json]
+paths: [packages/core/package.json, packages/core/src/index.ts, packages/core/src/runtime/plugin-host.ts, packages/core/src/types/context.ts, packages/core/src/types/plugin.ts, packages/serve/package.json, packages/tui/package.json, packages/config/package.json, packages/permission/package.json, apps/web/package.json, plugins/mcp/client/package.json]
 ---
 
 # 分层与核心边界

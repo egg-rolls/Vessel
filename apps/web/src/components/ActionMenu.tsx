@@ -1,7 +1,7 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { t } from '../i18n';
 import { iconButtonClass, Tooltip } from './Tooltip';
-import { cn } from './ui';
+import { cn } from './ui/cn';
 
 export interface ActionMenuItem {
   id: string;
@@ -20,12 +20,15 @@ export function ActionMenu({
   items,
   disabled = false,
   className,
+  trigger,
 }: {
   label?: string;
   items: readonly ActionMenuItem[];
   disabled?: boolean;
   /** 追加到触发器容器的布局 / 显隐类（如列表 hover 显隐）。 */
   className?: string;
+  /** 触发器内容（缺省 ⋯）：q-tool-card-slot 复制菜单用 copy 图标，形态不变。 */
+  trigger?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
@@ -92,7 +95,7 @@ export function ActionMenu({
           disabled={disabled}
           onClick={() => setOpen((value) => !value)}
         >
-          <span aria-hidden="true">⋯</span>
+          {trigger ?? <span aria-hidden="true">⋯</span>}
         </button>
       </Tooltip>
       {open && (

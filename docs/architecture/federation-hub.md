@@ -68,7 +68,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation/**, src/federation-*.ts, packag
 - envelope 为 `vessel.federation/1`，字段固定 `protocol / message_id / conversation_id / from / to / content / ts / hop / request_id?`；`from` / `to` 为 `{node_id, team_id, principal}`，严格解析，缺字段即 `federation_invalid`。
 - 地址 `<principal>@<node_id>:<team_id>`：`principal` 是目标 Team 的 present 成员名或保留字 `human`；它是名字，不是 agent id。
 - `federation.peers[]` 显式声明 `(nodeId, teamId)` / `url` / `tokenEnv` **或 `tokenSecret: true`** / `direction` / `caFile?` / `localTeamId?`；无通配，明文 `token` 被 validator 拒绝。每个 peer 一份 bearer token，内存定长比较；三套 token 命名空间（gateway 用户 / hub node / peer）不交叉；非回环 `url` 必须 https。
-- **自动配对（q-fed-simple）**：入站 `POST /v1/federation/pair`（与 messages 同路由，独立全局限流 12/min）。带一次性码（`vessel federation pair-code`，hash-only / TTL / 单次消费，语义同 hub join-code）或**回环 socket 免码**（同机同用户信任边界，同 `/v1/local/token` 拍板）→ target 生成共享 token 存 node SecretStore（`vessel-federation` 命名空间，`<dataDir>/federation/`，`federation.allowFileSecrets` 缺省 true）→ 自动写 `token_secret: true` peer 条目 → 进程内热应用 → 响应携带 token 明文一次；initiator（`vessel federation join <url|node-id>`）对称写自己一侧。重复配对 = 轮转 token。`vessel federation discover` 离线读 `<hubDataDir>/registry.json` 列回环节点（hub 仍不做运行时自动发现 / 不代理正文）。用法与失败分流见 [federation-setup §0](../operations/federation-setup.md)。
+- **自动配对（q-fed-simple）**：入站 `POST /v1/federation/pair`（与 messages 同路由，独立全局限流 12/min）。带一次性码（`vessel federation pair-code`，hash-only / TTL / 单次消费，语义同 hub join-code）或**回环 socket 免码**（同机同用户信任边界，同 `/v1/local/token` 拍板）→ target 生成共享 token 存 node SecretStore（`vessel-federation` 命名空间，`<dataDir>/federation/`，`federation.allowFileSecrets` 缺省 true）→ 自动写 `token_secret: true` peer 条目 → 进程内热应用 → 响应携带 token 明文一次；initiator（`vessel federation join <url|node-id>`）对称写自己一侧。重复配对 = 轮转 token。`vessel federation discover` 离线读 `<hubDataDir>/registry.json` 列回环节点（hub 仍不做运行时自动发现 / 不代理正文）。用法与失败分流见 [federation-pairing](../operations/federation-pairing.md)。
 
 <a id="federation-guards"></a>
 
@@ -78,7 +78,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation/**, src/federation-*.ts, packag
 - 落点是 Team 日志：`from` 为 `federation:<node>:<team>`，`to / mentions = []`。最多 1 个 run：`human` 只写日志；其他名字必须命中唯一 present 非 private 成员，否则 404 且零写入。入站条目在日志上带 `federation: { from_addr, to_addr, conversation_id, hop }`（回信地址，供「按地址回复」用）；`teams.get` 原样透出，团队时间线显示 `federation from <addr>` 与「按地址回复」动作。
 - `hop` 是节点间跨越次数，首次为 1；`maxHops` 1..16 缺省 4。v1 没有自动中继，hop 恒为 1，只作防御上界。
 - 去重键 `(from.node_id, from.team_id, message_id)`，进程内 LRU 1024；不声称跨重启 exactly-once。入站限流 `federation.rateLimitPerMinute` 1..600（缺省 60），超限 429、零写入。
-- 事件：`federation.received` / `federation.rejected`，payload 不带正文；出站一次性进程不发事件，结果走 CLI JSON / exit code。
+- 事件：`federation.received` / `federation.rejected`，payload 不带正文；CLI 一次性进程（`vessel federation post`）不发事件，结果走 JSON / exit code。**运行时 send 端口**（agent send 跨节点）装配 `outboxDir` 时有 durable outbox（`src/federation/federation-outbox.ts`）：peer down 不再即丢——`<dataDir>/federation-outbox.json`（0600、原子写、不含 token）持久化待投递，bounded retry（缺省 8 次、1s→60s 退避，耗尽标 `exhausted` 保留审计）+ 重连补投 + 重启续投；enqueue 按 `message_id` 去重、补投恒用同一 wire 消息（对端幂等，at-least-once 非 exactly-once）；积压上限 500（满 → `federation_outbox_full` rejected），策略类拒绝（disabled / unknown_node / not_allowed）不入队；outbox 事件只给稳定码 / 地址 / 计数。一次性 CLI 无续投宿主，不提供 outbox（单次投递不可达即 rejected）。
 
 ## 命名体系：Petname System
 
@@ -101,7 +101,7 @@ paths: [src/hub/**, src/hub-*.ts, src/federation/**, src/federation-*.ts, packag
 ## 不做什么
 
 - hub 不做消息正文 / 事件 / 工具结果代理，不存 transcript，不做 mTLS、多 hub 联邦或节点自动发现。
-- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / create、自动中继 / mesh、离线队列 / 重试、跨重启 exactly-once、多公司、权限审批人。
+- federation 不做 worker / agent 跨节点寻址、远程 spawn / close / rotate / resume / create、自动中继 / mesh、跨重启 exactly-once（运行时 outbox 是 at-least-once + 对端幂等）、多公司、权限审批人。
 - federation 是传输面，不新增 canonical RPC 方法；**不做全局名字解析**（DNS / 注册表 / 名字即身份）——名字只在本地有意义。
 
 ## 指针

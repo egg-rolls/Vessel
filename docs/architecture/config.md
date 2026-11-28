@@ -1,17 +1,17 @@
 ---
 title: 配置模型
 kind: current
-triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量, tools_engine, engine_pool, 双开关]
-paths: [packages/config/**, src/config/cli-overrides.ts, src/gateway/serve-config.ts, src/config/config-watch.ts, src/data/permission-store.ts]
+triggers: [config, yaml, vessel.yaml, precedence, env, data root, gateway token, node token, secrets, 配置, 配置项, 优先级, 数据目录, 密钥, 令牌, 环境变量, tools_engine, engine_pool, 双开关, hot-apply, config-watch, models, ModelRef]
+paths: [packages/config/src/loader.ts, packages/config/src/defaults.ts, packages/config/src/model-registry.ts, packages/config/src/env-injection.ts, packages/config/src/validator.ts, src/config/cli-overrides.ts, src/gateway/serve-config.ts, src/config/config-watch.ts, src/config/hot-apply-assembly.ts, src/gateway/gateway-reload-wiring.ts, src/data/permission-store.ts]
 ---
 
 # 配置模型
 
 <a id="config-model"></a>
 
-## 配置模型
+## 合并模型
 
-配置层按优先级从高到低为：
+配置层按优先级从高到低：
 
 | 层 | 路径 | 用途 |
 |---|---|---|
@@ -20,151 +20,91 @@ paths: [packages/config/**, src/config/cli-overrides.ts, src/gateway/serve-confi
 | 用户级 | `~/.vessel/config.yaml`（Windows `%USERPROFILE%/.vessel/`） | provider、默认模型、`data_dir` |
 | 默认 | 代码 `DEFAULT_CONFIG` | 所有缺省值 |
 
-优先级：**CLI > env > project > user > default**。
-**q-config-priority（用户裁定#3，仅 `data_dir`）**：显式 `--user-config`（`userConfigPath` 或 `VESSEL_USER_CONFIG`）且用户层写了 `data_dir` 时，该键责任链为 **CLI > 显式 user config.data_dir > env > project > default**——继承的 `VESSEL_DATA_DIR` 不得压过显式舰队配置；非显式（缺省加载）保持旧链（生产 bootstrap 设 env 零回归）。`VESSEL_DATA_DIR_CLI=1` 是内部 env 契约（`--data-dir` 镜像 / supervisor/registry 注入伴生）：带标记的 `VESSEL_DATA_DIR` 按 CLI 层应用，仍最高优先。其它键一律维持 env > config。
-0.49 起没有 tenant overlay，也没有 `tenant` 配置块；旧 `tenant:` 块、`serve.tokens[*].tenantId`、
-`serve.adminToken` / `serve.adminTokenEnv` 一律 fail-fast 并给逐项 Fix（改为 `serve.tokens` 的 `{ role }`）。
+**CLI > env > project > user > default**。例外（仅 `data_dir`，用户裁定#3）：显式 `--user-config`
+（`userConfigPath` / `VESSEL_USER_CONFIG`）且用户层写了 `data_dir` 时，该键责任链为
+**CLI > 显式 user config.data_dir > env > project > default**；非显式保持旧链。
+`VESSEL_DATA_DIR_CLI=1` 是内部 env 契约（`--data-dir` 镜像 / supervisor 注入伴生），带标记按 CLI 层应用。
+没有 tenant overlay / `tenant` 块；旧 `tenant:` / `serve.tokens[*].tenantId` / `adminToken` fail-fast 给逐项 Fix。
 
-所有层只在 `loadConfig()` 合并一次。CLI 层由 `ConfigLoadOptions.cliOverrides` 传入（`Partial<VesselConfig>`，`source=cli`）；旧 `defaults` 为 deprecated 同义层，先应用、`cliOverrides` 后应用。`src/config/cli-overrides.ts` 只把**显式** flag 组装成该层（端口仅在显式给出时写入；`allowed_origins` 整体替换）。`resolveServeOptions(config)` 不再接收 argv，`bootstrapConnect` 也不再直接读 `process.env`。
+所有层只在 `loadConfig()` 合并一次；CLI 层由 `ConfigLoadOptions.cliOverrides` 传入（`Partial<VesselConfig>`，
+`source=cli`），`cli-overrides.ts` 只把**显式** flag 组装成该层；`resolveServeOptions(config)` 不接收 argv。
+loader 把 YAML snake_case 映射成 TS camelCase（ADR-019），map 键（`mcp_servers` / `models.credentials` /
+`models.entries` / `param.extra` / info 未知键）原样保留。**未知键是 error**（带编辑距离建议）；已知未消费
+字段给显式 warning。`node:` 是节点监听块唯一名字（`serve:` 读到即报错要求改名，错误路径一律 `node.*`；
+类型 `NodeConfig`）。运维面（位置 / 合并规则 / 写锁 / 排查）见 [operations/config-files](../operations/config-files.md)。
 
-loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
+## 单公司数据根
 
-### 单公司数据根
+`data_dir` 是全局唯一根；数据直接位于 `<dataDir>/{sessions,runs,events,inbox,agents,conversations,teams}/`、
+`sessions.db`、`tenant.json`，没有 `tenants/<id>` 层。`tenant.json` 只保存内部持久单 id（缺省 `default`，
+匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`），不是 wire 字段；`tenants/**` 非空或残留 `.t2-migrating-*` →
+fail-fast `non_root_layout`（不移动不删除）。`durable.path` 缺省 `<dataDir>/runs`。锁 / 租约 / prune 见 [operations/config-data](../operations/config-data.md)。
 
-`data_dir` 是全局唯一根；单公司数据直接位于 `<dataDir>/{sessions,runs,events,inbox}/`、
-`sessions.db`、`tenant.json`，没有 `<dataDir>/tenants/<id>/` 层。`tenant.json` 只保存内部
-持久单 id（缺省 `default`，匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`），不是 wire 字段、不参与路由；
-`<dataDir>/tenants/**` 非空或残留 `.t2-migrating-*` 时启动 fail-fast `non_root_layout`，
-不移动 / 不删除数据。`agents/<id>.json`、`conversations/<id>.json`、`teams/<id>/**`、
-`interactions-<id>.json` 均 root-keyed。`durable.path` 未显式配置时取 `<dataDir>/runs`。
-### 配置块
+## 配置块总览（键语义深细节归 operations 叶子）
 
 | 键 | 说明 |
 |---|---|
-| `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭。仅插件式 provider（openai / anthropic）生效 |
-| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；`--data-dir` 为最高优先级一次性覆盖。显式 `--user-config` 时用户层 `data_dir` 优先于继承 env（q-config-priority 用户裁定#3，见上文责任链） |
-| `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
-| `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
-| `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
-| `agent.enabled` / `ownerId` / `model` / `limits` / `termination` | AgentService 与内置 `agent` 工具；默认 true（0.24；显式 false 关闭） |
-| `agent.defaultVisibility` / `permissionMode` / `readOnlyTools` | 成员可见性与权限模式：`bridge`（交互默认）/ `allow`（headless 默认）/ `deny`（只保留 `readOnlyTools`，默认 `["read","media","subscribe"]`）；0.51 起成员用的就是节点那一份工具面（无白名单，只留 deny 档与 bridge 两条行为闸）；0.17 |
-| `agent.followReplies` / `cwd` / `systemPrompt` | 回复注入策略（不自动续跑父 turn）/ **全局**默认工作目录（0.51：工具的完整优先级是 参数 `cwd` > `agent.cwd` > 成员 cwd = 显式选中 Team 的基础路径 > `process.cwd()`）/ 主 agent systemPrompt |
-| `agent.temporaryTtlHours` | 临时 agent（`role: temporary`）空闲回收 TTL，小时，默认 `2`，`0` = 关闭；只回收在册 temporary，`member`（含 `main`）永不回收；回收可逆（`reinstate` 原地复活同一具 body） |
-| `agent.inbox_max_messages`（TS 字段 `inboxMaxMessages`） | 每 agent 持久化收件箱条数上限，默认 `200`；必须是正整数（非整数 / `<=0` 启动即报错）；append 与 load 超出时按最旧消息裁剪 |
-| `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
-| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 true（0.24；显式 false 关闭）；`backend: file \| memory`；0.5 起 `path` 默认 `<dataDir>/runs`，显式配置优先但可逃出数据根（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
-| `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | Node API 监听；legacy 单监听默认 `127.0.0.1:8642`，G1/G3 拆分模式未显式配置时 Node API 用 `8644`。明文默认；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
-| `serve.allowed_origins` | 独立前端 Origin allowlist；绝对 http(s) origin，禁止 `*` / path / query；非回环必须 https；HTTP 与 WS 共用（0.6） |
-| `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`token_env` 由 loader 在 env 层解析）> config（0.6；0.8.1 统一经 loader，`--ca` 对应 `VESSEL_CONNECT_CA`） |
-| `transport.kind` / `transport.token` | 只剩 `in-process`；`transport.token` 是 gateway token 的末位回退。`loopback` / `remote` / `transport.nodes[]` 已于 0.22.1 删除 |
-| `serve.token` / `serve.token_env` / `serve.tokens` | node token：`serve.tokens` 为 token → `{ role }`；`serve.token` / `token_env` 是 legacy 单 token 回退；`serve.adminToken` / `adminTokenEnv` 已删除，admin 用 `{ role: admin }`。解析顺序见 ADR-050 |
-| `gateway.token` / `gateway.token_env` / `gateway.port` / `gateway.remote_shutdown` | Platform Gateway token 与端口（缺省 8642）；token 独立读取，不与 node token 互相回退。`remote_shutdown` 缺省 false；true 才受理非回环 `gateway.shutdown`，且仍须平台 token + 已配置共享密钥的 TLS 反代（fail-closed；操作细节见 [operations/CONFIG.md §2.20.1](../operations/CONFIG.md)）。本地多 Node 由 `gateway nodes list\|add\|remove` 写 `<dataDir>/nodes.json`，各 Node 独立子进程；`node start --config` 可覆盖配置 |
-| `gateway.web_dist` | 平台静态托管的 Web 产物目录（q-config-priority 用户裁定#2）。责任链：显式 `gateway.web_dist` > `VESSEL_STATIC_DIR` env > 仓库内 `apps/web/dist`；启动期键（重启生效），`index.html` 缺失 fail-fast，自动构建不碰显式目录。见 [operations/CONFIG.md §2.20.2](../operations/CONFIG.md) |
-| `tools_engine.mode` / `gateway.engine_pool.*` | 工具执行双路双开关（[ADR-106](../adr/ADR-106-engine-pool.md)，缺省关零回归）：`mode: child`（缺省，per-node stdio 子进程）\| `pool`（共享池直连，需池存在）；`engine_pool.size`（0/缺省=不建池；1=fail-fast；开时 ≥2）/ `max_inflight`（缺省 cpus×4）/ `rss_soft_limit_mb` / `instance`（poolDir = `~/.vessel/engine-pool[-<instance>]`，**不随 data_dir 移动**，隔离实例必设）。执行现态见 [tools.md](tools.md#engine-exec) |
-| `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 true（0.24；显式 false 关闭）/ `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
-| `feishu.enabled` / `app_id` / `app_secret` / `app_secret_env` / `domain` / `allowed_chat_ids` / `allowed_user_ids` / `mention_policy` / `ack_reaction` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 可覆盖；secret 优先序 `VESSEL_FEISHU_APP_SECRET` > `env[app_secret_env]` > `app_secret`（doctor 同口径）；`allowed_user_ids` 空=不限；`mention_policy` 默认 mention-only（D6 breaking）；`session_prefix` deprecated（无运行时作用，下个大版本删）；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝**；连接指南 [FEISHU.md](../../plugins/im/feishu/FEISHU.md) |
-| `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
-| `observability.log.level` / `modules` / `color` / `format` / `time` | 进程级日志中枢（core `log-hub.ts`）：`level` 缺省 info；`modules` 是事件名前缀→级别（最长前缀匹配，按点分段；**键是事件名**，loader 不做 snake→camel 改写）；`color` auto/always/never（缺省 auto）；`format` pretty/json（缺省 pretty）；`time` auto/none/clock/iso（缺省 auto：TTY clock、落盘 iso）。启动应用 + config-watch 热应用（差异行进 `runtime.notice`，不新增 RPC scope）；WebUI Settings「日志（gateway）」分组经 `config.set` 写四个标量键，`modules` 一期只读。日志口径见 [operations/LOGS](../operations/LOGS.md) |
-| `models.default` / `models.credentials` / `models.entries` | 模型注册表两面形状（见下节）：凭证面（认证端点元数据）+ 模型面（扁平条目）；旧 `vendors` / `aliases` 块已删除（一次性迁移） |
-| `pricing.models.<wire>` | legacy / 未注册 wire 模型的价格兜底表；注册模型价格唯一源 = `models.entries.<id>.pricing`（合并视图按 wire 名覆盖，见下节） |
+| `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭；仅插件式 provider 生效。新旧键规则见 [config-models](../operations/config-models.md) |
+| `trace.*` | 缺省 true / `full` / 30 天 / 1000 runs / 1 GiB；`max_bytes: 0` = 不限；见 [TRACE](../operations/TRACE.md) |
+| `session.backend` / `durable.*` / `update.*` | session `file`（默认）/ `sqlite` / `memory`；durable 默认 true，`checkpoint_every: iteration`；update 后台检查默认 true、latest/beta、自定义清单源 |
+| `agent.*` | 成员配置键（含 `team_member_limit` 默认 100）见 [config-agent](../operations/config-agent.md)；`agent.cwd` 优先级：参数 > agent.cwd > 成员 cwd（Team 基础路径）> process.cwd() |
+| `mcp_servers.<name>.*` | `transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
+| `node.hostname` / `port` / `allow_remote` / `tls.*` / `allowed_origins` | Node API 监听；legacy 单监听默认 `127.0.0.1:8642`，拆分模式 Node API 用 `8644`；非回环必须 `allow_remote: true` + token 非空 + TLS cert/key 成对；allowed_origins 绝对 http(s)，禁 `*`/path/query，非回环必须 https，HTTP 与 WS 共用 |
+| `node.token` / `token_env` / `tokens` | node token：`tokens` 为 token → `{ role }`；单 token 是 legacy 回退；admin 用 `{ role: admin }`。派生与解析见 [config-secrets](../operations/config-secrets.md) |
+| `connect.*` / `transport.*` | `--connect` 客户端 token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失回退 `VESSEL_GATEWAY_TOKEN`）> config；transport 只剩 `in-process`，`transport.token` 是 gateway token 末位回退 |
+| `gateway.*` | token / port（缺省 8642）/ supervise / proxy_nodes / remote_shutdown / web_dist / engine_pool 见 [config-gateway](../operations/config-gateway.md) 与 [config-runtime](../operations/config-runtime.md) |
+| `evals.*` / `feishu.*` / `observability.event_history` / `metrics` | evals 默认 true / `./evals` / `~/.vessel/evals` / allow_network false；feishu 默认 false，secret 优先序 env > `app_secret_env` > `app_secret`，`agent_id` 已删（见 [FEISHU](../../plugins/im/feishu/FEISHU.md)）；event_history 缺省 1000（显式 0 = 不限）；observability 块缺省不注入 metrics，块存在时 metrics 默认 true |
+| `observability.log.*` | level/modules/color/format/time；env 优先级 `VESSEL_DEBUG` > `VESSEL_LOG_LEVEL` > `VESSEL_RUN_TIMING=1`（仅 run.timing/run.llm.gap）> config；`VESSEL_LOG_JSON=1` ≡ json；见 [LOGS](../operations/LOGS.md) |
+| `permission.*` / `plugins[]` | auto_approve / never_auto_approve（缺省 `['agent.close','pii_reveal']`，单源 `permission-defaults.ts`）见 [config-permission](../operations/config-permission.md)；覆盖层语义见 [agents/plugins](../agents/plugins.md) |
+| `ui.*` / `env_injection` / `limits` / `termination` / `pricing` | 见 [config-ui](../operations/config-ui.md) / [env-info-append-only](env-info-append-only.md#cadence) / [config-limits](../operations/config-limits.md) |
+| `vision.*` / `empty_response` / `kanban` / `auto_prune` / `context.*` | 见 [config-runtime](../operations/config-runtime.md) / [config-data](../operations/config-data.md) / [config-limits](../operations/config-limits.md) |
+| `models.*` | 凭证面 + 模型面（下节）；校验 / 磁盘 / CLI 见 [config-models](../operations/config-models.md) |
 
-`observability.log` 的优先级（高→低）：`VESSEL_DEBUG`（非空强制 debug）> `VESSEL_LOG_LEVEL` >
-`VESSEL_RUN_TIMING=1`（仅 `run.timing` / `run.llm.gap` 强制 debug）> config > 默认。
-`VESSEL_LOG_JSON=1` 等价 `format: json`；`NO_COLOR` / `FORCE_COLOR` / `TERM=dumb` 只影响颜色。
-被环境覆盖时 `config show` 与 `config.get`（`logEnvOverrides`）/ WebUI 都给出提示。
+`VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` / `VESSEL_PROVIDER_API_KEY` 是 env 层覆盖。
+evals / feishu / metrics / observability 全缺省时：CLI eval 不可用、不启动飞书、不注入 metrics。`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig`）。
 
-`permission.auto_approve`（TS 字段 `autoApprove`）、`permission.never_auto_approve`（TS 字段 `neverAutoApprove`，未配置时有效值 `['agent.close']`）、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖（见 `docs/versions/0.6.1.md`）。
+<a id="models"></a>
 
-### models 块：凭证面 + 模型面（两面重构）
+## models 机制（凭证面 + 模型面）
 
-设计真源：外层仓 `docs/dev/design/model-registry-two-face-design.md`（取代上位契约
-`docs/dev/plans/model-registry.md` 的 vendor 实体 / 两段式 ref / 顶层 aliases）。磁盘只有两种
-实体，**无密钥值**（user/project 层可叠、config-watch 热重载）：
+磁盘只有两种实体（credentials 认证端点 + entries 扁平条目），**无密钥值**；YAML 形状 / 校验 /
+迁移运维见 [config-models](../operations/config-models.md) / [config-model-migration](../operations/config-model-migration.md)。
 
-```yaml
-models:
-  default: qwen4-max            # 有效默认 ref（别称或条目键），必须命中注册条目
-  credentials:                  # 凭证面：认证端点（可被任意多个模型共享）
-    soulkiller-gw:
-      base_url: https://gw.example.com/v1   # 请求地址*（http(s)；端点随认证走）
-    dashscope:
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      api_key_env: DASHSCOPE_API_KEY        # 可选 env 间接来源；库值优先
-  entries:                      # 模型面：扁平条目（键 = ref 主处理柄）
-    qwen4-max:
-      name: dashscope/qwen4-max # wire 名（缺省 = 条目键）
-      alias: qwen               # 别称：单值、扁平唯一、不撞条目键
-      provider: openai-compatible  # 协议适配（非品牌）；缺省 openai
-      mode: chat                # wire 请求形状；缺省按 provider 推导（anthropic→messages）
-      credential: soulkiller-gw # 访问凭证*（ref → models.credentials）
-      pricing: { input_per_million: 2.0, output_per_million: 8.0 }
-      param: { temperature: 0.7, max_tokens: 8192 }
-      info: { display_name: Qwen4 Max, context_window: 262144 }
-```
+- **ModelRef 解析**（`model-registry.ts:resolveModelRef`）：① 空 ref → 有效默认（`models.default` ??
+  legacy 合成条目 ?? 协议默认；`VESSEL_MODEL` 赢 `models.default`）② 别称精确命中 ③ 条目键精确命中
+  ④ 显式 `legacy:<name>/<model>` ref → 严格面：按首个 `/` 切分，name 段必须命中合成凭证、model 段
+  非空原样作 wire；裸 `legacy:<name>` / name 不匹配 → `ModelRefError`（不落透传）
+  ⑤ 未命中且 legacyPresent → ref 原样作 wire 走 legacy 合成凭证 ⑥ 未命中且无 legacy → `ModelRefError` + 候选（无 vendor 兜底）。
+- **无幻影条目**：合成凭证恒存在；合成条目只在 `legacyPresent=true` 时建——纯 default 层填充的
+  `provider.model` 不是用户配置，不建条目（此时未命中 ref 走 ⑥）。
+- **缺省身份 ref/wire 分离**（`DefaultModelIdentity`）：`ref` 是宿主缺省 / spawn 继承 / 热应用比较键
+  （必须可重解析）；`wireModel` 只作请求体与展示。`defaultModelRefOf`：注册条目 → 条目键（alias
+  规范化后）；legacyPresent=true → wire 原值；false → 显式 `legacy:<name>/<wire>` 严格 ref。
+- **端点定位** = `entry.provider`（协议适配器）+ `entry.credential → credentials.baseUrl`（必填，不回落协议默认）。
+  规范协议集 openai / openai-compatible / anthropic / gemini；品牌工厂名保留注册供 legacy 兼容；凭证 id 大小写均可（`CREDENTIAL_ID_RE`）。
+- **param 优先级链**：请求显式（EU/harness）> 会话级 thinking 注入（BeforeLlm requestExtras）>
+  `entry.param` > 全局 `provider.*`；extra 经 `mergeExtraParams` 并入（RESERVED_BODY_KEYS 写前拒绝）；
+  messages 零触碰（append-only）。
+- **价格合并视图**（`usage-pricing.ts`）：`entry.pricing` 按 wire 名覆盖 `pricing.models` 同名键；
+  同 wire 多 entry 价格不同 → 确定性取条目键序首个 + 写前 warning。
+- **legacy provider.\* 兼容面**：读时折成合成凭证 `legacy:<provider.name>` + 合成条目；env 层 /
+  setup 向导 / model-follow 写入口不动。**一次性迁移**（loader 首载钩子，withConfigLock + 幂等 +
+  fail-fast）细节见 [config-model-migration](../operations/config-model-migration.md)。
 
-- **凭证值**只经 `plugin.model-registry.credential_set` 写入 `<dataDir>/credentials.json`
-  （AES-256-GCM 信封 v1，root-secret 派生 key）；yaml 永不存值。`credential_set` 一次写两处
-  （先库值后 yaml 元数据）；`credentials_list` 回 `hasValue` / `usedBy`，值永不回显。
-- **端点定位** = `entry.provider`（协议适配器）+ `entry.credential → credentials.baseUrl`。
-  规范协议集：`openai` / `openai-compatible` / `anthropic` / `gemini`（= openai 兼容传输别名）；
-  品牌工厂名（google/mistral/ollama/cohere）保留注册供 legacy 兼容，退出注册表 UI。
-  注册条目未知 provider 解析期 fail-fast + 候选；注册模型端点不回落协议默认。
-- **ModelRef 解析**（`packages/config/src/model-registry.ts`）：① 空 ref → 有效默认
-  （`models.default` ?? legacy 合成条目 ?? 协议默认；`VESSEL_MODEL` 赢 `models.default`）
-  ② 别称精确命中 ③ 条目键精确命中 ④ 未命中且 legacyPresent → ref 原样作 wire model 走
-  legacy 合成凭证（P0-1 字节等价）⑤ 未命中且无 legacy → `ModelRefError` + 候选（无 vendor 兜底）。
-- **legacy provider.\* 兼容面保留**：读时折成合成凭证 `legacy:<provider.name>` + 合成条目
-  （键 = `provider.model` 原值）；env 层 / setup 向导 / model-follow 写入口不动。
-- **一次性迁移**（`model-migration.ts`，loader 首载钩子）：用户层 `models.vendors`/`aliases`
-  首载自动迁成 credentials + entries（withConfigLock + `.pre-model-registry.bak` + 写前预校验 +
-  幂等）；同 credential 异端点拆分 + 值重加密复制；wire 全局唯一 → 键 = wire，冲突 → `vid/wire`；
-  多别名字典序首个入 `alias`，其余报告；`pricing.models` 命中 wire 搬入 `entry.pricing`；
-  agent store v5 显式 pin 同批改写。报告落 `<dataDir>/model-registry-migration.json`
-  （`vessel doctor` / `model list` 消费）。项目层旧块不自动迁移：报错 + 手动迁移指引。
-- **param 优先级链**：请求显式（EU/harness）> 会话级 thinking 注入（BeforeLlm requestExtras）
-  > `entry.param` > 全局 `provider.*`。temperature/maxTokens/topP → 构造缺省；extra → 请求期
-  经 `mergeExtraParams` 并入（RESERVED_BODY_KEYS 写前拒绝）；messages 零触碰（append-only）。
-- **价格合并视图**（`usage-pricing.ts`）：`entry.pricing` 按 wire 名覆盖 `pricing.models`
-  同名键；同 wire 多 entry 价格不同 → 确定性取条目键序首个 + 写前 warning（D7 计量合并不变）。
-- **info** 只展示/规划，永不进 wire 请求体；未知键读容忍。
-- 管理面：插件两 tab（凭证 → 模型）+ CLI `vessel model list/set/remove/set-default/
-  credential-set/credential-remove/credentials-list/test`（RPC 8 方法）；WebUI ModelPicker
-  选项 = 别称 + 条目键 + 跟随默认（无自由文本；存量未注册 pin 原样显示 + 标记）。
+## hot-apply 机制
 
-配置示例：
-
-```yaml
-mcp_servers:
-  echo:
-    transport: stdio
-    command: bun
-    args: ["run", "examples/mcp-echo-server.ts"]
-    tool_prefix: true
-    auto_approve_tools: []
-
-durable:
-  enabled: true
-  backend: file
-  path: ~/.vessel/runs
-  checkpoint_every: iteration
-
-serve:
-  hostname: 127.0.0.1
-  port: 8642
-  allow_remote: false
-  # tls:
-  #   cert_file: /path/to/cert.pem
-  #   key_file: /path/to/key.pem
-```
-
-- **顶层未知键是 error**（带编辑距离拼写建议），不是 warning——启动即失败，避免配置悄悄无效；`mcp_servers` 内未知名与 `serve.tls` 未知名同样报错。
-- 已知但当前未消费的字段（`agent.name/temperature/maxTokens`、`session.maxHistory`、`guardrails`、`hooks`）给显式 warning，不静默。
-- provider 默认 model 是 provider-aware：只有已登记 provider（`openai` / `openai-compatible` / `gemini`）有默认；未知 provider 必须显式配 `model`。
-- `VESSEL_PROVIDER_API_KEY` 可回填顶层 `apiKey`。
-
-**注意**：`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig` 类型）。从前"用户在配置里声明一个 shell/http 工具"这条路径没有了——有了 `bash` 之后，加能力就是写文件 + 跑命令。
-
-evals / feishu / metrics / observability 四个块全缺省时：CLI `eval` 不可用、不启动飞书、不注入 metrics；`event_history` 仍为 1000。严格校验：类型、范围、未知键；`feishu.enabled: true` 且（env + config）无凭据 → 启动失败；`evals.allowNetwork: true` 不自动开启 CLI flag。
-
-关键根键：`data_dir` / `trace` / `serve.tokens`（node token）/ `gateway.token`（平台 token）。缺省行为：`session.backend = file`、`durable.path = <dataDir>/runs`、trace 默认开启 `full`（30 天 / 1000 runs / 1 GiB）。用户配置未知键仍是 error；legacy 白名单仅 `default_provider` / `default_model` / `providers`。项目 `vessel.yaml` 出现密钥、残留 tenant 块或 `null`、`config show` 校验失败均直接报错（exit 1）。
-
+- **config-watch**（`config-watch.ts`）：`fs.watch` 用户配置，写入抖动 debounce 合并；校验通过后应用，差异行按行首
+  scope token 分组、每组独立一条 notice（无前缀行归 config 兜底组）。O7 直写竞态加固：`config.set` 写盘同步 trigger 已应用一遍，同一次写入迟到的 fs.watch 事件去重，不双应用。
+- **scope → applier 注入表**（`gateway-reload-wiring.ts`）：`config` / `plugins` 内建；
+  `permission` / `tools` / `mcp` 由装配注入（只注册真实存在的 applier）。请求未注册 scope →
+  `unknown reload scope`；单 scope 抛错不中断其余（失败写进该 scope 摘要）。applier 返回差异摘要行。
+- **config scope 内的子应用器**：`applyProviderModel`（缺省身份比较 + `previewDefaultModel` 守门：解析不出 /
+  ModelRefError ⇒ 变化域进 `requires_restart`，不把不可重解析的 wire 名热应用进宿主缺省）、`applyFederation` /
+  `applyKanban` / `applyAutoPrune`（live resolver + reschedule）。未注入 ⇒ `requires_restart`，不假装生效。
+  生效点 = 节点缺省模型：新 body / 新 EU 用新值，live 构造期只读快照（前缀不变量）。
+- **live resolver**（`hot-apply-assembly.ts`）：runtime.notice hook 的 cadence / channel 每次发射
+  实时求值（入参是 live 配置 getter，非注册时快照），热改 `env_injection` 即时生效。
+- feature 收集器的 hotApply 双形态与 fail-closed 冲突闸见 [cli-wiring](cli-wiring.md)（ADR-107）。
+  用户可见热生效面 / requires_restart 清单见 [operations/config-reload](../operations/config-reload.md)。
+- **permission-store 写锁**：权限规则读写改用 config 包 `readUserConfigRoot` / `writeUserConfigRoot`，写统一包
+  `withConfigLock`（与 `config.set` 同一把跨进程单写锁，读改写整体在锁内）；API async，读侧不加锁（原子 rename）。

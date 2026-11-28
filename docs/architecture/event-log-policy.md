@@ -57,7 +57,7 @@ paths: [packages/core/src/timeline/writer.ts, packages/core/src/timeline/blocks.
 
 ## 6. 可见性与消费
 
-- `llm.stream.summary` / `llm.request` 在 `apps/web/src/state/event-visibility.ts` 的三档表里归 `internal`（默认隐藏，打开「显示系统信息」才以原始行出现）；三档口径（`content` / `internal` / `observe`）与「未登记 ⇒ 按 internal 折叠成 notice」的兜底见 [事件系统](events.md#event-visibility)；登记与文档-表一致性靠评审核对（原 `check:event-visibility` 脚本已按宪法删除）。
+- `llm.stream.summary` / `llm.request` 在 `apps/web/src/state/event-visibility.ts` 的三档表里归 `internal`（默认隐藏，打开「显示系统信息」才以原始行出现）；三档口径（`content` / `internal` / `observe`）与「未登记 ⇒ 按 internal 折叠成 notice」的兜底见 [event-visibility](event-visibility.md)；登记与文档-表一致性靠评审核对（原 `check:event-visibility` 脚本已按宪法删除）。
 - 历史回放的 `llm.request` 行只有 `tools_count` 可用于展示（`messages` 已被裁掉），`EventRow` 优先读 `message_count`、缺失时不渲染 msgs 数字，因此不会崩。
 
 <a id="open-tail-only"></a>

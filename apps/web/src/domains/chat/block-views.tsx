@@ -13,11 +13,13 @@ import { type BlockRenderCtx, type LiftedBlock, useBlockType } from './block-reg
 import { EnvCard } from './EnvCard';
 import type { EnvNoticeCard } from './env-notice';
 import type { FileTokenCard } from './file-token';
+import type { LiftBlocksResult } from './lift-blocks';
 import { QuoteBlock } from './QuoteBlock';
 import type { ParsedQuoteEnvelope } from './quote-ref';
 import { SessionRefBlock } from './SessionRefBlock';
 import type { ParsedSessionRefEnvelope } from './session-ref';
 import { ToolImageCard } from './ToolImageCard';
+import { ToolResultCard } from './ToolResultCard';
 import { type VesselBlockPayload, vesselBlockMarkdown } from './vessel-block';
 
 /** quote 块 payload = 既有信封解析结果（不另造形状）。 */
@@ -49,6 +51,17 @@ export interface FileBlockPayload {
 /** notice 块 payload = runtimeEnvCard 装配结果 + 消息时刻。 */
 export interface NoticeBlockPayload {
   env: EnvNoticeCard;
+  ts?: number;
+}
+
+/** tool-media 块 payload = ToolResultCard 的 props（新锚注入整条成卡，插槽伪消息）。 */
+export interface ToolMediaBlockPayload {
+  /** 插槽 = 伪消息（锚行已剥）过 liftBlocks 的结果（lift 内算好，组件纯展示）。 */
+  slot: LiftBlocksResult;
+  /** 锚行 `from tool X` 解析出的工具名（缺省回落通用标题）。 */
+  tool?: string;
+  /** 注入 refs 条数（卡头 meta）。 */
+  refCount: number;
   ts?: number;
 }
 
@@ -103,6 +116,23 @@ function NoticeBlockView({ payload }: { payload: NoticeBlockPayload; render: Blo
   return <EnvCard env={payload.env} ts={payload.ts} />;
 }
 
+/** tool-media 块视 = ToolResultCard 薄适配（新锚注入；legacy image 块视不动）。 */
+function ToolResultCardView({
+  payload,
+}: {
+  payload: ToolMediaBlockPayload;
+  render: BlockRenderCtx;
+}) {
+  return (
+    <ToolResultCard
+      slot={payload.slot}
+      tool={payload.tool}
+      refCount={payload.refCount}
+      ts={payload.ts}
+    />
+  );
+}
+
 /**
  * vessel-block 试点（块 P1）：payload → markdown 文本 → 既有 Markdown 组件
  * （原生 table：滚动 + 复制全复用，不造独立卡）。fence 原文即模型侧投影，
@@ -122,6 +152,7 @@ export const blockViews = {
   quote: QuoteBlockView,
   'session-ref': SessionRefBlockView,
   image: ToolImageCardView,
+  'tool-media': ToolResultCardView,
   file: FileBlockView,
   notice: NoticeBlockView,
   'vessel-block': VesselBlockView,

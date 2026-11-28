@@ -94,7 +94,7 @@ code + 平台 state；Node API = Platform code + Company runtime + Company state
 - **Federation** = 信件投递：节点到节点直接转发，正文不经 Hub；授权权威在节点。
 - Hub 服务多家公司，属于 Platform；公司可独立运行，需要跨公司协作时才接入。
 - 现态：`vessel hub start` 独立进程（`src/hub/**`）；`gateway start` 缺省自动拉起本地 hub 子进程（`hub.autoStart` 缺省 true，`direction: node` 不启动，已有活实例 adopt）；节点只出站拨号 Hub。见 [federation-hub](federation-hub.md)。
-- **重启/停止语义**：`vessel gateway restart` / `gateway stop` 缺省 = 只换/停平台层（handoff）——旧 Gateway 退出时**不终止**自己 spawn 的 node/hub（engine 池同理保池），新 Gateway 按 `gateway.pid` 三元组 / hub lock adopt 接管，故改平台层 / Web / registry 不打断在跑的 run；`--stop-nodes`（`--no-keep-nodes` 别名）才是整舰队真停/真重启的显式开关。node 自身重启不在本语义内（需 marker + resume，待做）。
+- **重启/停止语义**：`vessel gateway restart` / `gateway stop` 缺省 = 只换/停平台层（handoff）——旧 Gateway 退出时**不终止**自己 spawn 的 node/hub（engine 池同理保池），新 Gateway 按 `gateway.pid` 三元组 / hub lock adopt 接管，故改平台层 / Web / registry 不打断在跑的 run。整舰队真停/真重启 = 舰队级 `vessel stop` / `vessel restart`（`gateway stop --stop-nodes` 仍是显式整停开关；`gateway restart` 恒平台-only，其 `--stop-nodes` 已弃用只打 warning）。node 停止/重启缺省 drain-to-quiesce（不限时等活跃 run 自然跑完）；自重启 = 预约受理 + detached 编排者（`gateway.restart` RPC / `vessel restart --self`）。动作表与 drain/监督细节见 [gateway-lifecycle](gateway-lifecycle.md)，RPC 契约见 [gateway-rpc](gateway-rpc.md)。
 
 ## 非目标
 

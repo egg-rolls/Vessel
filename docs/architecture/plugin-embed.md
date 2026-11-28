@@ -2,14 +2,15 @@
 title: 插件内嵌 React UI（embed 档）契约
 kind: current
 triggers: [plugin embed, ui_trust, ui_bundle_hash, ui.embed, plugin-sdk, import map, vendor shim, PluginEmbed, PluginErrorBoundary, embedded, isolated, trust_ui, 内嵌, 插件 UI, 信任档, 哈希锁, 同源]
-paths: [src/plugin/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serve/src/platform/proxy-config.ts, packages/serve/src/gateway/auth.ts, packages/plugin-sdk/**, apps/web/src/domains/plugins/**, plugins/observability/usage/**]
+paths: [src/plugin/plugin-manifest.ts, packages/serve/src/plugin-host/**, packages/serve/src/platform/proxy-config.ts, packages/serve/src/gateway/auth.ts, packages/plugin-sdk/**, apps/web/src/domains/plugins/**, apps/web/vite.config.ts, plugins/observability/usage/package.json, plugins/observability/usage/vite.config.embed.ts, plugins/observability/usage/web-src/embed.tsx, plugins/tools/file-refs/package.json, plugins/tools/file-refs/web-src/**]
 ---
 
 # 插件内嵌 React UI（embed 档）契约
 
 > 决策见 [ADR-102](../adr/ADR-102-host-level-ui-mount.md)（accepted）；插件机制总览见
-> [plugins](plugins.md)。本文是 P2（宿主最小闭环）的冻结契约：一期只做 **pages 内嵌**，
-> builtin 插件自动 embedded；mounts / 完整 SDK / 模板在 P3，确认流程 UI / 签名在 P4。
+> [plugins](plugins.md)。本文是 embed 契约（P2 宿主最小闭环起步，additive 扩展）：
+> pages 内嵌 + composer 内嵌贡献 + attachments 域能力；builtin 插件自动 embedded；
+> mounts / SDK router / dialog / actions / 模板在 P3，确认流程 UI / 签名在 P4。
 > 全部字段 additive：旧插件与旧客户端不受影响。按宪法不写测试 / 探针；行为验证由用户
 > 手动完成，构建期检查只有 `bun run build`（typecheck + biome ci）与各构建产物读数。
 
@@ -27,8 +28,8 @@ paths: [src/plugin/plugin-manifest.ts, packages/serve/src/plugin-host/**, packag
   - 锁存在且等于当前哈希 → embedded；不等 → **isolated，不自动更新锁**（P4 提供重新确认）。
   - 写锁失败（fs 错误）→ isolated（fail-closed）。
 - `trust_ui` 是**独立于进程权限**的确认：ADR-099 §5 的 `plugins:` 条目信任只覆盖进程权限。
-  一期没有 RPC 写路径（config.set 白名单不含 plugins[]）：用户手改 config.yaml，config
-  watcher 触发 reload 后重算。确认流程 UI 在 P4。
+  trust_ui 没有 RPC 写路径（`plugins.config.set` 只写 `contributes.settings` 声明键）：用户手改
+  config.yaml，config watcher 触发 reload 后重算。确认流程 UI 在 P4。
 - 安全措辞：embedded 等同「授予该插件对 Web 控制台的全部权限（含会话凭据）」；SDK 白名单
   只防误用，**不是沙箱**。
 
@@ -104,38 +105,29 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
     静态优先），不会被转发。
   - 平台根 `/plugins/*` 仍一律 404（isNodeOnlyPath 不变）；server.ts 边界注释更新。
   - 拒绝文案更新：embed 静态已可代理，iframe 页仍请直连 node。
-- **iframe 页（2026-11-23 用户裁决）**：iframe HTML 不经代理（白名单只转发 embed 静态
-  资源，`/nodes/<id>/plugins/<id>/*.html` 仍被拒）；代理模式下 PluginFrame 的 iframe 源
-  取选中节点的 `api_url`（node origin）——node 静态页免鉴权（GET/HEAD 不进鉴权链），
-  frame-src 已含 node origin；桥 RPC 经平台代理（`plugin` 命名空间已入白名单，
-  DENIED_RPC_METHODS 仍生效）。平台根 `/plugins/*` 仍一律 404。embed 模块 URL 不变
-  （仍 `${nodeUrl}/plugins/<id>/ui/<path>`，同源才能动态 import）。
+- **iframe 页（2026-11-23 用户裁决）**：iframe HTML 不经代理（白名单只转发 embed 静态资源）；
+  代理模式 PluginFrame 的 iframe 源直连选中节点 `api_url`（node 静态页免鉴权，frame-src 已含
+  node origin）；桥 RPC 经平台代理（`plugin` 命名空间已入白名单，DENIED_RPC_METHODS 仍生效）。
+  边界全貌见 [plugins](plugins.md) 宿主面。embed 模块 URL 不变（同源才能动态 import）。
 
 ## 5. 静态缓存（static.ts）
 
-- `PluginStaticMount` 加 `embedEntry?: string` / `embedCss?: string`（相对 uiDir）。
-- 响应文件的相对路径（相对 uiDir realpath 根，`/` 分隔）等于 embedEntry 或 embedCss →
-  `Cache-Control: no-cache`；其余非 HTML 保持 `public, max-age=31536000, immutable`
-  （chunk 文件名带哈希）；HTML 保持 no-cache + PLUGIN_CSP。
+- `PluginStaticMount` 带 `embedEntry?` / `embedCss?`（相对 uiDir）。响应文件的相对路径
+  （相对 uiDir realpath 根，`/` 分隔）等于二者之一 → `Cache-Control: no-cache`；其余非 HTML
+  保持 `public, max-age=31536000, immutable`（chunk 文件名带哈希）；HTML 保持 no-cache + PLUGIN_CSP。
 - 入口必须带 `?v=<ui_bundle_hash>` 加载（双保险，见 §8）。
 
 ## 6. React 单例：vendor shim + import map + CSP
 
-- **注册**：apps/web `main.tsx` 在 createRoot 之前：
-  `globalThis.__VESSEL_SHARED__ = { React, ReactDOM, ReactDOMClient, JsxRuntime, PluginSdk }`
-  （均为 namespace import，与宿主 bundle 同一份模块实例）。
-- **shim**：vite 插件在构建期 emitFile 到稳定路径（dev 用 configureServer 中间件同路径服务）：
-  `/assets/vendor/react.mjs`、`react-dom.mjs`、`react-dom-client.mjs`、`jsx-runtime.mjs`、
-  `plugin-sdk.mjs`。shim 只做静态具名导出 + default，全部取自 `__VESSEL_SHARED__`；
-  未注册时 throw 明确错误（fail-closed）。react shim 具名导出覆盖 React 19 导出面
-  （Children / Component / Fragment / Profiler / PureComponent / StrictMode / Suspense /
-  cloneElement / createContext / createElement / createRef / forwardRef / isValidElement /
-  lazy / memo / startTransition / use / useActionState / useCallback / useContext /
-  useDebugValue / useDeferredValue / useEffect / useId / useImperativeHandle /
-  useInsertionEffect / useLayoutEffect / useMemo / useOptimistic / useReducer / useRef /
-  useState / useSyncExternalStore / useTransition / version）；react-dom：createPortal /
-  flushSync / preload / preinit / prefetchDNS / preconnect / version；react-dom-client：
-  createRoot / hydrateRoot；jsx-runtime：Fragment / jsx / jsxs。
+- **注册**：apps/web `main.tsx` 在 createRoot 之前注入
+  `globalThis.__VESSEL_SHARED__ = { React, ReactDOM, ReactDOMClient, JsxRuntime, PluginSdk }`（均为 namespace import，与宿主 bundle 同一份模块实例）。
+- **shim**：vite 插件（`apps/web/vite.config.ts`）在构建期 emitFile 到稳定路径（dev 用
+  configureServer 中间件同路径服务）：`/assets/vendor/react.mjs`、`react-dom.mjs`、
+  `react-dom-client.mjs`、`jsx-runtime.mjs`、`plugin-sdk.mjs`。shim 只做静态具名导出 +
+  default，全部取自 `__VESSEL_SHARED__`；未注册时 throw 明确错误（fail-closed）。
+  react shim 具名导出覆盖 React 19 全导出面（含全部 hooks / version）；react-dom：
+  createPortal / flushSync / preload / preinit / prefetchDNS / preconnect / version；
+  react-dom-client：createRoot / hydrateRoot；jsx-runtime：Fragment / jsx / jsxs。
 - **import map（冻结常量）**：vite transformIndexHtml 在 `<head>` 内、第一个 module script
   之前注入 `<script type="importmap">` + 下面这串**逐字** JSON + `</script>`（tag 内不得
   添加任何空白）：
@@ -151,26 +143,23 @@ ui_embed?: { entry: string; css?: string; runtime: { react: string; sdk: string 
   该哈希与 import map 内容互为冻结契约：改一处必须同步改另一处并重算哈希。
 - 插件 bundle 不得含 eval / new Function（构建期 guard 在 P3；一期靠 review）。
 
-## 7. SDK（packages/plugin-sdk，一期最小面）
+## 7. SDK（packages/plugin-sdk）
 
-- 新包 `@vessel-agent/plugin-sdk`，**独立版本线**（起 1.0.0，与仓库 release 版本解耦；
-  `scripts/version.ts` 的写模式与 --check 都跳过它），exports `"." → ./src/index.ts`，
-  peerDependencies react >= 19（照 plugin-ui 模式，按源码消费：apps/web vite alias +
-  tsconfig paths；插件构建 external 化）。根 package.json 加 workspace 依赖。
-  **bump 策略**：仅 SDK 契约变更时 bump（additive → minor，破坏 → major）；宿主 React
-  主版本升级 = SDK major 提升并写 CHANGELOG。仓库 0.x minor 发版（0.55 / 0.56…）不改
-  SDK 版本，插件 `runtime.sdk: "^1"` 跨仓库发版恒成立。
-- **semver 工具搬家 + 扩语法**：src/plugin/plugin-manifest.ts 的纯 semver 函数（parseSemver /
-  isValidSemver / parseRangeVersion / compareSemver / parseVersionRange /
-  satisfiesComparator / satisfiesVersionRange 及相关类型）移入
-  `packages/plugin-sdk/src/semver.ts`；plugin-manifest.ts 改为 import + re-export
-  （scripts/version.ts 等消费方不变）。`COMPARATOR_RE` 扩展支持 `^` / `~`（标准语义：
+- `@vessel-agent/plugin-sdk`，**独立版本线**（与仓库 release 版本解耦；`scripts/version.ts`
+  的写模式与 --check 都跳过它），exports `"." → ./src/index.ts`，peerDependencies react >= 19
+  （按源码消费：apps/web vite alias + tsconfig paths；插件构建 external 化），根 package.json
+  workspace 依赖。**bump 策略**：仅 SDK 契约变更时 bump（additive → minor，破坏 → major）；
+  宿主 React 主版本升级 = SDK major 提升并写 CHANGELOG。仓库 minor 发版不改 SDK 版本，
+  插件 `runtime.sdk: "^1"` 跨仓库发版恒成立。
+- **semver 工具**：纯 semver 函数（parseSemver / isValidSemver / parseRangeVersion /
+  compareSemver / parseVersionRange / satisfiesComparator / satisfiesVersionRange）在
+  `packages/plugin-sdk/src/semver.ts`，plugin-manifest.ts import + re-export
+  （scripts/version.ts 等消费方不变）。`COMPARATOR_RE` 支持 `^` / `~`（node-semver 标准语义：
   `^x.y.z` = `>=x.y.z <(x+1).0.0`（x>0）；`^0.y.z` = `>=0.y.z <0.(y+1).0`（y>0）；
-  `^0.0.z` = `>=0.0.z <0.0.(z+1)`；`~x.y.z` = `>=x.y.z <x.(y+1).0`；缺位补 0 规则不变。
-  上界按**书写精度**定：`^0` = `<1.0.0`、`^0.0` = `<0.1.0`、`~x` = `<(x+1).0.0`，
-  与 node-semver 一致）。
-  不支持的语法仍返回 null / false（fail-closed）。
-- **P2 类型契约**（P3 再加 router / dialog / actions / iframe transport / vesselEmbedGuard）：
+  `^0.0.z` = `>=0.0.z <0.0.(z+1)`；`~x.y.z` = `>=x.y.z <x.(y+1).0`；缺位补 0；
+  上界按书写精度定：`^0` = `<1.0.0`、`^0.0` = `<0.1.0`、`~x` = `<(x+1).0.0`）。
+  不支持的语法返回 null / false（fail-closed）。
+- **类型契约**（router / dialog / actions / iframe transport / vesselEmbedGuard 仍在 P3）：
 
 ```ts
 export interface VesselPluginHost {
@@ -178,20 +167,14 @@ export interface VesselPluginHost {
   readonly sdkVersion: string;
   rpc<T = unknown>(method: string, params?: unknown): Promise<T>; // 裸名，宿主补 plugin.<id>. 前缀
   events: { subscribe(type: string, cb: (e: { type: string; payload?: unknown }) => void): () => void };
-  theme: {
-    get(): { mode: 'light' | 'dark'; lang: string };
-    subscribe(cb: (t: { mode: 'light' | 'dark'; lang: string }) => void): () => void;
-  };
+  theme: { get(): PluginHostTheme; subscribe(cb: (t: PluginHostTheme) => void): () => void };
   toast(msg: { kind: 'info' | 'success' | 'error'; text: string }): void;
   i18n: { t(key: string, vars?: Record<string, string | number>): string };
   log(level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: unknown): void;
   permissions: { has(permission: string): boolean };
+  attachments: PluginHostAttachments; // 通用 attachments 域能力（宿主未提供时调用 reject，fail-closed）
 }
-export interface PluginMountProps {
-  host: VesselPluginHost;
-  mount: 'page';
-  context: { pageId: string; run?: string; session?: string };
-}
+export interface PluginMountProps { host: VesselPluginHost; mount: 'page'; context: { pageId: string; run?: string; session?: string } }
 export type PluginModule = Record<string, unknown> & { dispose?: () => void };
 export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
 ```
@@ -200,9 +183,19 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
   client、theme 走宿主主题 store、toast 走 MessageBar、i18n 走宿主 t、events 走宿主事件订阅、
   log 走宿主日志面）。**每个方法内部再校验一次白名单**：rpc 裸名必须在 manifest
   `contributes.rpc` 内；events type 必须在 `permissions.events` 子集内。白名单只防误用。
-- 不暴露 client / token / eventStore 原对象。
+  不暴露 client / token / eventStore 原对象。
 - `sdkVersion` = plugin-sdk package.json version（apps/web 构建期 define 注入，不在源码
   硬编码第二份）。宿主 React 版本直接 `import { version } from 'react'`。
+- **attachments 域能力**（additive，任何 embed 插件可用，非功能专属）：`host.attachments.preview(path)`
+  （缩略图字节 + 过期探针，canonical `attachments.preview`，read）、`stage(files)`（浏览器文件 →
+  node 暂存副本，canonical `attachments.stage`，write）、`openPreview(path)`（宿主标准附件预览
+  弹窗，插件不另造 lightbox）。adapter 未提供实现 ⇒ reject `attachments_unavailable`（fail-closed）。
+- **composer 贡献类型**（`packages/plugin-sdk/src/index.ts`，`contributes.composer` 接缝的类型化
+  端口；声明形状与校验见 [plugins](plugins.md)）：`ComposerEditorPort`（读 / 增 / 删草稿引用、
+  插入文本 / 原子 / 瞬态节点、取光标、stage / preview——插件拿不到宿主 DOM / 路由 / 草稿 store）、
+  `ComposerCardProps` / `ComposerLinkCardProps`（refs / link 槽组件 props）、`ComposerDropHandler`
+  （drop 槽）、`ComposerRef`（与 core MessageRef 同形）、`ComposerTransientHandle`（settle / update /
+  remove）、`StagedAttachment` / `ComposerPreviewResult`（stage / preview 回执）。
 
 ## 8. 加载与 fail-closed（apps/web/src/domains/plugins/）
 
@@ -222,8 +215,12 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
 - **热更新**：plugin.changed → 对账得新 ui_bundle_hash → `import(url?v=新hash)` +
   boundary key 变化重挂载；切换前调用旧模块可选 `dispose()`；宿主按 pluginId 追踪 SDK
   订阅，卸载强制回收。旧 ESM 模块无法卸载（泄漏有限次可接受，文档写明）。
-- **i18n**：新文案同时进 zh-CN 与 en 两份 catalog（key 集合由 typecheck 强制对齐）：
-  loading / 错误标题与正文 / 重试 / 改用隔离模式 / 版本不兼容标题与正文 / 加载失败标题与正文。
+- **i18n**：新文案同时进 zh-CN 与 en 两份 catalog（key 集合由 typecheck 强制对齐）。
+- **composer 内嵌贡献**（`composer-extensions.tsx`）：refs 槽 → RichComposer 的 `atomicSchemes`
+  （scheme 驱动原子卡片渲染器）；drop 槽 → OS 文件 drop / 截图粘贴处理器；link 槽 → 消息
+  Markdown link 增强器（同时映射进块注册表）。复用既有 embed 件（loadPluginEmbed /
+  usePluginHost / usePluginSurface / disposePluginHost）：每个有 composer 贡献的插件一个隐形
+  bridge，模块就绪 + 授权面落定后注册；卸载 / 热更新 / 禁用 ⇒ 注销。宿主零功能名。
 
 ## 9. 样式契约（一期：约定 + review，构建期 guard 在 P3）
 
@@ -242,12 +239,10 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
 
 ## 10. 样本插件（plugins/observability/usage）
 
-- manifest：`ui.embed = { entry: "embed/index.mjs", css: "embed/index.css",
-  runtime: { react: "^19", sdk: "^1" } }`；pages usage / logs 加 component
-  `UsageView` / `LogsView`（iframe entry 保留）。
-- `web-src/embed.tsx`：具名导出 `UsageView` / `LogsView`（`PluginMountProps` 组件），
-  数据走 `host.rpc('summary' | 'logs' | 'leaderboard')`，复用现有展示组件；不用
-  iframe 桥（PluginRpcClient）。同一份 web-src 继续出 iframe 产物（现状 classic-script 流程）。
+- manifest：`ui.embed = { entry: "embed/index.mjs", css: "embed/index.css", runtime: { react: "^19", sdk: "^1" } }`；
+  pages usage / logs 加 component `UsageView` / `LogsView`（iframe entry 保留）。
+- `web-src/embed.tsx`：具名导出 `UsageView` / `LogsView`（`PluginMountProps` 组件），数据走
+  `host.rpc('summary' | 'logs' | 'leaderboard')`，不用 iframe 桥（PluginRpcClient）；同一份 web-src 继续出 iframe 产物（classic-script 流程）。
 - `vite.config.embed.ts`：lib 模式 formats ['es']、entry web-src/embed.tsx、fileName
   index.mjs、outDir web/embed、emptyOutDir、cssCodeSplit false、external react /
   react-dom / react-dom/client / react/jsx-runtime / @vessel-agent/plugin-sdk、
@@ -255,10 +250,15 @@ export function createPluginHost(adapter: PluginHostAdapter): VesselPluginHost;
   biome-ignore-all 头（照现有 generatedBiomeIgnore）。
 - `build:ui` = `tsc -p tsconfig.web.json --noEmit && vite build && vite build --config
   vite.config.embed.ts`。产物（web/embed/**）入库，带 biome-ignore 头。
+- composer 样本 `plugins/tools/file-refs`：refs（`vessel-ref` → `FileRefCard`）/ drop
+  （`onFilesDropped`）/ link（`FileRefLinkCard`）三槽；`thumbnail.tsx` 经 `host.attachments.preview`
+  拿原样字节、浏览器 canvas 缩 ≤40×40（node 侧零图像编解码依赖）；`drop-handler.ts` 先插瞬态
+  占位卡再经 `port.stage` 暂存上传；node 侧空 install 面，`build:ui` 只出 embed 单产线。
 
 ## 11. 分期边界
 
-- **P2（本契约）**：上述全部。builtin usage 样本在直连模式内嵌渲染；代理模式同源加载。
+- **已落地**：上述全部 + composer 内嵌贡献 / attachments 域能力（additive）。builtin usage
+  样本在直连模式内嵌渲染；代理模式同源加载。
 - **P3**：mounts[] + 宿主动作表 + panels 内嵌；SDK router / dialog / actions / iframe
   transport 迁移（plugin-ui/host.ts）；vesselEmbedGuard 构建期校验；模板。
 - **P4**：trust_ui 确认流程 UI（含重新确认 / 哈希锁管理）、marketplace 签名、安全模式。

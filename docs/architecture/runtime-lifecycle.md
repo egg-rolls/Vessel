@@ -26,50 +26,58 @@ run(input, sessionId?, opts?):
         # 占位发生在任何 await 之前；finally 里 endExecution 释放
         # Run 在此时经 contextFactory 新建自己的 WorkingContext（per-Run，不复用上一 Run 对象）
 
-    # 从 SessionState 快照 + 事件日志增量播种本 Run 的窗口
-    从 session.load(sessionId) 恢复历史 → addContext 每条
-    若没恢复出历史且有 systemPrompt → addContext(system 消息)
+    # 首 run 前获取 SessionLease（同 session 复用续租）；journal 携 fencing token
+    lease = acquireSessionLease(sessionId)
+    activeJournal = beginJournal(execution, lease.fencingToken)   # 本 Run 唯一写者
 
-    runState = { run_id, session_id, messages: [userMessage], status: 'running', branch }
-    发 run.started
+    # 播种本 Run 的窗口：loadStoredHistory（session cache + 事件日志增量；
+    #   增量含 message.compaction → 强制全量重投影）→ seedWorkingContext
+    # system = composeRunSystemPrompt（基底 + Self Card，run 开始生成一次）
+    # 段起点：primeSegmentProjectionMode → compactAtSegmentStart → freezeSegmentClearedToolResults
+
+    sessionState = createSessionState(...)        # 会话壳：title / preview 从旧状态保留
+    发 run.started（带 input；A2A 输入 additive input_name）
 
     try:
         # 本轮前置注入（见 runtime-api.md 的消息组装）：core 不解释语义，先于用户输入写入并持久化
         for msg of opts.messages ?? []:
-            addContext(msg)              # 注入在前
+            addContext(withMessageId(msg, `${runId}:inject:下标`))   # 注入在前，稳定 id
 
         # Input guardrail 先于写用户消息：replacement 要成为持久化的用户消息（ADR-035）
         inputResult = 应用 Input guardrail
         被阻止 → 抛错（已写入的注入消息保留）
         effectiveUser = replacement 是字符串 ? 改写后的 userMessage : userMessage
-        addContext(effectiveUser)        # 用户输入在后
+        addContext(withMessageId(effectiveUser, `${runId}:user`))   # 用户输入在后
 
         # 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不丢历史
-        runState.messages = run.workingContext.messages
-        journal.saveSessionState(runState)        # RunJournal 是唯一持久化写者
-        journal.saveCheckpoint(runRecord)          # durable 开启时；发 run.checkpoint
+        sessionState.messages = run.workingContext.messages
+        writeRunRecord(execution, 'running')       # 经 journal.saveCheckpoint；发 run.checkpoint
+        journal.saveSessionState(sessionState)     # RunJournal 是唯一持久化写者
+        updateSessionIndexBestEffort(sessionState)
 
         output = await toolCallingLoop(execution, signal)
-        await finalizeRun(execution, runState, { status: 'completed', output })
+        await finalizeRun(execution, sessionState, { status: 'completed', output })
         return output
     catch error:
-        await finalizeRun(execution, runState, { status: 'failed', error, signal })
+        await finalizeFailure(execution, sessionState, error, signal)
         throw
 
 # run() / resumeRun() / resumeSession() 共用的唯一终态路径
 finalizeRun(run, sessionState, outcome):
     if outcome.status == 'completed':
-        journal.saveCheckpoint(runRecord, 'completed') → journal.saveSessionState(sessionState) → 发 run.completed
+        writeRunRecord('completed') → finalizeSessionState → index best-effort → saveSessionState
+        发 run.completed → finishEventLog（flush 落盘 + 投影快照推进到日志尾，后台 best-effort）
         return
 
     # 失败 / 取消 / 中断
-    cancelled = signal 已 abort 且 reason 不属于 Host 中断集合
-    sessionState.status = cancelled ? 'cancelled' : 'failed'
+    cancelled = isUserCancelled(signal)            # 用户显式取消 → cancelled；Host 中断/错误 → failed
+    sessionState.status = failureCheckpointStatus(signal)   # failed | cancelled | interrupted
     sessionState.messages = run.workingContext.messages  # 失败也保存真实上下文，不覆盖历史
     OnError hook（best-effort；自己抛错只发 hook.error，不替换原始错误）
-    journal.saveCheckpoint(runRecord, failed | cancelled | interrupted) → journal.saveSessionState(sessionState)
-    发 run.cancelled（用户取消）或 run.failed（Host 中断 / 普通错误）
-    # finalizeRun 自身失败（如磁盘写失败）→ 发 run.finalize.failed，原错误继续上抛
+    writeRunRecord(terminalStatus, bestEffort, errorEnvelope) → finalizeSessionState → index → saveSessionState
+    发 run.cancelled（用户取消，带 reason）或 run.failed（附 error_envelope / partial_content / permission_timeout）
+    finishEventLog
+    # finalizeRun 自身失败（如磁盘写失败）→ finalizeFailure 发 run.finalize.failed，原错误继续上抛
 ```
 
 <a id="finalize"></a>
@@ -87,7 +95,7 @@ finalizeRun(run, sessionState, outcome):
 
 <a id="lease"></a>
 
-## ExecutionUnit 与两级租约（0.34）
+## ExecutionUnit 与两级租约
 
 - 每个需要执行的 body 持有两级租约：先获取 **binding lease**（同一 Agent binding 的排他写者），再获取 **session lease**（同一 Session 的排他写者）。释放顺序相反：先 session、后 binding。
 - 租约由 `LeaseServicePort` 提供 `LeaseGrant`（lease id / fencing token / `expires_at`）。续租间隔 `lease.renewMs`、TTL `lease.ttlMs`（默认 10000 / 30000，见 [CONFIG](../operations/CONFIG.md)）；进程退出或 dispose 时停止续租。
