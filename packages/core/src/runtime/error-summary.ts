@@ -44,11 +44,23 @@ const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 /**
  * 出生点事故短 id（E2 §3.3）：8 字符 base32，crypto 随机。
  * 包装层沿用同一 id（读 errorId），只有出生点与兜底摘要生成新 id。
+ *
+ * RFC 4648 位打包：randomBytes(5) = 40 bit → 恰 8 个 5-bit 组，无 padding。
+ * （canary 微修：原逐 byte % 32 只取每字节低 5 bit，恒 5 字符 25 bit，熵减半。）
  */
 export function newErrorId(): string {
   const bytes = randomBytes(5);
   let id = '';
-  for (const byte of bytes) id += BASE32_ALPHABET[byte % 32];
+  let value = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      id += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
   return id;
 }
 
