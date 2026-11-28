@@ -32,6 +32,9 @@ export const messages = {
   'nav.group.observe': 'OBSERVE',
   'nav.group.top': '顶部',
   'nav.group.settings': '设置',
+  // AppBar 设置按钮（Tooltip + aria-label，q-webui4-ui-followups B）：
+  // 旧缺键时 t() 回退键名本身，按钮无障碍名/提示显示原始「nav.settings」。
+  'nav.settings': '设置',
   'nav.group.integrations': '能力',
   'nav.group.core': '核心',
   'nav.mainLabel': '主导航',

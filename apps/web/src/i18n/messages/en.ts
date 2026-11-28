@@ -32,6 +32,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'nav.group.observe': 'OBSERVE',
   'nav.group.top': 'TOP',
   'nav.group.settings': 'SETTINGS',
+  // AppBar settings button (Tooltip + aria-label, q-webui4-ui-followups B):
+  // missing key made t() fall back to the raw key name "nav.settings".
+  'nav.settings': 'Settings',
   'nav.group.integrations': 'Integrations',
   'nav.group.core': 'Core',
   'nav.mainLabel': 'Main navigation',
