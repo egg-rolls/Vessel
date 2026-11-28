@@ -120,11 +120,12 @@ export interface AttachmentPreviewRequest {
 
 /**
  * 预览结果（稳定码闭集）：
- * - `ok`：可读；图片且 ≤ 上限时带 `dataUrl`（web 侧再缩到缩略图）；
+ * - `ok`：可读；可预览类型（image/* + application/pdf）且 ≤ 上限时带 `dataUrl`
+ *   （图片 web 侧再缩到缩略图；PDF 走浏览器原生查看器）；
  * - `gone`：路径不存在（暂存过期 / 文件被删）⇒ 卡片「已过期」态；
  * - `denied`：边界 ask/deny 或未注入（fail-closed，不读）；
  * - `too_large`：超过预览上限（回落 ICON）；
- * - `not_image`：非图片（种类 ICON 即可，不必读字节）。
+ * - `not_image`：白名单外类型（种类 ICON 即可，不必读字节；码名历史遗留，闭集不变）。
  * `staging` / `expiresAt` 仅当路径落在暂存根内时给出（「临时」徽标的数据源）。
  */
 export interface AttachmentPreviewResult {

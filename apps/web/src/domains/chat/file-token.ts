@@ -73,6 +73,13 @@ export function refKindForPath(target: string): MessageRefKind {
   return 'file';
 }
 
+/** PDF 判定（q-pdf-preview-channel；与 refKindForPath 同一扩展名粗判口径）。 */
+export function isPdfPath(target: string): boolean {
+  const name = pathBasename(target);
+  const dot = name.lastIndexOf('.');
+  return dot > 0 && name.slice(dot + 1).toLowerCase() === 'pdf';
+}
+
 /**
  * 正文 → token 列表 + 剥掉 token 的剩余正文。无完整 token ⇒ null（正文原样）。
  *

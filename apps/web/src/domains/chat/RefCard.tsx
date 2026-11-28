@@ -3,6 +3,8 @@
  * 左 ICON 槽右一行文字槽。图片缩略图进 ICON 槽 + 文件名；PDF / 其他文件换
  * RefIcon 图标；点击统一走既有 ImageLightbox（图片有字节时）/ 复制路径
  * （无字节可预览时，与插件 FileRefLinkCard 同一语义，绝不导航）。
+ * q-pdf-preview-channel：PDF 点击 = 懒取字节开宿主 PdfLightbox（原生查看器）；
+ * 字节不可用回落复制路径（图片卡路径不动）。
  *
  * 复用体系（不另造壳 / 预览 / 取值）：
  * - 表面 = CardShell（与 ToolImageCard 同一基座）；
@@ -17,13 +19,15 @@
  * 形态照 FileRefLinkCard（单 button 行），表面统一 CardShell —— 插件 bundle
  * 零改动。
  */
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useContext, useState } from 'react';
 import { CardShell, useMessageCopy } from '../../components/ui';
+import { ConnectionContext } from '../../gateway/connection-context';
 import type { MessageRefKind } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useSessionStore } from '../../stores/sessionStore';
+import { openAttachmentPreview } from './attachment-lightbox';
 import type { FileTokenCard } from './file-token';
-import { refKindForPath } from './file-token';
+import { isPdfPath, refKindForPath } from './file-token';
 import { ImageLightbox, useAttachmentPreview, useImageBlob } from './image-preview';
 import { deliveryClass, imageDeliveryLabel, refDisplayName } from './MessageRefs';
 import { RefIcon } from './RefIcon';
@@ -90,17 +94,42 @@ export function RefCard({ card }: { card: FileTokenCard }) {
   const pathPreview = useAttachmentPreview(card.path, kind === 'image' && sha256 === undefined);
   const [lightbox, setLightbox] = useState(false);
   const copyPath = useMessageCopy(t('chat.refCard.pathCopied'));
+  // PDF（q-pdf-preview-channel）：点击才取字节（无缩略图可画，不预取）；
+  // 走与插件 openPreview 同一共享接缝，弹窗 = App 根单例 PdfLightbox。
+  const connection = useContext(ConnectionContext);
+  const client = connection?.client;
+  const isPdf = kind !== 'image' && isPdfPath(card.path);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfExpired, setPdfExpired] = useState(false);
 
   const url = sha256 !== undefined ? blob.url : pathPreview.url;
   const loading =
-    sha256 !== undefined ? blob.status === 'loading' : pathPreview.status === 'loading';
-  const expired = sha256 === undefined && pathPreview.status === 'gone';
+    (sha256 !== undefined ? blob.status === 'loading' : pathPreview.status === 'loading') ||
+    pdfLoading;
+  const expired = (sha256 === undefined && pathPreview.status === 'gone') || pdfExpired;
   const staging = sha256 === undefined && pathPreview.staging === true;
   const deliveryText = card.delivery !== undefined ? imageDeliveryLabel(card.delivery) : undefined;
 
   const onClick = () => {
-    if (url !== undefined) setLightbox(true);
-    else copyPath(card.path);
+    if (url !== undefined) {
+      setLightbox(true);
+      return;
+    }
+    if (isPdf && client !== undefined && !pdfLoading && !pdfExpired) {
+      setPdfLoading(true);
+      void openAttachmentPreview(client, card.path)
+        .catch((error: unknown) => {
+          // gone ⇒ 过期态；其余不可用（denied / too_large / 旧 gateway）⇒
+          // 回落既有复制路径契约（诚实降级，绝不导航）。
+          if (error instanceof Error && error.message.endsWith(': gone')) setPdfExpired(true);
+          else copyPath(card.path);
+        })
+        .finally(() => {
+          setPdfLoading(false);
+        });
+      return;
+    }
+    copyPath(card.path);
   };
 
   return (
@@ -114,7 +143,9 @@ export function RefCard({ card }: { card: FileTokenCard }) {
         ariaLabel={
           url !== undefined
             ? t('chat.toolImage.previewNamed', { name })
-            : `${name} — ${t('chat.refCard.copyPath')}`
+            : isPdf && !expired
+              ? t('chat.pdf.previewNamed', { name })
+              : `${name} — ${t('chat.refCard.copyPath')}`
         }
         onClick={onClick}
         trailing={

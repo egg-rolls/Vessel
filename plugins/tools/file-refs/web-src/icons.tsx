@@ -108,6 +108,13 @@ export function kindOfPath(path: string): RefKind {
   return 'file';
 }
 
+/** PDF 判定（q-pdf-preview-channel；与 kindOfPath 同一扩展名粗判口径）。 */
+export function isPdfPath(path: string): boolean {
+  const name = path.split(/[\\/]/).pop() ?? '';
+  const dot = name.lastIndexOf('.');
+  return dot >= 0 && name.slice(dot + 1).toLowerCase() === 'pdf';
+}
+
 /** 路径 → 显示名（basename；Windows / Unix 分隔符都认）。 */
 export function displayNameOf(path: string): string {
   const parts = path.split(/[\\/]/).filter((part) => part.length > 0);

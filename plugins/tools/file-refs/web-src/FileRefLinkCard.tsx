@@ -34,7 +34,13 @@ export function FileRefLinkCard({ href, text, host }: ComposerLinkCardProps) {
       .then((result) => {
         if (!active) return;
         setPreview(result);
-        if (result.status === 'ok' && result.dataUrl !== undefined) {
+        // 缩略图只对图片尝试（PDF 字节解不出 Image；q-pdf-preview-channel）。
+        // 点击契约保持复制路径（A6）——是否改预览候 main 裁，见批次报告。
+        if (
+          result.status === 'ok' &&
+          result.dataUrl !== undefined &&
+          kindOfPath(path) === 'image'
+        ) {
           void makeThumbnail(result.dataUrl).then((url) => {
             if (active) setThumb(url);
           });
