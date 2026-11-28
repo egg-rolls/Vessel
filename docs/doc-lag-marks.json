@@ -23,5 +23,15 @@
     "at": "2026-11-28",
     "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：state 架构描述与现态一致；main 合入 2.2.8 批时落标记",
     "sha": "267cbe93"
+  },
+  "docs/agents/web.md": {
+    "at": "2026-11-28",
+    "reason": "q-doc-micro-residuals 逐窗语义确认（13 commits，基线 836637f7）：12 个纯 zh/en catalog 键增删（双 catalog 同进约定未变）；1 个（290e8e9e）event-visibility.ts 纯注释锚点清理（门禁→评审核对，与叶内口径一致）；Composer/StreamCard/motion 等其余 paths 窗内零触碰，确认无需改",
+    "sha": "7ab31996"
+  },
+  "docs/architecture/web-i18n.md": {
+    "at": "2026-11-28",
+    "reason": "q-doc-micro-residuals 逐窗语义确认（12 commits，基线 b9c34ba2）：全部仅 messages/zh-CN.ts 与 en.ts 键增删，i18n/index.ts 机制零改动（locale 解析 / t / hasMessage 已对现态码核对一致），确认无需改",
+    "sha": "7ab31996"
   }
 }
