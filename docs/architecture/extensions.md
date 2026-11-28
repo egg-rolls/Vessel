@@ -19,32 +19,29 @@ interface Plugin {
   version?: string;
   description?: string;
   install(host: PluginHost): void | Promise<void>;
-  /** in-process RPC handler（与 child dispatch 同形）；装配层 install 后登记进宿主 PluginRpcRegistry */
-  rpc?(name: string, params: Record<string, unknown>): Promise<unknown>;
+  rpc?(name: string, params: Record<string, unknown>): Promise<unknown>; // in-process RPC，与 child dispatch 同形
 }
 
 interface PluginHost {
-  registerTool(def: ToolDefinition): void;
+  registerTool(def: ToolDefinition, options?: RegisterToolOptions): void; // external:true = 外部来源通道（不合规只 warning）
   registerProvider(name: string, factory: ProviderFactory): void;
   registerGuardrail(guardrail: Guardrail): void;
   registerHook(hook: Hook): void;
-  getTool(name: string): ToolDefinition | undefined;
-  getProvider(name: string): ProviderFactory | undefined;
-  getGuardrails(): Guardrail[];
-  getHooks(): Hook[];
-  listTools(): ToolDefinition[];
-  listProviders(): string[];
+  // 读面：getTool / getProvider / getGuardrails / getHooks / listTools / listProviders
+  // 可选面（不实现的宿主保守退化）：unregisterTool / unregisterHook / unregisterGuardrail /
+  // unregisterProvider / unregisterReadSideMasker（热应用按名差量摘除 / 重建），surfaces()
+  //（install 期注册面审计，PluginSurfaceKind 集，生命周期推导真源），beginPluginInstall（安装回滚），
+  // registerReadSideMasker（读侧脱敏），registerMemberBodyContribution / getMemberBodyContributions（成员端口，见下）
 }
 ```
 
-这是**唯一的 plugin 加载 / 清单 / 生命周期机制**。harness 可在宿主层扩展贡献面（pages / commands / settings / rpc / events / panels），不属于第二套扩展机制（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。单公司装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。
-> 归属级（Workspace / Platform）见 [topology](topology.md#插件归属)；本段描述的是现态单公司安装路径。
+这是**唯一的 plugin 加载 / 清单 / 生命周期机制**。harness 可在宿主层扩展贡献面（pages / commands / settings / rpc / events / panels / toolbar / composer），不属于第二套扩展机制（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。单公司装配层经 `installPluginsIntoHost()` 在共享 `PluginHost` 上安装一次（install 失败即构造失败，fail-fast），per-session EU 复用该 host；直接嵌入方仍可在 `ExecutionUnitOptions.plugins` 里传插件，由 `ExecutionUnit.create()` 逐个 `install`。也可直接注入 `pluginHost?: PluginHost` 替换实现。归属级（Workspace / Platform）见 [topology](topology.md#插件归属)；本段描述的是现态单公司安装路径。
 
 <a id="extension-model"></a>
 
 ## 扩展模型
 
-**一个机制：`Plugin` + `PluginHost`。** core 不为任何扩展类型新增接口；harness 可在宿主层收集贡献面（pages / commands / settings / rpc / events / panels），不新增 core 注册入口（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。三类扩展内容：
+**一个机制：`Plugin` + `PluginHost`。** core 不为任何扩展类型新增接口；harness 可在宿主层收集贡献面（pages / commands / settings / rpc / events / panels / toolbar / composer），不新增 core 注册入口（[ADR-099](../adr/ADR-099-plugin-contribution-surfaces-and-trust.md)）。三类扩展内容：
 
 | 类型 | 是什么 | 怎么投放 |
 |---|---|---|
@@ -65,44 +62,46 @@ interface PluginHost {
 ```
 plugins/                                 package.json + src/index.ts 存在即注册
 ├── tools/{basic-tools,recall,web-tools}/  → bash/read/edit/write · recall · web_search/web_fetch
-├── context/doc-subscription/            → subscribe 工具 + BeforeLlm hook
-├── context/skills/                      → skills 工具（list/search/load 信任门）+ 技能库管理 RPC + UI
+├── tools/file-refs/                     → composer 内嵌贡献（refs/drop/link，空 install 面）
+├── context/{doc-subscription,skills,thinking-intensity}/ → subscribe 工具 + hook · skills 工具 + 管理 RPC + UI · 思考强度 hook + RPC（toolbar menu）
 ├── mcp/client/ evals/harness/ im/feishu/ tools/engine-client/ → 工厂式（装配层自行构造）
 ├── security/{guardrail-pii,redact-secrets,tool-policy}/  → PII / 密钥 / 工具策略
 ├── observability/{hook-logging,usage}/  provider/{openai,anthropic,model-registry}/
-└── media/media/（opt-in）  marketplace/marketplace/（child：页面 + 市场）
+└── media/media/  marketplace/marketplace/（child：页面 + 市场）
 ```
 
-共 **19 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals`、`feishu` 与 `engine-client`（无 install 注册面，工厂即插件面：`createEngineClient` 由 bootstrap 构造，转发 handler 写回既有工具定义、不注册自有工具，执行位置见 [tools](tools.md#engine-exec)）。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。opt-in 集（`OPT_IN_PLUGINS`）当前只有 `media`；`web-tools` 自 0.56 转默认加载。
+共 **21 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `mcp-client`、`evals`、`feishu` 与 `engine-client`（engine-client 无 install 注册面，工厂即插件面，见 [plugins](plugins.md#对-vessel-与-ai-流的作用)）。MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。opt-in 集（`OPT_IN_PLUGINS`）当前为**空集**——安装的插件默认开启。
 
 `PluginLoader` 的接口：
 
 ```ts
 class PluginLoader {
   list(): PluginDescriptor[];
+  rescan(): PluginDescriptor[];       // 重扫发现根（体验插件热重载消费）
   getProviders(): string[];         // category === 'provider'
   getAvailablePlugins(): string[];  // 排除 provider 与工厂式插件
-  load(name: string): Promise<Plugin | null>;
+  load(name: string): Promise<Plugin | null>;      // 进程级单例
+  loadFresh(name: string): Promise<Plugin | null>; // cache-busted 新实例（热应用旁路 re-install）
 }
 ```
 
-**扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。用户 / 项目插件目录与 `plugins[].config` 注入见 `docs/versions/0.6.1.md`。
+**扫描结果缓存在实例上**（`list()` 不重扫）；体验插件热重载经 `rescan()` 显式重扫（机制见 [plugins](plugins.md)）。in-process 插件代码改动需**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。用户 / 项目插件目录与 `plugins[].config` 注入见 [plugins](plugins.md)。
 
 **来源与优先级**：默认扫描根为 `repo`（仓库 `plugins/`）、`project`（`./.vessel/plugins`）、`user`（`~/.vessel/plugins`）、`node_modules`（仓库根与 cwd 的 `node_modules/@vessel-agent/*`，跳过非插件库包）。同 id 冲突**高优先级胜出**：project > user > repo > node_modules（`src/plugin/plugin-loader.ts` 的 `SOURCE_PRIORITY` / `resolveSourceConflict`）；覆盖内置另需 `vessel.override: true`，否则保留内置并告警。冲突与激活细节见 [plugins](plugins.md#发现与激活)。
 
-**体验插件的外部命名空间与授权（0.48）**：child 插件（`source !== 'repo'`）的 `contributes.http[].path` 必须落在 `/plugins/<own-id>/` 命名空间内；HTTP route / CLI command 还需在 `plugins[].expose` 显式授权，内置插件不受 `expose` 影响。有效面与冲突语义见 [plugins.md](plugins.md#扩展面授权expose)。
+**体验插件的外部命名空间与授权**：child 插件（`source !== 'repo'`）的 `contributes.http[].path` 必须落在 `/plugins/<own-id>/` 命名空间内；HTTP route / CLI command 还需在 `plugins[].expose` 显式授权，内置插件不受 `expose` 影响。有效面与冲突语义见 [plugins.md](plugins.md#扩展面授权expose)。
 
-**默认集与信任边界**：`plugins` 配置缺省时，默认集加载全部可用插件——包括 project / user / node_modules 来源的外部插件。启动时由 `bootstrap` / `--tools` / `doctor` 向 **stderr** 打印一次外部插件告警（数量、名称、来源），告警不进入 stdout / JSON。设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）后，默认集只加载 `source === 'repo'` 的插件；显式 `plugins:` 列表仍可加载指定外部插件（显式即信任）。外部插件以完整进程权限运行，且早于任何工具权限判定，因此 **P0-3 只做到缓解（MITIGATED），不是已关闭的信任边界**；不可信仓库应使用 opt-out。
+**默认集与信任边界**：`plugins:` 是**覆盖层语义**——默认集（全部已安装的 in-process 能力插件，排除 provider / 工厂式 / hook-logging / child）恒为底，条目只做覆盖：`enabled: false` 显式排除，列入即显式启用（可救回默认集之外的插件）；`plugins: []` = 无覆盖 = 完整默认集；新装插件不配置即装载。启动时由 `bootstrap` / `--tools` / `doctor` 向 **stderr** 打印一次外部插件告警（数量、名称、来源；显式列入的外部插件视为已信任，不计入），告警不进入 stdout / JSON。设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）后，默认集只加载 `source === 'repo'` 的插件；显式 `plugins:` 列表仍可加载指定外部插件（显式即信任）。外部插件以完整进程权限运行，且早于任何工具权限判定，因此 **P0-3 只做到缓解（MITIGATED），不是已关闭的信任边界**；不可信仓库应使用 opt-out。
 
 **加能力就是放一个文件夹。** `bash` 工具在，写文件 + 跑命令本身就是模型能做的事——这就是不再需要「声明式工具」「用户目录工具扫描」「运行时注册表」的原因。
 
 <a id="plugin-ports"></a>
 
-## 插件端口面（0.51 期 0）
+## 插件端口面
 
-插件可声明「装在成员身体上」并申请宿主端口。本期只建面、不搬能力：内置 `inbox` 贡献是空壳（`tools()` 返回空数组），工具面 / hook 面 / 事件流与 0.50 逐字相同；验收由用户行为验证（本仓无门禁）。
+插件可声明「装在成员身体上」并申请宿主端口。端口面只建面、不搬能力：内置 `inbox` 贡献是空壳（`tools()` 返回空数组），节点工具面 / hook 面 / 事件流不变；验收由用户行为验证（本仓无门禁）。
 
-- **声明**：`vessel.scope: 'node' | 'member'`（缺省 `node`）与 `permissions.ports`（闭集，当前只有 `inbox`）。端口**只对 `scope: 'member'` 的 in-process 能力插件开放**：`ports` 非空而 scope 不是 member、或 child 插件声明 `member` ⇒ `plugin_manifest_invalid`。child 没有 body 宿主，给它端口等于开一条反向 RPC 通道 —— 这是本期边界不是遗漏（要开需新 ADR）。声明面的校验对 in-process 包同样生效（0.51 期 0.5 补的洞：此前只有 child 分支校验清单）。
+- **声明**：`vessel.scope: 'node' | 'member'`（缺省 `node`）与 `permissions.ports`（闭集，当前只有 `inbox`）。端口**只对 `scope: 'member'` 的 in-process 能力插件开放**：`ports` 非空而 scope 不是 member、或 child 插件声明 `member` ⇒ `plugin_manifest_invalid`。child 没有 body 宿主，给它端口等于开一条反向 RPC 通道 —— 这是边界不是遗漏（要开需新 ADR）。声明面的校验对 in-process 包同样生效。
 - **契约在 core**（`types/member-port.ts`，纯类型；core 不 import 任何插件或存储条目类型）：`MemberInboxPort` / `MemberBodyPort<P>` / `MemberBodyContribution<P>`，端口集合 `MemberBodyPorts<P> = Pick<…, P>`。三条硬边界：agentId 绑死在端口上（方法没有 agentId 参数）；hold / releaseHeldFor / markConsumed 留在宿主（调度不变量）；未申请的端口在类型上**不存在**（越权是编译错误，不是运行期 `undefined`）。
 - **端口必须 body-bound**：同一成员可有多具 live body（rotate 窗口 / 退役中），held 按 bodyId 记、notice 只能写进那具 body 的事件流 —— 所以 `MemberBodyPort` 带 `agentId / sessionId / isActive() / publish()`，`publish` 只收 `runtime.notice`。
 - **只注册在成员身体**：`PluginHost.registerMemberBodyContribution?` / `getMemberBodyContributions?` 是可选方法（老宿主不实现 = 没有成员面）；节点侧永不消费，只有 `MemberExecutionHost.spawn` 读它，而它拿的就是 tenant 宿主，零新增透传。宿主此刻给不出声明的端口（例如没配 dataDir、没有收件箱）⇒ 整条贡献不装配，不降级成「半个端口面」。
