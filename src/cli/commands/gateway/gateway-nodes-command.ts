@@ -40,6 +40,7 @@ import {
 } from '../../../gateway/node-registry';
 import { isProcessAlive, readGatewayPidRecord } from '../../../gateway/pid';
 import { HUB_DEFAULT_PORT } from '../../../hub/server';
+import { guardListenerInheritance } from '../../../shared/socket-inherit-guard.js';
 import type { GatewayNodesCommand } from '../../args';
 import { ui } from '../../output';
 import { nodeListenFromConfig, probeHttpHealth } from './gateway-command';
@@ -105,7 +106,11 @@ function checkPortAvailable(host: string, port: number): Promise<boolean> {
       resolve(available);
     };
     server.once('error', () => finish(false));
-    server.listen({ host, port, exclusive: true }, () => finish(true));
+    server.listen({ host, port, exclusive: true }, () => {
+      // R-5 根治：探针绑定窗口内并发的 spawn 也不继承（win32；POSIX no-op）。
+      guardListenerInheritance(port, server);
+      finish(true);
+    });
     const timer = setTimeout(() => finish(false), 1000);
     (timer as { unref?: () => void }).unref?.();
   });

@@ -38,6 +38,7 @@ import {
 } from '../../data/data-paths';
 import { loadNodeRegistry } from '../../gateway/node-registry';
 import { resolveGatewayToken } from '../../gateway/transport-factory';
+import { guardListenerInheritance } from '../../shared/socket-inherit-guard.js';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
 // 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
 import {
@@ -129,7 +130,11 @@ function checkPort(host: string, port: number): Promise<'available' | 'in_use' |
     server.once('error', (error: NodeJS.ErrnoException) => {
       finish(error.code === 'EADDRINUSE' ? 'in_use' : 'error');
     });
-    server.listen({ host, port, exclusive: true }, () => finish('available'));
+    server.listen({ host, port, exclusive: true }, () => {
+      // R-5 根治：探针绑定窗口内并发的 spawn 也不继承（win32；POSIX no-op）。
+      guardListenerInheritance(port, server);
+      finish('available');
+    });
     const timer = setTimeout(() => finish('error'), 1000);
     (timer as { unref?: () => void }).unref?.();
   });
