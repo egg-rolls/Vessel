@@ -10,7 +10,7 @@
  * - file：结构化 `Message.refs` + 正文 vessel-ref token（token 成卡剥出正文，
  *   按 path occurrence 与 refs 去重；工具图片卡已含非图 refs 时不重复出 chip）；
  * - vessel-block：`vessel-block.ts#parseVesselBlockFence`（块 P1 试点：整条正文
- *   单闭合 fence + table schema，坏 payload / 未闭合一律原文渲染）。
+ *   单闭合 fence + table/code schema（P2 扩），坏 payload / 未闭合一律原文渲染）。
  *
  * **硬约束**（逐字保留既有语义）：
  * - 流式「信封未收全返回 null」：quote / session-ref 的解析器对半截信封返回 null，
