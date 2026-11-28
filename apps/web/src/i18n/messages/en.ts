@@ -1706,6 +1706,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.table.copy': 'Copy table',
   'chat.message.edit': 'Edit',
   'chat.message.retry': 'Retry',
+  // Message quote (q-message-quote): hover action / quote block / composer preview bar.
+  'chat.quote.action': 'Quote',
+  'chat.quote.label': 'Quoted message',
+  'chat.quote.jump': 'Jump to original message',
+  'chat.quote.remove': 'Remove quote',
+  'chat.quote.source.user': 'User',
+  'chat.quote.source.assistant': 'Assistant',
   'chat.message.create.editTitle': 'Edit message',
   'chat.message.create.editBody':
     'Creates a new session from the history before this message and puts the text back in the composer. The current session is kept read-only; history is not deleted.',

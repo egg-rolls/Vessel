@@ -13,6 +13,8 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { isIndexUserMessage } from './conversation-index';
 import { MessageRefs } from './MessageRefs';
+import { QuoteBlock } from './QuoteBlock';
+import { liftQuoteForDisplay } from './quote-ref';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { ToolImageCard } from './ToolImageCard';
 import { isCardInputMessage, type TranscriptItem, toolImageRefsOf } from './transcript-items';
@@ -86,6 +88,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
   onCopy,
   onEdit,
   onRetry,
+  onQuote,
+  onJumpQuote,
+  quoteTargets,
 }: {
   message: Message;
   /** 该消息在  的  里的绝对下标；缺失时不提供撤回。 */
@@ -100,6 +105,12 @@ const TranscriptMessage = memo(function TranscriptMessage({
   onCopy: (text: string) => void;
   onEdit: (keepMessages: number, text: string) => void;
   onRetry: (keepMessages: number, text: string) => void;
+  /** 引用这条消息（q-message-quote）；缺省不渲染「引用」动作。 */
+  onQuote?: (message: Message) => void;
+  /** 引用块点击跳转原消息；缺省引用块纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
+  /** 无 id 信封的定位用历史窗口（allMessages 同一引用，memo 稳定）。 */
+  quoteTargets?: readonly Message[];
 }) {
   if (message.role === 'system') return null;
   if (message.role === 'tool') return null;
@@ -125,6 +136,10 @@ const TranscriptMessage = memo(function TranscriptMessage({
         />
       );
     }
+    // 消息引用（q-message-quote）：正文开头的信封提升成气泡上方的轻量引用块；
+    // 不是信封时 lifted = null，正文原样渲染（零回归）。
+    const lifted = liftQuoteForDisplay(message.content, quoteTargets);
+    const body = lifted !== null ? lifted.body : message.content;
     const actions: MessageAction[] = [];
     // 工具图片注入（media view 等）：结构化图片卡替代「[tool image]…」文本 dump
     // （q-media-image-card）。缩略图 + 元数据 + 投递 chip；原始注记收进卡内折叠区。
@@ -152,14 +167,25 @@ const TranscriptMessage = memo(function TranscriptMessage({
           onSelect: () => onEdit(messageIndex, message.content),
         });
       }
+      if (onQuote !== undefined) {
+        actions.push({
+          id: 'quote',
+          label: t('chat.quote.action'),
+          onSelect: () => onQuote(message),
+        });
+      }
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
+        {/* 引用块在附件 chip 之上：先「回复哪一句」，再「带了什么文件」。 */}
+        {lifted !== null && (
+          <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
+        )}
         {/* 引用（只有路径）在气泡上方一行：不改正文，也不影响 copy / edit。
             0.56：图片引用同时显示投递三态（从事件派生，服务端随历史下发）。 */}
         <MessageRefs refs={message.refs} imageDelivery={message.image_delivery} />
         <div className="msg-bubble">
-          <MessageFold>{message.content}</MessageFold>
+          <MessageFold>{body}</MessageFold>
         </div>
         {hasMeta || actions.length > 0 ? (
           <MessageActions className="justify-end" actions={actions} meta={meta} />
@@ -169,6 +195,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
   }
 
   const calls = message.tool_calls ?? [];
+  // 消息引用（q-message-quote）：AI 回复也可以带信封引用用户消息（双向同形）。
+  const lifted = liftQuoteForDisplay(message.content, quoteTargets);
+  const body = lifted !== null ? lifted.body : message.content;
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
   // q-msg-visibility：思考过程 toggle / minimal 档关闭时不渲（与 live 同一判定）。
   const reasoning = showReasoning ? historyReasoning(message) : undefined;
@@ -183,6 +212,13 @@ const TranscriptMessage = memo(function TranscriptMessage({
       label: t('chat.message.copy'),
       onSelect: () => onCopy(message.content),
     });
+    if (onQuote !== undefined) {
+      actions.push({
+        id: 'quote',
+        label: t('chat.quote.action'),
+        onSelect: () => onQuote(message),
+      });
+    }
   }
   if (calls.length === 0 && previousUser !== undefined && previousUser.text.trim().length > 0) {
     actions.push({
@@ -204,13 +240,17 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const isRunEnd = calls.length === 0;
   return (
     <div className="msg-assistant group relative max-w-full">
+      {/* 引用块在最前：这条回复「针对哪一句」先于思考与正文。 */}
+      {lifted !== null && (
+        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
+      )}
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。
           `time` = 这条消息的时刻：有思考卡时，这一轮的时间只出现在卡头最右。 */}
       {reasoning !== undefined && (
         <ReasoningBlock text={reasoning} streaming={false} time={message.timestamp} />
       )}
       {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
-      {message.content && <Markdown className="msg-text" text={message.content} />}
+      {body && <Markdown className="msg-text" text={body} />}
       {meta !== undefined || actions.length > 0 ? (
         <MessageActions
           className={isRunEnd ? 'mt-1' : undefined}
@@ -275,6 +315,8 @@ export function Transcript({
   renderItem,
   onEditMessage,
   onRetryMessage,
+  onQuoteMessage,
+  onJumpQuote,
 }: {
   items: readonly TranscriptItem[];
   /** 已加载的完整消息窗口（未做可见性过滤），用于回溯窗口外的前一条用户输入。 */
@@ -288,6 +330,10 @@ export function Transcript({
   renderItem: TranscriptItemRenderer;
   onEditMessage: (keepMessages: number, text: string) => void;
   onRetryMessage: (keepMessages: number, text: string) => void;
+  /** 引用一条消息（q-message-quote）；缺省不渲染「引用」动作。 */
+  onQuoteMessage?: (message: Message) => void;
+  /** 引用块点击跳转原消息（data-quote-anchor）；缺省引用块纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   const copy = useMessageCopy();
   // 每条消息都要知道自己在完整窗口里的绝对下标；一次建表，避免每渲染 O(n) 查找
@@ -350,6 +396,9 @@ export function Transcript({
           key={item.key}
           className="transcript-row"
           data-index-entry-key={isIndexUserMessage(message) ? item.key : undefined}
+          // data-quote-anchor：引用块跳转锚点（q-message-quote）。与索引锚点不同：
+          // 所有带稳定身份的消息都挂（AI 回复也可被引用），按 message_id 定位。
+          data-quote-anchor={message.message_id}
         >
           <TranscriptMessage
             message={message}
@@ -361,6 +410,9 @@ export function Transcript({
             onCopy={copy}
             onEdit={onEditMessage}
             onRetry={onRetryMessage}
+            onQuote={onQuoteMessage}
+            onJumpQuote={onJumpQuote}
+            quoteTargets={allMessages}
           />
         </div>,
       );
