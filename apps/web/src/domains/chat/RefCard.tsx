@@ -16,21 +16,19 @@
  *
  * `RefCardRow` 是共享的「ICON 槽 + 一行文字槽」行（ToolImageCard 的图条目
  * 收敛到同一行形）；`RefCard` = CardShell + RefCardRow + Lightbox 接线。
+ * 取值 / 点击逻辑体在 useRefPreview（与 InlineRefChip 共享，不重写）。
  * 形态照 FileRefLinkCard（单 button 行），表面统一 CardShell —— 插件 bundle
  * 零改动。
  */
-import { type ReactNode, useContext, useState } from 'react';
-import { CardShell, useMessageCopy } from '../../components/ui';
-import { ConnectionContext } from '../../gateway/connection-context';
+import type { ReactNode } from 'react';
+import { CardShell } from '../../components/ui';
 import type { MessageRefKind } from '../../gateway/types';
 import { t } from '../../i18n';
-import { useSessionStore } from '../../stores/sessionStore';
-import { openAttachmentPreview } from './attachment-lightbox';
 import type { FileTokenCard } from './file-token';
-import { isPdfPath, refKindForPath } from './file-token';
-import { ImageLightbox, useAttachmentPreview, useImageBlob } from './image-preview';
-import { deliveryClass, imageDeliveryLabel, refDisplayName } from './MessageRefs';
+import { ImageLightbox } from './image-preview';
+import { deliveryClass } from './MessageRefs';
 import { RefIcon } from './RefIcon';
+import { useRefPreview } from './use-ref-preview';
 
 /**
  * 共享行：左 ICON 槽（缩略图 / 加载骨架 / 种类图标）+ 右一行文件名 + 尾部
@@ -84,53 +82,8 @@ export function RefCardRow({
 }
 
 export function RefCard({ card }: { card: FileTokenCard }) {
-  const kind = card.ref?.kind ?? refKindForPath(card.path);
-  const name = card.ref !== undefined ? refDisplayName(card.ref) : card.name;
-  // 图所属会话 = 当前转录的 detail（images.blob 可见性闸；与 ToolImageCard 同源）。
-  const sessionId = useSessionStore((state) => state.detailId) ?? undefined;
-  // 有 sha256（匹配到结构化 ref）走内容寻址；否则 path 寻址预览（只对图片发 RPC）。
-  const sha256 = kind === 'image' ? card.ref?.sha256 : undefined;
-  const blob = useImageBlob(sha256, sessionId);
-  const pathPreview = useAttachmentPreview(card.path, kind === 'image' && sha256 === undefined);
-  const [lightbox, setLightbox] = useState(false);
-  const copyPath = useMessageCopy(t('chat.refCard.pathCopied'));
-  // PDF（q-pdf-preview-channel）：点击才取字节（无缩略图可画，不预取）；
-  // 走与插件 openPreview 同一共享接缝，弹窗 = App 根单例 PdfLightbox。
-  const connection = useContext(ConnectionContext);
-  const client = connection?.client;
-  const isPdf = kind !== 'image' && isPdfPath(card.path);
-  const [pdfLoading, setPdfLoading] = useState(false);
-  const [pdfExpired, setPdfExpired] = useState(false);
-
-  const url = sha256 !== undefined ? blob.url : pathPreview.url;
-  const loading =
-    (sha256 !== undefined ? blob.status === 'loading' : pathPreview.status === 'loading') ||
-    pdfLoading;
-  const expired = (sha256 === undefined && pathPreview.status === 'gone') || pdfExpired;
-  const staging = sha256 === undefined && pathPreview.staging === true;
-  const deliveryText = card.delivery !== undefined ? imageDeliveryLabel(card.delivery) : undefined;
-
-  const onClick = () => {
-    if (url !== undefined) {
-      setLightbox(true);
-      return;
-    }
-    if (isPdf && client !== undefined && !pdfLoading && !pdfExpired) {
-      setPdfLoading(true);
-      void openAttachmentPreview(client, card.path)
-        .catch((error: unknown) => {
-          // gone ⇒ 过期态；其余不可用（denied / too_large / 旧 gateway）⇒
-          // 回落既有复制路径契约（诚实降级，绝不导航）。
-          if (error instanceof Error && error.message.endsWith(': gone')) setPdfExpired(true);
-          else copyPath(card.path);
-        })
-        .finally(() => {
-          setPdfLoading(false);
-        });
-      return;
-    }
-    copyPath(card.path);
-  };
+  const preview = useRefPreview(card);
+  const { kind, name, url, loading, expired, staging, deliveryText, isPdf, onClick } = preview;
 
   return (
     <CardShell className="ref-card" ariaLabel={name}>
@@ -164,8 +117,8 @@ export function RefCard({ card }: { card: FileTokenCard }) {
           </>
         }
       />
-      {lightbox && url !== undefined && (
-        <ImageLightbox url={url} name={name} onClose={() => setLightbox(false)} />
+      {preview.lightbox && url !== undefined && (
+        <ImageLightbox url={url} name={name} onClose={preview.closeLightbox} />
       )}
     </CardShell>
   );

@@ -94,31 +94,43 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
   notice 不重新渲染 / 进程内签名去重）的兼容口径——历史消息里 zh/en 两种拼法
   逐字节保留，解析侧双认，零回填。
 
-### 3.2 用户正文 vessel-ref token lift（q-block-cardshell-unify 决策记录）
+### 3.2 用户正文 vessel-ref token 内联 chip（图片内嵌气泡精炼改判）
+
+> 改判（2026-02，设计稿评审 PASS + 三裁示）：用户气泡 = **纯文本 + 内联 chip
+> 轻量混排，不经 Markdown 解释**（ADR-061 纯文本精神不变：人手星号 / 井号
+> 逐字保留）。q-block-cardshell-unify 的「token 剥出正文成块区卡」退役。
 
 - **canonical 形状唯一**：`[name](<vessel-ref:path>)`（尖括号目标形，与
   RichComposer `buildAtomicToken` / 插件 drop-handler 同形）。只认完整形状：
   半截 token 正则不命中 ⇒ 原文保留（流式逐字不闪，与信封 null 语义同构）。
-- **收进 file lift（order 50）**，不另立 type：单块契约保持（一个 file 块
-  payload = `tokens[]` + 剩余 `refs` + 重排后 `imageDelivery`）。`role:user`
-  only —— 助手正文的 vessel-ref 链接仍走 Markdown link-enhancers 内联卡
-  （用户气泡正文是纯文本渲染，不经 Markdown，两侧零双出）。
+- **token 留 body 原位**：`scanFileTokens` 只扫不剥；file lift（order 50）仍做
+  occurrence 匹配，但结果经 `liftBlocks().inline` 分流，消费点喂 `InlineText`
+  在**气泡内**渲染（token 原位 chip + 剩余 refs 尾部 chip 行，裁示①）。
+  file 块不进块区（FileBlockView = null 视）。`role:user` only。
+- **InlineText 零第二解析器**：分段 = RichComposer `segmentByKnownSchemes`
+  （composer 同一核心）；scheme 集 = 宿主 vessel-ref ∪ 已注册 atomicSchemes ∪
+  link-enhancers。文本段 pre-wrap 原样；vessel-ref → 宿主原生 `InlineRefChip`；
+  其他 scheme → 插件 link 卡，未命中 → 原文。
 - **去重镜像 composer**（`refsToAttachmentsFiltered` 同一口径）：token
   occurrence 按 path 计数消费结构化 ref（先到先配）——被消费的 ref 不再出
-  chip（卡即其视图，继承 sha256 / 权威 kind / 投递状态），剩余 refs 照旧
-  chip。每个 ref occurrence 恰好渲染一次（卡或 chip）。投递状态按**完整
-  refs** 的 image 同序消费后分流（卡 / chip 各得其所）。
-- **剥正文**：token 就地移除；整行只有 token 的行整行去掉（不留空行）；
-  行内其余文字逐字节保留。正文全被消费时消费点不留空气泡。历史只读：
-  只解析投影，不回填不改写 `Message.content`（复制 / 编辑仍拿原文）。
-- **统一视觉（用户新 UI 方向③）**：静态文件卡 = CardShell + `RefCardRow`
-  （左 ICON 槽 [缩略图 / 骨架 / RefIcon] + 右一行文件名 + 尾部徽标 / 投递
-  chip）。ToolImageCard 图条目收敛同一行形（尺寸 / 字节收 hover 元信息）。
-  取值两路不合并（§2.6 设计稿裁定）：匹配 ref → `useImageBlob`（sha256 +
-  会话闸）；无 ref → `useAttachmentPreview`（既有 `attachments.preview`，
-  path 寻址 + 过期探针）。点击：有字节 → ImageLightbox；无字节 → 复制路径
-  （FileRefLinkCard 同语义，绝不导航；宿主无 PDF 字节预览通道，非图一律
-  图标卡）。插件 bundle 零改动。
+  chip（chip 即其视图，继承 sha256 / 权威 kind / 投递状态），剩余 refs 进气泡
+  尾部 chip 行。每个 ref occurrence 恰好渲染一次。投递状态按**完整 refs** 的
+  image 同序消费后分流。空气泡判据 = body 非空 ∨ 有剩余 refs。
+- **助手 vessel-ref = 宿主原生接管**（裁示③）：Markdown `LinkInline` 先查宿主
+  原生渲染器（`registerHostLinkEnhancer`）再查插件 ⇒ 插件禁用不露原文，
+  插件 bundle 零改动。形态与用户侧 chip 同形；点击有字节 → 同形大图
+  （ImageLightbox 带路径行 + 复制），无字节 → 复制路径（FileRefLinkCard
+  点击复制升级为可见性对等）。
+- **取值两路不合并**（§2.6 设计稿裁定）：匹配 ref → `useImageBlob`（sha256 +
+  会话闸，LRU 缓存）；无 ref → `useAttachmentPreview`（`attachments.preview`，
+  path 寻址 + 过期探针，经 attachment-preview-cache 去重）。**承重验收点**：
+  chip 视口懒加载（IntersectionObserver，入视口才探预览）+ 同 path 缓存 /
+  inflight 去重，防长历史多图翻页 RPC 风暴。非图一律图标 chip（宿主无 PDF
+  字节预览通道）。历史只读：只解析投影，不回填不改写 `Message.content`
+  （复制 / 编辑 / quote 仍拿原文逐字节）。
+- **[tool image] 注记保留折叠**（裁示②）：ToolImageCard 图条目换 InlineRefChip
+  同形（字节 meta 收 hover），注记原文收卡内折叠区；零模型侧变化（token 化
+  远期另批）。`toolImageRefsOf` 判定函数与非渲染消费点不动。
 
 ## 4. 双向发送路径
 

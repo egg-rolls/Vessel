@@ -9,15 +9,12 @@
  */
 import { Markdown } from '../../components/Markdown';
 import type { ImageDelivery, MessageRef } from '../../gateway/types';
-import { occurrenceKeys } from '../../text';
 import { type BlockRenderCtx, type LiftedBlock, useBlockType } from './block-registry';
 import { EnvCard } from './EnvCard';
 import type { EnvNoticeCard } from './env-notice';
 import type { FileTokenCard } from './file-token';
-import { MessageRefs } from './MessageRefs';
 import { QuoteBlock } from './QuoteBlock';
 import type { ParsedQuoteEnvelope } from './quote-ref';
-import { RefCard } from './RefCard';
 import { SessionRefBlock } from './SessionRefBlock';
 import type { ParsedSessionRefEnvelope } from './session-ref';
 import { ToolImageCard } from './ToolImageCard';
@@ -38,13 +35,15 @@ export interface ImageBlockPayload {
   ts?: number;
 }
 
-/** file 块 payload = 正文 token 卡 + 剩余结构化 refs chip（occurrence 去重后）。 */
+/** file 块 payload = 内联数据（token 卡 + 剩余 refs，occurrence 去重后）。
+ * 渲染位置在气泡内（liftBlocks 分流到 result.inline → InlineText）；
+ * 块区视图形同虚设（FileBlockView 返回 null）。 */
 export interface FileBlockPayload {
-  /** 未被 token 消费的 refs（chip 线；空数组不渲染）。 */
+  /** 未被 token 消费的 refs（气泡内尾部 chip 行；空数组不渲染）。 */
   refs: readonly MessageRef[];
   imageDelivery?: readonly ImageDelivery[];
-  /** 正文 vessel-ref token 提升出的卡（每 token 一张 RefCard；缺省 = 无 token）。 */
-  tokens?: readonly FileTokenCard[];
+  /** 正文 vessel-ref token 扫出的卡（每 token 一张 chip；缺省 = 无 token）。 */
+  cards?: readonly FileTokenCard[];
 }
 
 /** notice 块 payload = runtimeEnvCard 装配结果 + 消息时刻。 */
@@ -92,20 +91,12 @@ function ToolImageCardView({ payload }: { payload: ImageBlockPayload; render: Bl
 }
 
 /**
- * file 块：token 卡（RefCard，CardShell 统一视觉）在前，剩余 refs chip 在后。
- * key 口径与 MessageRefs 同一份实现（occurrenceKeys：同 path 第几次引用）。
+ * file 块视 = null（图片内嵌气泡精炼 D3）：token chip 在气泡内原位、剩余 refs
+ * 在气泡尾部，全由 InlineText 渲染；liftBlocks 已把 file 块分流到 result.inline，
+ * 正常路径到不了这里 —— 注册表 component 槽保留只为 lift 注册完整性。
  */
-function FileBlockView({ payload }: { payload: FileBlockPayload; render: BlockRenderCtx }) {
-  const tokens = payload.tokens ?? [];
-  const keys = occurrenceKeys(tokens.map((card) => card.path));
-  return (
-    <>
-      {tokens.map((card, index) => (
-        <RefCard key={keys[index] ?? `${card.path}#${index}`} card={card} />
-      ))}
-      <MessageRefs refs={payload.refs} imageDelivery={payload.imageDelivery} />
-    </>
-  );
+function FileBlockView(_props: { payload: FileBlockPayload; render: BlockRenderCtx }) {
+  return null;
 }
 
 function NoticeBlockView({ payload }: { payload: NoticeBlockPayload; render: BlockRenderCtx }) {
