@@ -10,7 +10,7 @@ paths: [packages/serve/src/platform/rpc.ts, src/cli/commands/fleet/stop-command.
 > CLI **直连**平台 `/platform/rpc` 的 `gateway.shutdown`（params `{}` → `{stopping:true}` 只受理），
 > 不经浏览器→node 代理。代理 DENIED 闸门零改动：经代理转发 `gateway.shutdown` 到 node 仍 403；
 > 平台 RPC 绝不透传 node。命令面与本地停止语义见 [GATEWAY §4](GATEWAY.md)；配置键见
-> [CONFIG §2.20.1](CONFIG.md)。
+> [config-gateway](config-gateway.md)。
 
 ## 平台 RPC 六闸（fail-closed，platform/rpc.ts）
 
