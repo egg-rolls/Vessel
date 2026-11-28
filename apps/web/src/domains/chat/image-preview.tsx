@@ -15,6 +15,7 @@ import { ModalShell } from '../../components/Modal';
 import { Icon, useMessageCopy } from '../../components/ui';
 import { ConnectionContext } from '../../gateway/connection-context';
 import { t } from '../../i18n';
+import { attachmentPreview } from './attachment-preview-cache';
 import { imageBlobUrl } from './image-blob-cache';
 
 /** 一张图的预览取值状态（尺寸在解码完成后才有）。 */
@@ -32,10 +33,13 @@ const UNAVAILABLE: ImageBlobState = { status: 'unavailable' };
  * 按 sha256 取预览（缓存命中零 RPC）。无 sha256 / 无会话归属 / 无连接（设计预览 /
  * 未连 gateway）直接 unavailable —— 组件在这些环境里也要能渲染（只少了缩略图）。
  * `sessionId` 过服务端可见性闸（fail-closed，见 node/images.ts）。
+ * `enabled=false`（缺省 true）⇒ 不发 RPC / 不解码，直接 unavailable ——
+ * 内联 chip 的视口懒加载门（进入视口才取字节；既有消费点不传参零回归）。
  */
 export function useImageBlob(
   sha256: string | undefined,
   sessionId: string | undefined,
+  enabled = true,
 ): ImageBlobState {
   const connection = useContext(ConnectionContext);
   const client = connection?.client;
@@ -43,6 +47,7 @@ export function useImageBlob(
 
   useEffect(() => {
     if (
+      !enabled ||
       sha256 === undefined ||
       sha256.length === 0 ||
       sessionId === undefined ||
@@ -77,7 +82,7 @@ export function useImageBlob(
     return () => {
       stale = true;
     };
-  }, [client, sha256, sessionId]);
+  }, [client, enabled, sha256, sessionId]);
 
   return state;
 }
@@ -98,7 +103,9 @@ export interface AttachmentPreviewState {
  * 的卡用 —— 有 ref 时优先走 useImageBlob（内容寻址，缓存命中零 RPC）。
  *
  * `enabled=false` / 无路径 / 无连接 ⇒ 不发 RPC，直接 unavailable（非图片种类
- * 服务端返 not_image，调用方按 kind 门控，不浪费请求）。
+ * 服务端返 not_image，调用方按 kind 门控，不浪费请求）。取值经
+ * attachment-preview-cache（同 path LRU + inflight 去重 + gone 永久缓存）——
+ * 长历史多图翻页 / 多 chip 同 path 不重复 RPC（承重验收点）。
  */
 export function useAttachmentPreview(
   path: string | undefined,
@@ -115,8 +122,7 @@ export function useAttachmentPreview(
     }
     let stale = false;
     setState({ status: 'loading' });
-    void client
-      .previewAttachment(path)
+    void attachmentPreview(client, path)
       .then((result) => {
         if (stale) return;
         if (result.status === 'ok' && result.dataUrl !== undefined) {

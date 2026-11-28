@@ -32,6 +32,33 @@ function notify(): void {
   for (const listener of [...listeners]) listener();
 }
 
+// ── 宿主原生 link 渲染槽（图片内嵌气泡精炼裁示③）─────────────────────────
+// vessel-ref 由宿主原生接管：先查宿主再查插件 ⇒ 插件禁用不露原文，插件
+// bundle 零改动。宿主组件不需要 VesselPluginHost（与插件卡 props 不同形）。
+
+export interface HostLinkProps {
+  href: string;
+  text: string;
+}
+
+const hostEnhancers = new Map<string, ComponentType<HostLinkProps>>();
+
+/** 注册宿主原生 link 渲染器（启动期一次；scheme 驱动，宿主零功能名）。 */
+export function registerHostLinkEnhancer(
+  scheme: string,
+  component: ComponentType<HostLinkProps>,
+): void {
+  hostEnhancers.set(scheme, component);
+  notify();
+}
+
+/** 查 href 命中的宿主原生渲染器（订阅注册变化）；无 ⇒ undefined（再查插件）。 */
+export function useHostLinkEnhancer(href: string): ComponentType<HostLinkProps> | undefined {
+  useSyncExternalStore(subscribe, () => version);
+  const scheme = hrefScheme(href);
+  return scheme === '' ? undefined : hostEnhancers.get(scheme);
+}
+
 export function registerLinkEnhancer(scheme: string, entry: LinkEnhancerEntry): void {
   enhancers.set(scheme, entry);
   notify();
@@ -54,15 +81,20 @@ export function hrefScheme(href: string): string {
   return match?.[1]?.toLowerCase() ?? '';
 }
 
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 /** 查 href 命中的增强器（订阅注册变化）；无 ⇒ undefined（落通用白名单档）。 */
 export function useLinkEnhancer(href: string): LinkEnhancerEntry | undefined {
-  useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => version,
-  );
+  useSyncExternalStore(subscribe, () => version);
   const scheme = hrefScheme(href);
   return scheme === '' ? undefined : enhancers.get(scheme);
+}
+
+/** 已注册增强器 scheme 集（订阅注册变化）：InlineText 分段 scheme 集用。 */
+export function useLinkEnhancerSchemes(): readonly string[] {
+  useSyncExternalStore(subscribe, () => version);
+  return [...enhancers.keys()];
 }

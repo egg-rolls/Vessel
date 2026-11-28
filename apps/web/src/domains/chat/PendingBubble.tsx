@@ -31,6 +31,7 @@
 
 import { t } from '../../i18n';
 import { MessageBlocks } from './block-views';
+import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
 import type { PendingSend } from './pending-sends';
 
@@ -67,8 +68,8 @@ export function PendingBubble({
       ? Math.floor((Date.now() - pending.createdAt) / 60_000)
       : 0;
   // 块提升（块 P0）：发送文本里的信封提升成块，与落盘后的气泡同形（同一管线）。
-  // refs 一并交给管线（q-block-cardshell-unify）：token 卡 + chip 同一份去重。
-  const { blocks, body } = liftBlocks({
+  // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
+  const { blocks, body, inline } = liftBlocks({
     role: 'user',
     content: pending.text,
     ...(pending.refs !== undefined ? { refs: [...pending.refs] } : {}),
@@ -76,7 +77,11 @@ export function PendingBubble({
   return (
     <div className="msg-user msg-pending msg-enter">
       <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      {body.length > 0 && <div className="msg-bubble msg-pending-bubble">{body}</div>}
+      {(body.length > 0 || (inline?.refs.length ?? 0) > 0) && (
+        <div className="msg-bubble msg-pending-bubble">
+          <InlineText text={body} match={inline} />
+        </div>
+      )}
       <div className="msg-pending-meta">
         {failed ? (
           <>
