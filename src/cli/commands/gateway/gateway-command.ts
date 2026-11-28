@@ -78,11 +78,6 @@ import {
   stopSpawnedChildren,
 } from '../../../gateway/node-supervisor';
 import {
-  clearStopNodesMarker,
-  waitForStopNodesDrain,
-  writeStopNodesMarker,
-} from '../../../gateway/stop-nodes-marker';
-import {
   type CommandRunner,
   cleanupGatewayStateEntry,
   collectGatewayState,
@@ -131,6 +126,11 @@ import {
   snapshotActiveRuns,
   waitForProcessExit,
 } from '../../../gateway/stop-drain';
+import {
+  clearStopNodesMarker,
+  waitForStopNodesDrain,
+  writeStopNodesMarker,
+} from '../../../gateway/stop-nodes-marker';
 import { resolveGatewayToken } from '../../../gateway/transport-factory';
 import {
   readWatchdogSnapshot,
