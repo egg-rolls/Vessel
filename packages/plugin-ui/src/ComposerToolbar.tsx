@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type ReactElement, type ReactNode } from 'react';
 import { Button } from './Button';
 import { cn } from './cn';
 import { Select } from './Field';
@@ -45,6 +45,17 @@ export interface ComposerToolbarMenuState {
   onSelect: (value: string) => void;
 }
 
+/**
+ * 动作包装层（additive）：宿主拿到「动作声明 + 默认渲染节点」，返回包好的节点
+ * （典型用法：套宿主自己的共享 Tooltip，获得统一样式 / 定位 / a11y）。
+ * 提供时工具栏**不再渲染内置 `title`**——浏览器默认 tooltip 与宿主悬浮层不叠加。
+ * plugin-ui 是独立发布包，不 import 宿主组件，所以悬浮层只能经这个口子由宿主注入。
+ */
+export type ComposerToolbarActionWrapper = (
+  action: ComposerToolbarAction,
+  node: ReactElement,
+) => ReactElement;
+
 export interface ComposerToolbarProps {
   /** 扩展槽：按给定顺序渲染的按钮；空数组时扩展槽不占位。 */
   actions?: readonly ComposerToolbarAction[];
@@ -61,6 +72,11 @@ export interface ComposerToolbarProps {
   primary: ReactNode;
   /** 工具栏无障碍名称；调用方传已翻译文案。 */
   label?: string;
+  /**
+   * 动作包装层（additive）：缺省 = 现行为（内置 `title` 兜底）；提供时每个动作
+   * 节点交给宿主包装，且不再渲染内置 `title`（见 {@link ComposerToolbarActionWrapper}）。
+   */
+  wrapAction?: ComposerToolbarActionWrapper;
   className?: string;
 }
 
@@ -71,6 +87,7 @@ export function ComposerToolbar({
   meta,
   primary,
   label,
+  wrapAction,
   className,
 }: ComposerToolbarProps) {
   return (
@@ -81,9 +98,9 @@ export function ComposerToolbar({
       className={cn('mt-1.5 flex items-center gap-2', className)}
     >
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
-        {actions.map(renderToolbarAction)}
+        {actions.map((action) => renderToolbarAction(action, wrapAction))}
         {children}
-        {trailingActions.map(renderToolbarAction)}
+        {trailingActions.map((action) => renderToolbarAction(action, wrapAction))}
       </div>
       <div className="flex flex-none items-center gap-2">
         {meta}
@@ -94,17 +111,20 @@ export function ComposerToolbar({
 }
 
 /** actions / trailingActions 共用的渲染器：有菜单走菜单按钮，否则普通按钮。 */
-function renderToolbarAction(action: ComposerToolbarAction) {
-  return action.menu !== undefined ? (
-    <ToolbarMenuButton key={action.id} action={action} />
-  ) : (
+function renderToolbarAction(
+  action: ComposerToolbarAction,
+  wrapAction?: ComposerToolbarActionWrapper,
+) {
+  if (action.menu !== undefined) {
+    return <ToolbarMenuButton key={action.id} action={action} wrapAction={wrapAction} />;
+  }
+  const button = (
     <Button
-      key={action.id}
       type="button"
       variant="plain"
       size="small"
       aria-label={action.label}
-      title={action.label}
+      title={wrapAction === undefined ? action.label : undefined}
       disabled={action.disabled}
       onClick={action.onSelect}
     >
@@ -115,6 +135,10 @@ function renderToolbarAction(action: ComposerToolbarAction) {
       )}
       {action.text ?? action.label}
     </Button>
+  );
+  // key 放在最外层（包装层可能换掉元素类型）；Fragment 不产生额外 DOM。
+  return (
+    <Fragment key={action.id}>{wrapAction === undefined ? button : wrapAction(action, button)}</Fragment>
   );
 }
 
@@ -134,7 +158,13 @@ const TOOLBAR_PILL_CLASS =
  * portal listbox）——与模型选择器同一套弹层交互 / 样式 / 无障碍语义。
  * 工具栏不认识具体插件：档位 / 当前值 / 说明都由宿主经 {@link ComposerToolbarMenuState} 传入。
  */
-function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
+function ToolbarMenuButton({
+  action,
+  wrapAction,
+}: {
+  action: ComposerToolbarAction;
+  wrapAction?: ComposerToolbarActionWrapper;
+}) {
   const menu = action.menu;
   if (menu === undefined) return null;
   // current 缺失（read 未回）或不在档位表（如不支持模型上的会话 override）时合成
@@ -151,11 +181,11 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
           disabled: menu.current === undefined,
         },
       ];
-  return (
+  const select = (
     <Select
       className={TOOLBAR_PILL_CLASS}
       aria-label={action.label}
-      title={action.label}
+      title={wrapAction === undefined ? action.label : undefined}
       disabled={action.disabled}
       value={current}
       popupMinWidth={144}
@@ -170,4 +200,6 @@ function ToolbarMenuButton({ action }: { action: ComposerToolbarAction }) {
       ))}
     </Select>
   );
+  // 包装层直接挂在 Select 上（forwardRef 到触发器 button），不另包 wrapper。
+  return wrapAction === undefined ? select : wrapAction(action, select);
 }
