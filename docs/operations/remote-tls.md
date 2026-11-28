@@ -39,7 +39,7 @@ node:
 - 证书与私钥属部署凭据：不提交仓库，权限至少 `0600`。不做自动轮换 / ACME，过期后连接直接失败。
 - **改证书 / token / 端口必须 restart**：`reload` 会把这些列进 `requires_restart`，不能把 reload
   成功当成新证书已生效（`provider.model` 与 `node.allowed_origins` 才可热应用，见
-  [GATEWAY](GATEWAY.md) / [CONFIG §4.1](CONFIG.md)）。
+  [GATEWAY](GATEWAY.md) / [config-reload](config-reload.md)）。
 
 ## 客户端 CA
 
