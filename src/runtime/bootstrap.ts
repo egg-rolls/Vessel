@@ -146,19 +146,15 @@ import {
   type TraceRecorderFactory,
 } from '../observability/trace-wiring';
 import type { McpControl } from '../plugin/mcp-wiring';
-import {
-  declarativePluginEntries,
-  factoryPluginDisplayEnabled,
-  pluginEntryEnabled,
-  setPluginConfigValue,
-} from '../plugin/plugin-config';
+import { declarativePluginEntries, setPluginConfigValue } from '../plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
 } from '../plugin/plugin-host-assembly';
-import { FACTORY_PLUGINS, PluginLoader } from '../plugin/plugin-loader';
+import { PluginLoader } from '../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
+import { createPluginSurface } from '../plugin/plugin-surface';
 import { startPluginWatch } from '../plugin/plugin-watch';
 import {
   createHttpRpcClient,
@@ -2185,6 +2181,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 解析走共享 resolveKanbanBoardPath（cli 网络面同源）；热应用由 cli applyKanban 原地改。
   const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
 
+  // bootstrap P0（设计稿 §5）：本地面与 cli 网络面共用同一插件读面工厂。
+  // 修复两处缺口：①原手写 plugins() 跳过 child（mode==='child' → continue）但本地面
+  // 没有补 statuses 行 → marketplace/usage 等体验插件整行不可见；②opts 未传
+  // pluginCatalog → serve 兜底 () => [] → 本地 plugins.catalog 恒空。
+  // getConfig 读 liveConfigRef.current：本地读面从启动 config 升级为活配置（与 cli 同源）；
+  // child settings 启动钉死（plugin-host-assembly 本地语义）不在本批动，另议。
+  const pluginSurface = createPluginSurface({
+    loader: bundle.pluginLoader,
+    loadedPlugins: plugins,
+    inProcessRows: inProcessPluginRows,
+    manager: localPluginHostManager,
+    getConfig: () => liveConfigRef.current,
+    startupConfig: bundle.config,
+    surfaces: bundle.pluginSurfaces,
+    pendingInProcessRestart: () => reloadLocalPlugins.pendingInProcessRestart(),
+  });
+
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
@@ -2268,35 +2281,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           tenantId,
         }) as unknown as ConfigSnapshotLike,
     },
-    plugins: () => {
-      // q-plugin-lifecycle §6.2 R1：enabled 用共享判定读 config（覆盖层语义），
-      // 不再硬编码 true —— 显式 disabled 的插件如实显示关。
-      const listed = plugins.map((plugin) => ({
-        name: plugin.name,
-        enabled: pluginEntryEnabled(config.plugins, plugin.name),
-      }));
-      // P1-w2d：已登记 in-process 能力插件补基础行（契约 §1），按 name 去重。
-      const seen = new Set(listed.map((plugin) => plugin.name));
-      for (const row of inProcessPluginRows) {
-        if (!seen.has(row.name)) {
-          listed.push(row);
-          seen.add(row.name);
-        }
-      }
-      // 0.56.1：发现但未装载的插件也补基础行（与 gateway 模式 bundlePluginEntries
-      // 同一口径）：工厂式按实际装配门控标注，其余未装载显示关；child 由宿主 statuses 提供。
-      for (const descriptor of bundle.pluginLoader.list()) {
-        if (seen.has(descriptor.name) || descriptor.mode === 'child') continue;
-        listed.push({
-          name: descriptor.name,
-          enabled:
-            FACTORY_PLUGINS.has(descriptor.name) &&
-            factoryPluginDisplayEnabled(config, descriptor.name),
-        });
-        seen.add(descriptor.name);
-      }
-      return listed;
-    },
+    // bootstrap P0：与 cli 网络面同源（createPluginSurface）——child runtime 行 +
+    // 显式 disabled 补行 + 活配置口径由工厂统一提供；catalog 首次注入本地面。
+    plugins: pluginSurface.entries,
+    pluginCatalog: pluginSurface.catalog,
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     metricsControl: {
       ...(typeof (metrics as unknown as { reset?: unknown })?.reset === 'function'
