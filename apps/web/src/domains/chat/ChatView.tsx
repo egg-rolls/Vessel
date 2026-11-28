@@ -761,6 +761,7 @@ export function ChatView({
             refs={submitApi.refs}
             onRemoveRef={submitApi.removeRef}
             onAddRef={submitApi.addRef}
+            onUpdateRef={submitApi.updateRef}
             client={client}
             contextUsage={transcriptApi.contextUsage}
             memberModel={

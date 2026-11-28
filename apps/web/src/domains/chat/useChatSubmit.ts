@@ -327,6 +327,13 @@ export function useChatSubmit({
     [selectedId],
   );
 
+  /** 回写既有引用的旗标（file-ref-ux：图片卡片 inline 开关；只写 true 键 / false 删键）。 */
+  const updateRef = useCallback(
+    (index: number, patch: { inline?: boolean }): boolean =>
+      useComposerDraftStore.getState().updateRef(chatDraftKey(selectedId), index, patch),
+    [selectedId],
+  );
+
   /**
    * 加一条会话引用（Composer 的 drop 落点）。去重是静默的：同一会话拖两次不增加
    * 信息，不算错误；超上限才给提示。形状校验在 drop 解析侧（parseSessionRefPayload），
@@ -438,6 +445,8 @@ export function useChatSubmit({
     /** 加 / 删一条引用（加的时候只拦形状，边界由 `runs.start` 闸门判）。 */
     addRef,
     removeRef,
+    /** 回写既有引用旗标（图片卡片 inline 开关；下标越界返回 false）。 */
+    updateRef,
     /** 待发送的会话引用（拖拽会话卡产生；按会话键存，与草稿同族）。 */
     sessionRefs,
     /** 加 / 删一条会话引用（加的时候去重 + 条数上限）。 */

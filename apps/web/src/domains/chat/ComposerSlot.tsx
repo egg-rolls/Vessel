@@ -65,6 +65,7 @@ export function ComposerSlot({
   refs,
   onRemoveRef,
   onAddRef,
+  onUpdateRef,
   client,
   contextUsage,
   memberModel,
@@ -102,6 +103,8 @@ export function ComposerSlot({
   onRemoveRef?: (index: number) => void;
   /** 加一条引用（现有 addRef）：工具栏「引用文件」入口用；缺省时不渲染该入口。 */
   onAddRef?: (ref: MessageRef) => boolean;
+  /** 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关）；透传给 Composer。 */
+  onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
   /** 目录浏览数据源（attachments.list）：与 onAddRef 一起决定是否出工具入口。 */
   client?: AttachBrowseClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
@@ -180,6 +183,7 @@ export function ComposerSlot({
         refs={refs}
         onRemoveRef={onRemoveRef}
         onAddRef={onAddRef}
+        onUpdateRef={onUpdateRef}
         client={client}
         contextUsage={contextUsage}
         memberModel={memberModel}

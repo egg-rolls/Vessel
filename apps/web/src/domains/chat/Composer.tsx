@@ -56,6 +56,7 @@ export function Composer({
   refs,
   onRemoveRef,
   onAddRef,
+  onUpdateRef,
   client,
   contextUsage,
   memberModel,
@@ -94,6 +95,11 @@ export function Composer({
    * 缺省时不渲染「引用文件」入口。
    */
   onAddRef?: (ref: MessageRef) => boolean;
+  /**
+   * 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关）。缺省时端口
+   * `updateRef` 返回 false（插件侧能力探测后不渲染开关）。
+   */
+  onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
   /**
    * 「引用文件」弹层的目录浏览数据源（节点侧 `attachments.list`）。
    * 与 `onAddRef` 一起缺一不可；两者都在才出工具栏按钮。
@@ -147,6 +153,7 @@ export function Composer({
     refs: refs ?? [],
     onAddRef,
     onRemoveRef,
+    onUpdateRef,
   });
 
   /** OS 文件（drop / 截图粘贴）→ 插件 drop 处理器（上传暂存 + 指针位置插卡）。 */

@@ -186,6 +186,8 @@ export interface TeamChatMainProps {
   refs: readonly MessageRef[];
   onRemoveRef: (index: number) => void;
   onAddRef: (ref: MessageRef) => boolean;
+  /** 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关）；透传给 TeamComposer。 */
+  onUpdateRef: (index: number, patch: { inline?: boolean }) => boolean;
   /** 引用文件弹层的目录浏览数据源（本 Team 所在节点；与 `onAddRef` 一起决定是否出工具栏入口）。 */
   client: TeamChatClient;
   onSend: () => void;
@@ -237,6 +239,7 @@ export function TeamChatMain({
   refs,
   onRemoveRef,
   onAddRef,
+  onUpdateRef,
   client,
   onSend,
   sending,
@@ -404,6 +407,7 @@ export function TeamChatMain({
           refs={refs}
           onRemoveRef={onRemoveRef}
           onAddRef={onAddRef}
+          onUpdateRef={onUpdateRef}
           client={client}
           onSend={onSend}
           sending={sending}

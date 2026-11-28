@@ -227,6 +227,9 @@ function parseRefs(value: unknown): MessageRef[] {
     if (typeof entry.bytes === 'number' && Number.isFinite(entry.bytes) && entry.bytes >= 0) {
       ref.bytes = Math.floor(entry.bytes);
     }
+    // inline 旗标只认 true 键（P1a 同口径）：草稿恢复保住卡片开关状态；
+    // 旧草稿无此键 ⇒ 缺省关。sha256 的恢复丢弃是独立既有缺口，不在此扩面。
+    if (entry.inline === true) ref.inline = true;
     refs.push(ref);
   }
   return refs;
@@ -416,6 +419,12 @@ interface ComposerDraftState {
   addRef: (key: string, ref: MessageRef) => boolean;
   /** 删一条引用（下标即 refs 里的位置）。 */
   removeRef: (key: string, index: number) => void;
+  /**
+   * 按下标回写既有引用的旗标（file-ref-ux M2；不动顺序 / token 锚点）：
+   * `inline: true` 写键，`inline: false` 删键（≡缺省，P1a 同口径）。
+   * 返回 false = 下标越界。
+   */
+  updateRef: (key: string, index: number, patch: { inline?: boolean }) => boolean;
   /** 写待发送会话引用（整组替换；顺序即发送顺序）。 */
   setSessionRefs: (key: string, refs: readonly ComposerSessionRef[]) => void;
   /**
@@ -546,6 +555,32 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
     if (drafts[key] === undefined) forget(key);
     else markTouched(key);
     schedulePersist();
+  },
+
+  updateRef: (key, index, patch) => {
+    ensureHydrated();
+    const current = get().drafts[key];
+    if (current === undefined) return false;
+    const target = current.refs[index];
+    if (target === undefined) return false;
+    if (patch.inline === undefined) return true;
+    // 只写 true 键 / false 删键（≡缺省）：与 readRefsParam / normalizeRefs 同口径。
+    const next: MessageRef = { ...target };
+    if (patch.inline === true) next.inline = true;
+    else delete next.inline;
+    if (next.inline === target.inline) return true;
+    const refs = current.refs.map((ref, position) => (position === index ? next : ref));
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs,
+      sessionRefs: current.sessionRefs,
+      quote: current.quote,
+    });
+    set({ drafts });
+    markTouched(key);
+    schedulePersist();
+    return true;
   },
 
   setSessionRefs: (key, refs) => {
