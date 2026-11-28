@@ -2353,8 +2353,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.inventory.single': '{count} single-consumer',
   'designLab.inventory.zero': '{count} zero-consumer',
   'designLab.inventory.noPreview': '{count} missing preview',
-  'designLab.inventory.purpose.AutoGrowTextarea':
-    'Auto-growing textarea (superseded by RichComposer)',
   'designLab.inventory.purpose.Badge': 'Status / label badge (semantic tones)',
   'designLab.inventory.purpose.Button': 'Unified button (variant / size)',
   'designLab.inventory.purpose.CardShell': 'Card shell (border / surface / radius)',

@@ -20,23 +20,14 @@ export interface InventoryEntry {
   previews: string[];
 }
 
-export const INVENTORY_COMMIT = '1c531a00';
+export const INVENTORY_COMMIT = '6f98ae73';
 
 export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
-  {
-    module: 'AutoGrowTextarea',
-    kind: 'component',
-    reexport: false,
-    consumerCount: 0,
-    consumers: [],
-    uiConsumers: [],
-    previews: [],
-  },
   {
     module: 'Badge',
     kind: 'component',
     reexport: true,
-    consumerCount: 30,
+    consumerCount: 29,
     consumers: [
       'domains/agents/AgentDetailView.tsx',
       'domains/agents/AgentListRow.tsx',
@@ -45,11 +36,11 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/design/ComponentInventorySection.tsx',
       'domains/design/PreviewSection.tsx',
       'domains/design/TokenSection.tsx',
-      'domains/inbox/AsyncJobCard.tsx',
       'domains/inbox/InboxRow.tsx',
       'domains/integrations/McpPanel.tsx',
       'domains/integrations/ToolsPanel.tsx',
       'domains/kanban/KanbanCard.tsx',
+      'domains/observe/DiagnosticsView.tsx',
     ],
     uiConsumers: [],
     previews: [
@@ -64,7 +55,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     module: 'Button',
     kind: 'component',
     reexport: true,
-    consumerCount: 70,
+    consumerCount: 69,
     consumers: [
       'app/LanguageToggle.tsx',
       'app/ShellOverlays.tsx',
@@ -251,7 +242,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     module: 'Icon',
     kind: 'component',
     reexport: false,
-    consumerCount: 13,
+    consumerCount: 12,
     consumers: [
       'auth/LoginPage.tsx',
       'domains/chat/ComposerAttach.tsx',
@@ -259,12 +250,12 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/MemberModelSwitch.tsx',
       'domains/chat/PendingStrip.tsx',
       'domains/chat/QuoteBlock.tsx',
-      'domains/chat/ReasoningBlock.tsx',
       'domains/chat/SessionList.tsx',
       'domains/chat/SessionRefBlock.tsx',
       'domains/chat/StreamCard.tsx',
       'domains/chat/StreamItems.tsx',
       'domains/chat/image-preview.tsx',
+      'domains/team/BodyHistory.tsx',
     ],
     uiConsumers: ['components/ui/MessageActions.tsx'],
     previews: ['domains/chat/composer-controls.preview.tsx'],
@@ -293,15 +284,14 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     module: 'MessageActions',
     kind: 'component',
     reexport: false,
-    consumerCount: 8,
+    consumerCount: 7,
     consumers: [
       'domains/chat/ReasoningBlock.tsx',
-      'domains/chat/RefCard.tsx',
       'domains/chat/StreamItems.tsx',
-      'domains/chat/ToolImageCard.tsx',
       'domains/chat/Transcript.tsx',
       'domains/chat/TranscriptWindow.tsx',
       'domains/chat/image-preview.tsx',
+      'domains/chat/use-ref-preview.ts',
       'domains/team/TeamMessageRow.tsx',
     ],
     uiConsumers: [],
@@ -324,8 +314,12 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     module: 'RichComposer',
     kind: 'component',
     reexport: false,
-    consumerCount: 2,
-    consumers: ['domains/chat/Composer.tsx', 'domains/team/TeamComposer.tsx'],
+    consumerCount: 3,
+    consumers: [
+      'domains/chat/Composer.tsx',
+      'domains/chat/InlineText.tsx',
+      'domains/team/TeamComposer.tsx',
+    ],
     uiConsumers: [],
     previews: [],
   },
