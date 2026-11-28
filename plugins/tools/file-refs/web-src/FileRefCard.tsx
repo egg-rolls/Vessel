@@ -1,6 +1,11 @@
 /**
- * refs 槽卡片（输入框内原子节点）：缩略图 / 种类 ICON + 文件名 + 「临时」徽标 +
- * 过期态 + ×删除。hover 显全路径。数据源：port.preview（过期探针 + 缩略图字节）。
+ * refs 槽卡片（输入框内原子节点）：行内 text-height chip —— 1em 缩略图 /
+ * 种类 ICON + 文件名 + 「临时」徽标 + 过期态 + ×删除。hover 显全路径。
+ * 数据源：port.preview（过期探针 + 缩略图字节）。
+ *
+ * q-image-chip-inline：图片 kind 落定态 chip 体 = 真 button（原生键盘可达），
+ * 点击经 host.attachments.openPreview 开宿主标准弹窗（既有 ImageLightbox：
+ * 大图 + 完整路径 + 复制 + 临时态）。× 是兄弟 button，不嵌套、不冒泡误触。
  */
 
 import type { ComposerCardProps, ComposerPreviewResult } from '@vessel-agent/plugin-sdk';
@@ -66,11 +71,18 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
     onRemove();
   };
 
+  // 宿主标准预览弹窗（大图 + 路径 + 复制）；字节不可用 ⇒ 插件侧 toast。
+  const openPreview = () => {
+    void host.attachments.openPreview(target).catch(() => {
+      host.toast({ kind: 'error', text: t('card.preview-failed') });
+    });
+  };
+
   if (isTransient && transient?.status === 'error') {
     return (
       <span className="file-ref-card is-error" title={transient.error ?? t('card.failed')}>
         <span className="file-ref-icon">
-          <RefIcon kind={kind} />
+          <RefIcon kind={kind} size={12} />
         </span>
         <span className="file-ref-name">{displayName}</span>
         <span className="file-ref-badge is-expired">{t('card.failed')}</span>
@@ -95,7 +107,7 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
     return (
       <span className="file-ref-card is-uploading" title={t('card.uploading')}>
         <span className="file-ref-icon is-spin" aria-hidden="true">
-          <RefIcon kind={kind} />
+          <RefIcon kind={kind} size={12} />
         </span>
         <span className="file-ref-name">{displayName}</span>
         <span className="file-ref-badge">{t('card.uploading')}</span>
@@ -103,17 +115,13 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
     );
   }
 
-  return (
-    <span
-      className={`file-ref-card${expired ? ' is-expired' : ''}`}
-      title={target}
-      data-kind={kind}
-    >
+  const body = (
+    <>
       {thumb !== undefined && !expired ? (
-        <img className="file-ref-thumb" src={thumb} alt="" width={36} height={36} />
+        <img className="file-ref-thumb" src={thumb} alt="" width={12} height={12} />
       ) : (
         <span className="file-ref-icon">
-          <RefIcon kind={kind} />
+          <RefIcon kind={kind} size={12} />
         </span>
       )}
       <span className="file-ref-name">{displayName}</span>
@@ -121,6 +129,27 @@ export function FileRefCard({ name, target, data, onRemove, port, host }: Compos
         <span className="file-ref-badge is-expired">{t('card.expired')}</span>
       ) : (
         staging && <span className="file-ref-badge is-temp">{t('card.temporary')}</span>
+      )}
+    </>
+  );
+
+  return (
+    <span
+      className={`file-ref-card${expired ? ' is-expired' : ''}`}
+      title={target}
+      data-kind={kind}
+    >
+      {kind === 'image' && !expired ? (
+        <button
+          type="button"
+          className="file-ref-body"
+          onClick={openPreview}
+          aria-label={t('card.preview', { name: displayName })}
+        >
+          {body}
+        </button>
+      ) : (
+        body
       )}
       <button
         type="button"
