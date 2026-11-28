@@ -18,9 +18,14 @@ import {
   explainConfigKey,
   getUserConfigPath,
   loadConfig,
+  PINNED_REQUEST_SCOPES,
   redactSourcePaths,
 } from '../../../packages/config/src/index';
-import { loggingEnvOverrides } from '../../../packages/core/src/index';
+import {
+  ENV_CADENCE_VALUES,
+  ENV_CHANNEL_VALUES,
+  loggingEnvOverrides,
+} from '../../../packages/core/src/index';
 import { formatConfigError, formatConfigErrors } from '../../config/config-error-format';
 import {
   isSettableConfigKey,
@@ -309,6 +314,34 @@ export async function configSetCommand(
       return { exitCode: 2, stdout: '', stderr: t('config.set.invalidNudge') };
     }
     parsed = value.trim();
+  } else if (key === 'envInjection.default' || key.startsWith('envInjection.scopes.')) {
+    // q-env-config-set：节奏轴（与 serve config.set / config validator 同口径）。
+    // request|run|off；pinned（trim/model）拒 request（前缀不变量），off 允许。
+    const scope = key.startsWith('envInjection.scopes.')
+      ? key.slice('envInjection.scopes.'.length)
+      : undefined;
+    const pinned =
+      scope !== undefined && (PINNED_REQUEST_SCOPES as readonly string[]).includes(scope);
+    const allowed = pinned ? ['run', 'off'] : [...ENV_CADENCE_VALUES];
+    if (!allowed.includes(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidEnum', { key, allowed: allowed.join(' | ') }),
+      };
+    }
+  } else if (key.startsWith('envInjection.channels.')) {
+    // q-env-config-set：通道轴（model+ui|ui-only）。
+    if (!(ENV_CHANNEL_VALUES as readonly string[]).includes(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidEnum', {
+          key,
+          allowed: ENV_CHANNEL_VALUES.join(' | '),
+        }),
+      };
+    }
   } else if (LOG_ENUM_VALUES[key] !== undefined) {
     const allowed = LOG_ENUM_VALUES[key] ?? [];
     if (!allowed.includes(value)) {
