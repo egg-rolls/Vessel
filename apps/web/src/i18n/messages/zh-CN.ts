@@ -2231,7 +2231,6 @@ export const messages = {
   'designLab.inventory.single': '单消费方 {count}',
   'designLab.inventory.zero': '零消费方 {count}',
   'designLab.inventory.noPreview': '缺预览 {count}',
-  'designLab.inventory.purpose.AutoGrowTextarea': '自动增高文本域（已被 RichComposer 取代）',
   'designLab.inventory.purpose.Badge': '状态 / 标签徽标（tone 语义色）',
   'designLab.inventory.purpose.Button': '统一按钮（variant / size）',
   'designLab.inventory.purpose.CardShell': '卡片外壳（统一边框 / 背景 / 圆角）',
