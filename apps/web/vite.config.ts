@@ -318,6 +318,12 @@ export default defineConfig({
         find: '@vessel-agent/agent/address-display',
         replacement: resolve(__dirname, '../../packages/agent/src/address-display.ts'),
       },
+      // R-10 单源：env 节奏表叶模块（运行时零 import，type only）按源码消费，
+      // 与 tsconfig paths 同一映射。只开放这一个子路径 —— config 包根不进 web bundle。
+      {
+        find: '@vessel-agent/config/env-injection',
+        replacement: resolve(__dirname, '../../packages/config/src/env-injection.ts'),
+      },
     ],
   },
   plugins: [react(), tailwindcss(), writeBuildStamp(), vesselPluginEmbed()],

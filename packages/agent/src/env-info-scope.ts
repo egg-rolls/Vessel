@@ -11,10 +11,11 @@
  *   就会各自拼出不同的首词 —— Web 的 scope 判定按**行首 token** 做，一个词对不上，那条卡
  *   静默掉回兜底的「上下文」，正文看着正常、标签是错的（最难发现的那种坏）。
  * - Web 侧（`apps/web/src/domains/chat/env-notice.ts`）必须认得这里的每一个词。两边分属
- *   packages 与应用层，不能互相 import，词表对拍为**人工核对**（旧 C3/parity 脚本已按宪法
- *   删除，不重建）：加词时同步 Web `ENV_NOTICE_SCOPES`、i18n 标签（`chat.env.scope.*`）、
- *   config `DEFAULT_ENV_CADENCE` 与插件字面量副本。生产者加了词而 Web 没加，卡头会静默
- *   退化成「上下文」。
+ *   packages 与应用层，不能互相 import；R-10 单源后 Web 两处词表（env-notice /
+ *   settings-registry）均派生 config `DEFAULT_ENV_CADENCE`，自动跟随。加词时同步
+ *   agent 词表（本数组）、config `DEFAULT_ENV_CADENCE`、i18n 标签（`chat.env.scope.*`）
+ *   与插件字面量副本（旧 C3/parity 脚本已按宪法删除，不重建）。生产者加了词而
+ *   config 表没加，卡头会静默退化成「上下文」。
  * - 还有一类生产者在**插件包**里（`plugins/context/doc-subscription`）：插件依赖 core、
  *   不依赖本包（依赖方向反了），因此它的首词只能是**字面量副本**
  *   （`plugins/context/doc-subscription/src/notice.ts`）。那份副本同样在人工对拍范围内。

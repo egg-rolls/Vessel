@@ -9,6 +9,10 @@
  * 核心键白名单不含插件 id 段，核心与插件键永不冲突。
  */
 
+// R-10 单源：env 词表 / 默认节奏 / pinned 表按源码消费 config 叶模块（type-only import
+// 运行时零依赖；先例 @vessel-agent/agent/address-display 的 paths + vite alias 映射）。
+import { DEFAULT_ENV_CADENCE, PINNED_REQUEST_SCOPES } from '@vessel-agent/config/env-injection';
+
 export type SettingScope = 'user' | 'project' | 'local';
 export type SettingType = 'boolean' | 'enum' | 'string' | 'number' | 'object' | 'array' | 'view';
 export type SettingSource = 'core' | `plugin:${string}`;
@@ -385,36 +389,15 @@ function snakeCase(id: string): string {
 /**
  * q-env-granularity（P2 §4.3，D5/D6/D7）：环境信息粒度设置（runtime 分类 envNotice 子分组）。
  * 纯数据生成：全局 default 行 + 每 scope delivery 行（pinned trim/model 只 run/off）+
- * 每 scope channel 行（全 16 词）。scope 名复用 chat.env.scope.*；选项/后果文案 settings.env.*。
- * default/fallback 取内置默认表（与 config DEFAULT_ENV_CADENCE 人工对拍：files/trim=run，其余=request）。
+ * 每 scope channel 行（全词表）。scope 名复用 chat.env.scope.*；选项/后果文案 settings.env.*。
+ * R-10 单源：词表与 default/fallback 直接派生 config `DEFAULT_ENV_CADENCE`
+ * （17 词含 health=run），不再有字面量副本，漂移结构上不可能。
  */
-const ENV_NOTICE_SCOPES = [
-  'restart',
-  'identity',
-  'fields',
-  'model',
-  'tools',
-  'lock',
-  'conflict',
-  'files',
-  'context',
-  'trim',
-  'pii',
-  'config',
-  'permission',
-  'mcp',
-  'update',
-  'peer',
-] as const;
+const ENV_NOTICE_SCOPES: readonly string[] = Object.keys(DEFAULT_ENV_CADENCE);
 
-/** 内置默认节奏表（字面量副本，与 packages/config DEFAULT_ENV_CADENCE 人工对拍）。 */
-const ENV_SCOPE_DEFAULT_CADENCE: Readonly<Record<string, string>> = {
-  files: 'run',
-  trim: 'run',
-};
-
-/** 钉死 run 的 scope（前缀不变量 / EU 生命周期）：UI 只给 run/off，拒 request（D6 允许 off）。 */
-const ENV_PINNED_SCOPES: ReadonlySet<string> = new Set(['trim', 'model']);
+/** 钉死 run 的 scope（前缀不变量 / EU 生命周期）：UI 只给 run/off，拒 request（D6 允许 off）。
+ * R-10 单源：派生 config `PINNED_REQUEST_SCOPES`（与写路径校验同一张表）。 */
+const ENV_PINNED_SCOPES: ReadonlySet<string> = new Set(PINNED_REQUEST_SCOPES);
 
 const ENV_CADENCE_OPTION_LABELS: Readonly<Record<string, string>> = {
   request: 'settings.env.cadence.request',
@@ -448,7 +431,7 @@ function envNoticeSettings(): SettingDef[] {
   ];
   ENV_NOTICE_SCOPES.forEach((scope, index) => {
     const pinned = ENV_PINNED_SCOPES.has(scope);
-    const cadenceDefault = ENV_SCOPE_DEFAULT_CADENCE[scope] ?? 'request';
+    const cadenceDefault = DEFAULT_ENV_CADENCE[scope] ?? 'request';
     const descKey =
       scope === 'files'
         ? 'settings.env.files.desc'
@@ -473,7 +456,7 @@ function envNoticeSettings(): SettingDef[] {
       fallback: cadenceDefault,
       keywords: ['env', '环境', '粒度', 'cadence', scope, 'delivery'],
     });
-    // channel 行（D5 全 16 词）：model+ui / ui-only；scope 名复用 + 通道描述区分。
+    // channel 行（D5 全词表，单源派生）：model+ui / ui-only；scope 名复用 + 通道描述区分。
     defs.push({
       id: `envInjection.channels.${scope}`,
       key: `envInjection.channels.${scope}`,

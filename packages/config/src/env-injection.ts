@@ -7,22 +7,32 @@
  * 游标 / 签名 / 预算）恒开，不在这里。
  *
  * 分层：core 只认识 `EnvCadence` 类型（领域无关）；scope 业务词与默认节奏表在
- * config（本文件）；agent 词表（`ENV_INFO_SCOPES`）与插件字面量副本人工对拍。
+ * config（本文件，**单一事实源**）。config 侧消费点一律派生，漂移结构上不可能：
+ * ui-settings `ENV_GRANULARITY_SCOPES` / `SettableConfigKey`、serve `SETTABLE_KEYS`、
+ * Web `settings-registry` / `env-notice` 词表均 `Object.keys(DEFAULT_ENV_CADENCE)`
+ * （类型层用 `EnvScopeWord`）。agent 词表（`ENV_INFO_SCOPES`，有序子集）与插件
+ * 字面量副本（依赖方向不能 import config）仍人工核对。
  *
  * @module @vessel-agent/config
  */
 
-import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
+// 类型走 core 的零依赖叶导出（./types/env-cadence）：本文件被 apps/web 按源码消费
+// （R-10 单源），包根 / types 桶导出会把 core 运行时图（node 依赖）拖进 web 的 tsc 程序。
+import type { EnvCadence, EnvChannel } from '@vessel-agent/core/types/env-cadence';
 import type { EnvInjectionConfig } from './types.js';
 
 /**
  * 内置默认节奏表（= 今天行为，零回归基线）。
  *
  * env 词（agent `ENV_INFO_SCOPES`）+ bus legacy 词（config/permission/mcp/update/peer，
- * 不在 agent 词表里、历史消息仍在用）。files / trim 默认 run，其余默认 request。
+ * 不在 agent 词表里、历史消息仍在用）。files / trim / health 默认 run，其余默认 request。
  * 缺省配置（无 `env_injection`）时 `resolveEnvCadence` 走本表 ⇒ producer 行为不变。
+ *
+ * 表体先在 `ENV_CADENCE_TABLE` 上 `as const` 固化字面量，再以 `Record<string, EnvCadence>`
+ * 导出（公开形状不变，string 索引消费点零改动）；`EnvScopeWord` 从同一张表派生词联合，
+ * 供 `SettableConfigKey` 等类型层消费点用 —— 值表与词联合共用一个对象，无第二份字面量。
  */
-export const DEFAULT_ENV_CADENCE: Record<string, EnvCadence> = {
+const ENV_CADENCE_TABLE = {
   restart: 'request',
   identity: 'request',
   fields: 'request',
@@ -41,7 +51,13 @@ export const DEFAULT_ENV_CADENCE: Record<string, EnvCadence> = {
   mcp: 'request',
   update: 'request',
   peer: 'request',
-};
+} as const;
+
+/** scope 词联合（类型层单源：与 `DEFAULT_ENV_CADENCE` 派生自同一张表）。 */
+export type EnvScopeWord = keyof typeof ENV_CADENCE_TABLE;
+
+/** 内置默认节奏表（公开形状：string 索引；词表消费点 `Object.keys` 派生）。 */
+export const DEFAULT_ENV_CADENCE: Record<string, EnvCadence> = ENV_CADENCE_TABLE;
 
 /**
  * 钉死为 run 的 scope：配 `request` 由校验**拒绝**（不静默钳制）。

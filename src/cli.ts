@@ -126,6 +126,7 @@ import {
 } from './federation/federation-config';
 import { createFederationPairingPort } from './federation/federation-pairing';
 import { loadFederationPeerSecrets } from './federation/federation-secrets';
+import { findPortHoldersWindows } from './gateway/clean-spawn';
 import {
   renderGatewayBanner,
   renderGatewayBannerOneLine,
@@ -2063,10 +2064,23 @@ async function runWithConfig(result: BootstrapResult) {
       await pluginHostManager?.stopAll();
       pluginHostManager = undefined;
       if (isAddressInUse(error)) {
-        // 端口被外部进程占用：退出 1，且不写 PID 文件（实例锁随 exit 释放）。
+        // R-5②：bind 失败 —— 先 interrupt 已起跑的 run（含启动恢复投递的
+        // continuation run；'shutdown' → interrupted checkpoint 可恢复），再退出。
+        // 否则 drain-to-quiesce 不限时等失败 node 上的 LLM 循环自然跑完
+        // （probe 实测 160-176s 半态），R-3 重试/健康闸无法及时介入。
+        for (const unit of result.executionRuntime.listExecutionUnits()) {
+          if (unit.activeRunSnapshot() !== undefined) unit.interrupt('shutdown');
+        }
+        // R-5③：附 netstat 持有者 pid。Windows 归属可能是已死的创建者 pid
+        // （Bun socket handle 继承陷阱）——提示查活着的后代进程整树清理。
+        const holders = await findPortHoldersWindows(resolved.options.port).catch(() => []);
         console.error(
           `port_in_use: ${resolved.options.hostname}:${resolved.options.port} is already in use. ` +
-            'Stop the other process or choose another --port/--instance.',
+            'Stop the other process or choose another --port/--instance.' +
+            (holders.length > 0
+              ? ` netstat holder pid(s): ${holders.join(', ')}. If a holder pid is dead, the real ` +
+                'holder is a live descendant (inherited socket) — taskkill /T /F the holder tree.'
+              : ''),
         );
         await result.shutdown();
         process.exit(1);

@@ -27,7 +27,7 @@ import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { effectiveNodeToken } from '../node/token-derive';
 import { sanitizeToolOutputEnv } from '../runtime/tool-output-env';
-import { buildDaemonArgv, tailLog } from './daemon';
+import { buildDaemonArgv } from './daemon';
 import { loadNodeRegistry } from './node-registry';
 import {
   type CommandRunner,
@@ -988,6 +988,12 @@ export class NodeSupervisor {
   private readonly watchdogs = new Map<string, NodeWatchdog>();
   /** 0.58：正在「强杀 + 重起」的节点（其 `exited` 回调不许记成崩溃）。 */
   private readonly restarting = new Set<string>();
+  /**
+   * R-5④：本进程 spawn 子进程时的日志字节偏移（pid → offset）。port_in_use
+   * 重试证据扫描**本次启动段**而非尾部 N 行——bind 失败后跟数百行 drain 日志
+   * 会把尾 5 行证据淹没（probe 报告放大因素 3）；段起点精确也排除旧轮残留假阳性。
+   */
+  private readonly spawnLogOffset = new Map<number, number>();
   /** 0.58：已进入关停流程 —— 看门狗**绝不许**在这个窗口里重启任何子进程。 */
   private noRestart = false;
   private readonly superviseConfig: StallWatchdogConfig;
@@ -1356,20 +1362,35 @@ export class NodeSupervisor {
     }
     if (pending.manifestEntry !== undefined) pending.manifestEntry.started_at = record.started_at;
     await this.writeManifest();
+    this.spawnLogOffset.delete(pending.pid);
     this.setState(spec, 'ready', { spawned: true, pid: pending.pid });
     // 0.58：就绪之后才开始探活（启动期的慢不算僵死）。
     this.startWatchdog(spec, pending.pid);
   }
 
   /**
-   * R-3：port_in_use 退避重试的证据判定 —— 子进程已死 **且** 日志尾部（最后 5 行）
-   * 含 `port_in_use`（node 前台 bind 失败的最后输出）。日志是 append 模式，旧轮
-   * 残留行理论上可致假阳性：代价只是对真失败节点多至 3 次有界重 spawn，可接受。
+   * R-3/R-5④：port_in_use 退避重试的证据判定 —— 子进程已死 **且本次启动日志段**
+   * （spawn 时记录的字节偏移之后）含 `port_in_use`。段扫描而非尾 N 行：bind 失败
+   * 后的 drain 日志会淹没尾部证据；段起点精确也排除 append 日志旧轮残留假阳性。
    */
   private async nodeExitedOnPortInUse(spec: LocalNodeSpec, pid: number): Promise<boolean> {
     if (isProcessAlive(pid)) return false;
-    const tail = await tailLog(nodeLogPath(this.options.gatewayDataDir, spec.name), 5);
-    return tail.split(/\r?\n/).some((line) => line.includes('port_in_use'));
+    const logPath = nodeLogPath(this.options.gatewayDataDir, spec.name);
+    try {
+      const handle = await open(logPath, 'r');
+      try {
+        const size = (await handle.stat()).size;
+        const offset = this.spawnLogOffset.get(pid) ?? Math.max(0, size - 4096);
+        const start = Math.min(offset, size);
+        const buffer = new Uint8Array(size - start);
+        await handle.read(buffer, 0, buffer.length, start);
+        return new TextDecoder().decode(buffer).includes('port_in_use');
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+    } catch {
+      return false;
+    }
   }
 
   /** adopt 候选：确认健康后定 `adopted`（manifest 有记录）/ `external`（外部启动）。 */
@@ -1629,6 +1650,8 @@ export class NodeSupervisor {
         }`,
       );
     }
+    // R-5④：spawn 前的日志大小 = 本次启动段起点（append 模式，旧轮内容在其前）。
+    const logOffset = (await handle.stat()).size;
 
     const spawn = this.options.spawn ?? Bun.spawn;
     // T2b：env 卫生 —— 宿主的 VESSEL_TOOL_OUTPUT_DIR / VESSEL_PLUGIN_CONFIG 可能指向
@@ -1679,6 +1702,7 @@ export class NodeSupervisor {
     child.unref?.();
 
     const pid = child.pid;
+    this.spawnLogOffset.set(pid, logOffset);
     // 就绪前只存在于本进程内存（started_at 未知，不能做 §4.7 归属复核）；
     // readiness 成功后才写 manifest，失败由 `abandonSpawned()` 按 pid 终止。
     const manifestEntry: SpawnedChildRecord = {
@@ -1711,6 +1735,7 @@ export class NodeSupervisor {
    */
   private async abandonSpawned(entry: PendingNode, reason: string): Promise<void> {
     const { spec } = entry;
+    this.spawnLogOffset.delete(entry.pid);
     const manifestEntry = entry.manifestEntry;
     const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
     if (record !== null && record.pid === entry.pid && manifestEntry !== undefined) {

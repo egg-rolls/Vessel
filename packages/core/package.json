@@ -13,7 +13,8 @@
     "./provider": "./src/provider/index.ts",
     "./session": "./src/session/index.ts",
     "./transport": "./src/transport/index.ts",
-    "./types": "./src/types/index.ts"
+    "./types": "./src/types/index.ts",
+    "./types/env-cadence": "./src/types/env-cadence.ts"
   },
   "files": [
     "src"
