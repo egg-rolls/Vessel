@@ -19,6 +19,9 @@
  *   明细行（行/字节预算见 notice.ts）；任一 ref 无 text / 锚歧义 / diff 超限 ⇒ 整文件兜底。
  * - 通知写入后推进 `notified_rev`，同一 rev 不再重复通知；全部 ref 未变 ⇒ 只刷新观察值，
  *   notified_rev 不动（下 run 幂等重查）。
+ * - health 源（q-health-subscription，additive）：`source:'health'` 条目读宿主落的
+ *   快照文件（health.ts），签名（reachable/version/started_at/node_id）变化 ⇒ 独立
+ *   `health:` 通知（同一 vessel:notice 通道）；节奏 envGranularity.health 独立 gate。
  * - 整文件正文只在模型显式调用 `subscribe inspect` 时返回，届时才推进 `seen_rev`。
  * - 观察循环前先消费会话壳清除集合（lifecycle.ts，每 run 一次）：read 引用释放 / 过期；
  *   与观察循环合并落盘（每 run 一次 load/save）。
@@ -32,8 +35,15 @@ import { evaluatePath, type PathBoundary, splitLines } from '@vessel-agent/basic
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
 import type { DocSubscriptionConfig } from './config.js';
 import { unifiedDiff } from './diff.js';
+import {
+  type HealthSnapshot,
+  healthSignature,
+  healthSubscriptionKey,
+  readHealthSnapshot,
+} from './health.js';
 import { consumeClearedToolResults } from './lifecycle.js';
 import {
+  formatHealthNotice,
   formatSubscriptionNotice,
   SUBSCRIPTION_NOTICE_DETAILS_MAX,
   SUBSCRIPTION_NOTICE_MESSAGE_NAME,
@@ -277,11 +287,46 @@ function isSelfWrite(
 }
 
 /**
+ * health 源观察（q-health-subscription）：读宿主落的快照文件，算变化签名。
+ * `undefined` = 跳过（快照缺失 / 读失败），不推进任何游标（与文件读失败同语义）。
+ * 探测本身在宿主侧（node-health-watch）；插件只消费事实，不 import 宿主模块。
+ */
+async function observeHealthEntry(
+  entry: SubscriptionEntry,
+  deps: BeforeLlmHookDeps,
+): Promise<{ rev: string; snapshot: HealthSnapshot } | undefined> {
+  const snapshot = await readHealthSnapshot(deps.config.stateDir, entry.path);
+  if (snapshot === undefined) return undefined;
+  return { rev: healthSignature(snapshot), snapshot };
+}
+
+/**
+ * 单 node 通知行：元数据（与文件 `<file … />` 同族）。status=up/down 是核心信号；
+ * version / started_at / node_id / name / error 只在快照有时附带（additive）。
+ */
+function healthNoticeLine(entry: SubscriptionEntry, snapshot: HealthSnapshot): string {
+  const attrs = [
+    `target="${escapeXmlAttr(entry.path)}"`,
+    `id="${escapeXmlAttr(entry.id)}"`,
+    `status="${snapshot.reachable ? 'up' : 'down'}"`,
+  ];
+  if (snapshot.version !== undefined) attrs.push(`version="${escapeXmlAttr(snapshot.version)}"`);
+  if (snapshot.started_at !== undefined) attrs.push(`started_at="${snapshot.started_at}"`);
+  if (snapshot.node_id !== undefined) attrs.push(`node_id="${escapeXmlAttr(snapshot.node_id)}"`);
+  if (snapshot.name !== undefined) attrs.push(`name="${escapeXmlAttr(snapshot.name)}"`);
+  if (snapshot.error !== undefined) attrs.push(`error="${escapeXmlAttr(snapshot.error)}"`);
+  return `<node ${attrs.join(' ')} />`;
+}
+
+/**
  * 创建 BeforeLlm hook。
  * 每个插件实例持有自己的 run 去重集合（每 run 只检查一次）。
  */
 export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
   const processedRuns = new Set<string>();
+  // health 源独立 run gate（q-health-subscription）：files / health 节奏可独立配置，
+  // 互不拖累（files='off' 时 health 仍观察；反之亦然）。
+  const processedHealthRuns = new Set<string>();
 
   return {
     name: 'doc-subscription',
@@ -296,13 +341,21 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // 缺省 'run' = 原 processedRuns gate（每 run 首请求观察一次，零回归）；
       // 'request' 跳过该 gate，每请求观察（去重轴 notified_rev 不动，不会重复发卡）。
       const filesCadence = deps.config.envGranularity?.files ?? 'run';
-      // off（P2 轴 A）：整段跳过——不观察、不产卡、不注入（先于 run gate）。
-      if (filesCadence === 'off') return;
-      if (filesCadence === 'run') {
-        if (processedRuns.has(runId)) return;
-        if (processedRuns.size >= MAX_TRACKED_RUNS) processedRuns.clear();
-        processedRuns.add(runId);
-      }
+      // health 检测节奏（同框架）：缺省 'run'；与 files 独立 gate。
+      const healthCadence = deps.config.envGranularity?.health ?? 'run';
+      // off（P2 轴 A）：两源都 off 才整段跳过（不观察、不产卡、不注入）。
+      if (filesCadence === 'off' && healthCadence === 'off') return;
+      const runGate = (cadence: string, processed: Set<string>): boolean => {
+        if (cadence === 'off') return false;
+        if (cadence === 'request') return true;
+        if (processed.has(runId)) return false;
+        if (processed.size >= MAX_TRACKED_RUNS) processed.clear();
+        processed.add(runId);
+        return true;
+      };
+      const filesDue = runGate(filesCadence, processedRuns);
+      const healthDue = runGate(healthCadence, processedHealthRuns);
+      if (!filesDue && !healthDue) return;
 
       const sessionId = ctx.session_id ?? 'default';
 
@@ -328,10 +381,14 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // 生命周期消费在观察循环前（每 run 一次）：清除驱动的引用释放 / 过期。
       // subscriptions 为空也要消费 ledger —— 否则「remove 清空 → 同段再 read」后，
       // 旧 cleared id 会误释放新引用（见 lifecycle.ts）。
-      try {
-        dirty = await consumeClearedToolResults(state, sessionId, deps.config);
-      } catch {
-        // best-effort：生命周期失败不打断观察 / 通知。
+      // 只在 files 观察 due 时消费（ledger 是文件 read 引用机器；files off / 非首请求
+      // 时不消费，与旧 gate 语义一致）。
+      if (filesDue) {
+        try {
+          dirty = await consumeClearedToolResults(state, sessionId, deps.config);
+        } catch {
+          // best-effort：生命周期失败不打断观察 / 通知。
+        }
       }
 
       const entries = Object.values(state.subscriptions).sort((a, b) =>
@@ -342,8 +399,38 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       const lines: string[] = [];
       let changedCount = 0;
       let content: SubscriptionNoticeContent | undefined;
+      // health 源（q-health-subscription）：独立清单 / 计数，与 files 通知分发两条消息。
+      const healthLines: string[] = [];
+      let healthChangedCount = 0;
 
       for (const entry of entries) {
+        // health 分支：读快照 → 签名比对 → 游标推进；无自改抑制 / reads 机器。
+        if (entry.source === 'health') {
+          if (!healthDue) continue;
+          let healthObservation: Awaited<ReturnType<typeof observeHealthEntry>>;
+          try {
+            healthObservation = await observeHealthEntry(entry, deps);
+          } catch {
+            healthObservation = undefined;
+          }
+          if (healthObservation === undefined) continue;
+          // 签名未变：不通知、不写盘（checked_at 不进签名，避免每 run 磁盘抖动）。
+          if (healthObservation.rev === entry.notified_rev) continue;
+          healthChangedCount += 1;
+          if (healthLines.length < MAX_NOTICE_ENTRIES) {
+            healthLines.push(healthNoticeLine(entry, healthObservation.snapshot));
+          }
+          state.subscriptions[healthSubscriptionKey(entry.path)] = {
+            ...entry,
+            rev: healthObservation.rev,
+            notified_rev: healthObservation.rev,
+            notified_at: now,
+            mtime_ms: healthObservation.snapshot.checked_at,
+          };
+          dirty = true;
+          continue;
+        }
+        if (!filesDue) continue;
         let observation: Observation | undefined;
         try {
           observation = await observeEntry(entry, deps);
@@ -453,30 +540,56 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         // 保存失败时通知仍返回；下个 run 可能重复一次（at-most-once 风险）。
       }
 
-      if (changedCount === 0) return;
-      const message = {
-        role: 'user' as const,
-        name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
-        content: buildNotice(lines, changedCount, content),
-        timestamp: now,
-      };
-      // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected，Web 既有投影渲染 EnvCard），
-      // 不写 ctx.messages（模型不收）。notified_rev 游标已推进（上方 save）⇒ 不重复发卡。
-      // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退 ctx.messages 注入（model+ui 现状，additive）。
-      if (deps.config.envChannels?.files === 'ui-only' && ctx.emitFact !== undefined) {
-        ctx.emitFact({
-          type: 'message.injected',
-          run_id: runId,
-          data: {
+      if (changedCount > 0) {
+        const message = {
+          role: 'user' as const,
+          name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+          content: buildNotice(lines, changedCount, content),
+          timestamp: now,
+        };
+        // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected，Web 既有投影渲染 EnvCard），
+        // 不写 ctx.messages（模型不收）。notified_rev 游标已推进（上方 save）⇒ 不重复发卡。
+        // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退 ctx.messages 注入（model+ui 现状，additive）。
+        if (deps.config.envChannels?.files === 'ui-only' && ctx.emitFact !== undefined) {
+          ctx.emitFact({
+            type: 'message.injected',
             run_id: runId,
-            session_id: ctx.session_id,
-            message: { ...message, message_id: `${runId}:notice:${String(now)}` },
-          },
-          ts: now,
-        });
-        return;
+            data: {
+              run_id: runId,
+              session_id: ctx.session_id,
+              message: { ...message, message_id: `${runId}:notice:${String(now)}` },
+            },
+            ts: now,
+          });
+        } else {
+          ctx.messages = [...(ctx.messages ?? []), message];
+        }
       }
-      ctx.messages = [...(ctx.messages ?? []), message];
+
+      // health 通知（q-health-subscription）：与 files 同一投递通道 / 同一 vessel:notice
+      // 消息名，scope 词 'health' 决定卡头标签；两源同 run 都变 ⇒ 两条消息（各自一张卡）。
+      if (healthChangedCount > 0) {
+        const message = {
+          role: 'user' as const,
+          name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+          content: formatHealthNotice(healthLines, healthChangedCount),
+          timestamp: now,
+        };
+        if (deps.config.envChannels?.health === 'ui-only' && ctx.emitFact !== undefined) {
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: ctx.session_id,
+              message: { ...message, message_id: `${runId}:health-notice:${String(now)}` },
+            },
+            ts: now,
+          });
+        } else {
+          ctx.messages = [...(ctx.messages ?? []), message];
+        }
+      }
       return;
     },
   };

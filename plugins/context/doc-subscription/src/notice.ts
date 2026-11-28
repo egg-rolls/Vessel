@@ -26,6 +26,15 @@
 export const SUBSCRIPTION_NOTICE_SCOPE = 'files';
 
 /**
+ * 环境信息的 scope 词：node 健康变更（q-health-subscription，additive）。
+ *
+ * 与 `files` 同一形状（首行 `scope: 摘要` + `  · ` 明细行），Web 环境卡认得它，
+ * 卡头标签是「节点健康」。词表对拍范围同 files：agent `ENV_INFO_SCOPES` /
+ * config `DEFAULT_ENV_CADENCE` / Web `ENV_NOTICE_SCOPES` + i18n `chat.env.scope.health`。
+ */
+export const HEALTH_NOTICE_SCOPE = 'health';
+
+/**
  * 明细行标记：两个空格 + `·`。
  *
  * 必须与 `packages/agent/src/env-info-scope.ts` 的 `ENV_INFO_DETAIL_MARK` 逐字相同，也要与
@@ -160,4 +169,27 @@ export function formatSubscriptionNotice(
     details.splice(content.afterIndex + 1, 0, ...contentLines);
   }
   return [`${SUBSCRIPTION_NOTICE_SCOPE}: ${total} subscribed files changed`, ...details].join('\n');
+}
+
+/** health 明细里的调用提示（英文：面向模型，与其它运行时上下文同口径）。 */
+const HEALTH_INSPECT_HINT =
+  'Call subscribe with action "inspect" and the id or node to view node health.';
+
+/**
+ * 一批变更 node → 一条 health 通知正文（首行 `health: N subscribed nodes changed`，
+ * 之后每行 `  · <node … />`）。线格式与 files 通知同形（Web 同一张环境卡，scope 决定
+ * 卡头标签）；行预算同口径：元数据 ≤8 + 溢出概括 + inspect 提示 + 首行 ≤ 11 行。
+ *
+ * `nodes` 是已经格式化好的单 node 行（`<node target="…" id="…" status="…" … />`）；
+ * `total` 是实际变更总数（可以大于 `nodes.length`，多出来的用「… and N more」概括）。
+ */
+export function formatHealthNotice(nodes: readonly string[], total: number): string {
+  const kept = nodes.slice(0, SUBSCRIPTION_NOTICE_DETAILS_MAX);
+  const dropped = total - kept.length;
+  const details = kept.map((node) => `${SUBSCRIPTION_NOTICE_DETAIL_MARK}${node}`);
+  if (dropped > 0) {
+    details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}… and ${dropped} more`);
+  }
+  details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}${HEALTH_INSPECT_HINT}`);
+  return [`${HEALTH_NOTICE_SCOPE}: ${total} subscribed nodes changed`, ...details].join('\n');
 }

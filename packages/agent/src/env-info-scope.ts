@@ -28,6 +28,8 @@
  * - `identity`：身份变更（改名 / Team / parent）；
  * - `fields`：其它基础字段变更；
  * - `files`：文件变更（doc-subscription 的订阅文件被改动，只报元数据、不报正文）；
+ * - `health`：node 健康变更（doc-subscription 的 health 源订阅：可达性翻转 / 版本 /
+ *   重启 started_at；q-health-subscription，只报元数据，快照在 inspect）；
  * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）；
  * - `trim`：工具结果被换成占位符（上下文上限；只报条数与 call id，不含工具输出正文）
  *   —— 0.52 起由 core 的 `context/cleared-tool-result.ts` 发同一形状的 `trim: …` 尾消息；
@@ -57,6 +59,7 @@ export const ENV_INFO_SCOPES = [
   'lock',
   'conflict',
   'files',
+  'health',
   'context',
   'trim',
   'pii',

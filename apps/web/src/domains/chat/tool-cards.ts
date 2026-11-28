@@ -351,6 +351,15 @@ function subscribeSummary(args: ToolArgs): string | undefined {
   const action = shortText(args.action, 16);
   if (action === undefined) return undefined;
   if (action === 'list') return action;
+  // health 源（q-health-subscription）：node / nodes 目标，卡头标注 (health)。
+  const nodeSingle = shortText(args.node, 96);
+  const nodeMany = stringItems(args.nodes);
+  const nodes = nodeSingle === undefined ? nodeMany : [nodeSingle, ...nodeMany];
+  if (nodes.length > 0) {
+    return nodes.length === 1
+      ? `${action} → ${nodes[0]} (health)`
+      : `${action} → ${nodes.length} 个节点（health）`;
+  }
   const single = shortText(args.path, 96);
   const many = stringItems(args.paths);
   const paths = single === undefined ? many : [single, ...many];

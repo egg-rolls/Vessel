@@ -31,6 +31,7 @@ export const DEFAULT_ENV_CADENCE: Record<string, EnvCadence> = {
   lock: 'request',
   conflict: 'request',
   files: 'run',
+  health: 'run',
   context: 'request',
   trim: 'run',
   pii: 'request',

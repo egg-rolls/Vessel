@@ -1555,6 +1555,7 @@ export const messages = {
   'chat.env.scope.lock': '写锁争用',
   'chat.env.scope.conflict': '写冲突',
   'chat.env.scope.files': '文件变更',
+  'chat.env.scope.health': '节点健康',
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',
