@@ -18,10 +18,19 @@
  * lagCommits>=threshold），每行 `滞后N次 <doc> (churn M)`（lag 降序 / path 字典序，
  * 稳定排序是订阅 diff 模式的前提）；无滞后 ⇒ stdout 全空。不含 coverage / tree gaps /
  * orphan（quiet = 主信号滞后）。与 --json 组合 ⇒ `{"docs":[…仅滞后…]}`；--doc 优先于 quiet。
+ *
+ * 「确认无需改」标记（q-subscription-script-p1，doc-refresh 终报建议⑤）：中央标记文件
+ * `docs/doc-lag-marks.json`（SCAN_DIRS 之外，commit 标记不触叶子基线），形如
+ * `{ "<leaf相对路径>": { "sha": "<确认时 HEAD>", "reason": "必填", "at": "…" } }`。
+ * 语义确认者（main/forge 评审时）写入：截至 sha 的代码变更经语义确认无需改本文。
+ * 校验（任一失败回落原基线，标记静默忽略）：sha 须同时是 doc.baseline 的后代
+ * （git merge-base --is-ancestor baseline sha）且是 HEAD 的祖先（is-ancestor sha HEAD）
+ * ——双向防 reset / 超前 sha；reason 必填非空。生效时 lag 只数 mark.sha 之后的 churn
+ * （精确抑制虚高段，非清零）；叶子日后真同步（基线越过 sha）标记自然失效。
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { dirname, join, posix } from 'node:path';
 import { parseFrontmatter, parseStringArray } from './docs-find';
@@ -47,6 +56,8 @@ interface SyncDoc {
   globs: string[];
   matchers: Bun.Glob[];
   baseline: string | null;
+  /** 生效的「确认无需改」标记（双向 ancestor 校验通过才有；lag 从 mark.sha 起算） */
+  confirmed?: LagMark;
   churnFiles: number;
   lagCommits: number;
   status: string;
@@ -57,6 +68,19 @@ interface RangeData {
   changed: string[];
   commits: { sha: string; files: string[] }[];
 }
+
+/**
+ * 「确认无需改」标记（q-subscription-script-p1）：截至 sha 的 churn 经语义确认无需改本文。
+ * reason 必填（语义判定理由，确认者署名口径见 doc-refresh 终报建议⑤）。
+ */
+interface LagMark {
+  sha: string;
+  reason: string;
+  at?: string;
+}
+
+/** 中央标记文件（SCAN_DIRS 之外：commit 它不触任何叶子基线）。 */
+const MARKS_FILE = 'docs/doc-lag-marks.json';
 
 /** guide 只导航不绑代码：children 已解析为 repo root 相对路径；无 paths/baseline/churn。 */
 interface GuideDoc {
@@ -80,6 +104,40 @@ function git(...args: string[]): string {
     throw new Error(`git ${args.join(' ')} -> exit ${String(result.status)}: ${detail}`);
   }
   return result.stdout ?? '';
+}
+
+/** git 退出码判定（不抛）：merge-base --is-ancestor 校验用（1 = 非祖先，合法结果）。 */
+function gitOk(...args: string[]): boolean {
+  const result = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  return result.status === 0;
+}
+
+/**
+ * 读中央标记文件（缺省 / 非法 JSON / 非法条目 ⇒ 无标记，信息性工具不 gate）。
+ * 条目校验：sha 非空字符串 + reason 必填非空（main 裁定）；at 可选字符串。
+ * ancestor 双向校验在 scanDocs 逐叶做（需要各叶基线）。
+ */
+function readLagMarks(): Map<string, LagMark> {
+  const marks = new Map<string, LagMark>();
+  const full = join(ROOT, MARKS_FILE);
+  if (!existsSync(full)) return marks;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(full, 'utf8'));
+  } catch {
+    return marks; // 非法 JSON ⇒ 全部标记忽略（回落原基线）
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return marks;
+  for (const [path, value] of Object.entries(parsed)) {
+    if (typeof value !== 'object' || value === null) continue;
+    const record = value as Record<string, unknown>;
+    const sha = typeof record.sha === 'string' ? record.sha.trim() : '';
+    const reason = typeof record.reason === 'string' ? record.reason.trim() : '';
+    if (sha === '' || reason === '') continue; // reason 必填（fail-closed 单条）
+    const at = typeof record.at === 'string' ? record.at : undefined;
+    marks.set(path, { sha, reason, ...(at !== undefined ? { at } : {}) });
+  }
+  return marks;
 }
 
 function lines(text: string): string[] {
@@ -143,6 +201,7 @@ function rangeData(sha: string): RangeData {
 async function scanDocs(): Promise<{ docs: SyncDoc[]; guides: GuideDoc[] }> {
   const docs: SyncDoc[] = [];
   const guides: GuideDoc[] = [];
+  const marks = readLagMarks();
   for (const dir of SCAN_DIRS) {
     const full = join(ROOT, dir);
     if (!existsSync(full)) throw new Error(`缺少扫描目录: ${dir}`);
@@ -165,6 +224,18 @@ async function scanDocs(): Promise<{ docs: SyncDoc[]; guides: GuideDoc[] }> {
         .map((glob) => compileGlob(glob))
         .filter((matcher): matcher is Bun.Glob => matcher !== null);
       const baseline = git('log', '-1', '--format=%h', '--', path).trim() || null;
+      // 「确认无需改」标记校验（双向 ancestor，main 裁定）：baseline → mark.sha → HEAD
+      // 任一失败 ⇒ 回落原基线（防 reset / 超前 sha / 写错叶）。新文档（无基线）不适用。
+      const mark = marks.get(path);
+      let confirmed: LagMark | undefined;
+      if (mark !== undefined && baseline !== null) {
+        if (
+          gitOk('merge-base', '--is-ancestor', baseline, mark.sha) &&
+          gitOk('merge-base', '--is-ancestor', mark.sha, 'HEAD')
+        ) {
+          confirmed = mark;
+        }
+      }
       docs.push({
         path,
         display: path.replace(/^docs\//, ''),
@@ -172,6 +243,7 @@ async function scanDocs(): Promise<{ docs: SyncDoc[]; guides: GuideDoc[] }> {
         globs,
         matchers,
         baseline,
+        ...(confirmed !== undefined ? { confirmed } : {}),
         churnFiles: 0,
         lagCommits: 0,
         status: '新文档',
@@ -181,15 +253,17 @@ async function scanDocs(): Promise<{ docs: SyncDoc[]; guides: GuideDoc[] }> {
   return { docs, guides };
 }
 
-/** 按基线 sha 分组派生 churn/滞后；git 调用数 = 唯一基线数，非文档数。 */
+/** 按基线 sha 分组派生 churn/滞后；git 调用数 = 唯一基线数，非文档数。
+ * 生效标记（confirmed）的叶子从 mark.sha 起算（精确抑制虚高段，非清零）。 */
 function computeLag(docs: SyncDoc[], threshold: number): Map<string, RangeData> {
   const ranges = new Map<string, RangeData>();
   for (const doc of docs) {
     if (doc.baseline === null) continue; // 新文档：跳过滞后
-    let range = ranges.get(doc.baseline);
+    const lagBase = doc.confirmed?.sha ?? doc.baseline;
+    let range = ranges.get(lagBase);
     if (range === undefined) {
-      range = rangeData(doc.baseline);
-      ranges.set(doc.baseline, range);
+      range = rangeData(lagBase);
+      ranges.set(lagBase, range);
     }
     doc.churnFiles = range.changed.filter((file) => matchesAny(doc.matchers, file)).length;
     doc.lagCommits = range.commits.filter((commit) =>
@@ -236,10 +310,12 @@ function formatLag(docs: SyncDoc[], all: boolean): string[] {
   for (const doc of rows) {
     const isNew = doc.baseline === null;
     const globs = doc.globs.slice(0, 2).join(' ') + (doc.globs.length > 2 ? ' ...' : '');
+    // base 列 = 有效 lag 基线（生效标记时为 mark.sha；原基线见 --doc 详情）。
+    const lagBase = doc.confirmed?.sha.slice(0, 10) ?? doc.baseline ?? '-';
     out.push(
       pad(doc.status, 12) +
         pad(doc.display, 34) +
-        pad(doc.baseline ?? '-', 10) +
+        pad(lagBase, 10) +
         pad(isNew ? '-' : String(doc.lagCommits), 9) +
         pad(isNew ? '-' : String(doc.churnFiles), 7) +
         globs,
@@ -293,7 +369,16 @@ function formatTreeGaps(gaps: TreeGaps): string[] {
 
 function docFields(doc: SyncDoc) {
   const { path, kind, baseline, globs, churnFiles, lagCommits, status } = doc;
-  return { path, kind, baseline, globs, churnFiles, lagCommits, status };
+  return {
+    path,
+    kind,
+    baseline,
+    ...(doc.confirmed !== undefined ? { confirmed: doc.confirmed } : {}),
+    globs,
+    churnFiles,
+    lagCommits,
+    status,
+  };
 }
 
 function docDetail(doc: SyncDoc, range: RangeData | null): { files: string[]; commits: string[] } {
@@ -310,9 +395,13 @@ function formatDocDetail(doc: SyncDoc, detail: { files: string[]; commits: strin
   const out = [
     `doc: ${doc.path}  kind: ${doc.kind}  status: ${doc.status}`,
     `baseline: ${doc.baseline ?? '(none)'}`,
-    `globs (${doc.globs.length}):`,
-    ...doc.globs.map((glob) => `  ${glob}`),
   ];
+  if (doc.confirmed !== undefined) {
+    out.push(
+      `confirmed-no-change: ${doc.confirmed.sha} (lag counted from here; reason: ${doc.confirmed.reason})`,
+    );
+  }
+  out.push(`globs (${doc.globs.length}):`, ...doc.globs.map((glob) => `  ${glob}`));
   if (doc.baseline !== null) {
     out.push(`churn files (${detail.files.length}):`, ...detail.files.map((file) => `  ${file}`));
     out.push(`lag commits (${detail.commits.length}):`, ...detail.commits.map((sha) => `  ${sha}`));
@@ -397,7 +486,7 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
       };
     }
     let range: RangeData | null = null;
-    if (doc.baseline !== null) range = ranges.get(doc.baseline) ?? null;
+    if (doc.baseline !== null) range = ranges.get(doc.confirmed?.sha ?? doc.baseline) ?? null;
     const detail = docDetail(doc, range);
     if (json) {
       const payload = {
