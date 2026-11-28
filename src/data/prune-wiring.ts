@@ -810,7 +810,9 @@ async function dryRunTraceBucket(
       try {
         await link(source, target);
       } catch {
-        await copyFile(source, target).catch(() => {});
+        // q-error-e3 批15（A，lead 裁定④）：copy 失败不再吞错——dry-run 副本缺文件
+        // 会误导留存决策；让失败传播中止预览（finally 清理照常）。
+        await copyFile(source, target);
       }
     }
     return await pruneTrace(temp, options);

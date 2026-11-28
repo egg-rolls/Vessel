@@ -1193,10 +1193,13 @@ export async function stopGateway(
       // （`supervisor.stop({ keep: true })`）。非 handoff 停止先清掉残留 marker，
       // 避免一次陈旧 marker 把「真停」变成假停。
       if (stateKind === 'platform') {
+        // q-error-e3 批15（A，lead 裁定②③）：marker 写/清失败不再吞错——进外层
+        // stopFailed 错误路径（fail-loud）：写失败仍发终止信号=keep-nodes 静默降级真停；
+        // 清失败残留陈旧 marker 会把下次真停变假停。生命周期完整性优先。
         if (keepForHandoff) {
-          await writeHandoffMarker(context.dataDir, entry.instance, pid).catch(() => undefined);
+          await writeHandoffMarker(context.dataDir, entry.instance, pid);
         } else {
-          await clearHandoffMarker(context.dataDir, entry.instance).catch(() => undefined);
+          await clearHandoffMarker(context.dataDir, entry.instance);
         }
       }
       // 用户裁定 #5：force = 显式非正常退出 —— 快照 + 强杀 + 审计，跳过优雅等待。

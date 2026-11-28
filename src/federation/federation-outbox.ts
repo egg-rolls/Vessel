@@ -23,6 +23,7 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
+import { logEvent } from '../../packages/serve/src/log-event';
 import type { FederationMessage, FederationPostResult } from './federation-client';
 
 export const FEDERATION_OUTBOX_FILE = 'federation-outbox.json';
@@ -168,12 +169,30 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
   /** 写串行化 + flush 串行化（并发 enqueue / flushPeer 不互相覆盖）。 */
   let writes: Promise<void> = Promise.resolve();
   let flushes: Promise<void> = Promise.resolve();
+  /** q-error-e3 批15（B，lead 裁定⑤）：persist 降级边沿标记（防刷屏）。 */
+  let persistDegraded = false;
 
   function persist(): Promise<void> {
     const body = `${JSON.stringify({ v: OUTBOX_VERSION, entries }, null, 2)}\n`;
     writes = writes
       .then(() => atomicWrite(file, body, { mode: 0o600, ensureDir: true }))
-      .catch(() => undefined);
+      .then(() => {
+        persistDegraded = false;
+      })
+      .catch((error) => {
+        // q-error-e3 批15（B，lead 裁定⑤）：落盘失败 → 内存态仍可 flush，仅崩溃窗口
+        // 丢积压——审计降级事件（边沿触发：连续失败只报一次，恢复即复位）。
+        // **不改 enqueue/flush 行为**（outbox 语义属 hardening 设计面）。
+        if (!persistDegraded) {
+          persistDegraded = true;
+          logEvent('warn', 'degradation.used', {
+            component: 'federation.outbox',
+            from: 'durable',
+            to: 'memory-only',
+            reason: `outbox persist failed: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      });
     return writes;
   }
 

@@ -279,7 +279,13 @@ function resumeViaRpc(ctx: ReplContext, runId: string): Promise<DurableRunHandle
       done: waiter.done.then(mapRunOutcome),
       cancel: () => {
         waiter.stop();
-        void rpc.request('runs.cancel', { run_id: result.run_id }).catch(() => undefined);
+        void rpc.request('runs.cancel', { run_id: result.run_id }).catch((error) => {
+          // q-error-e3 批15（A，lead 裁定①）：用户显式取消失败必须可见——tui 自有
+          // console 通道（不引 core，E1 纪律）；cancel 语义不变（waiter.stop 先行）。
+          console.error(
+            `\n${t('error.command.cancelRun', { id: result.run_id })}\n${formatRpcError(error)}`,
+          );
+        });
       },
     } satisfies DurableRunHandle;
   });

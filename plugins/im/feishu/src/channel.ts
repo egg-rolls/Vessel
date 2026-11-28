@@ -257,6 +257,8 @@ class FeishuChannelImpl implements FeishuPlugin {
 
     const accepted = this.queues.enqueue(message.chatId, () => this.process(message, agentText));
     if (!accepted) {
+      // benign: busy 拒绝本身已发生（背压拒收非丢消息）；courtesy 通知 best-effort。
+      // q-error-e3 批15（lead 裁定⑥）：插件无结构化日志通道 → C（不引 core/不新建通道）。
       void this.reply(message, this.texts.busy).catch(() => undefined);
     }
   }
