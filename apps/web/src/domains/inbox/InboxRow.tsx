@@ -13,6 +13,7 @@
  * 写操作按来源分档（与条带 / 服务端 `agents.recall` 同一判据）：
  * - human 源：「取消」（recall 真删）+「我已处理」（claim，不可逆）；
  * - 非 human 源且 held：「留档（取消 hold）」（recall → unhold，条目退回 unread）；
+ * - 已返回的异步作业（done/failed）：非 human 也给「我已处理」（服务端 claim 放行）；
  * - 不给「收回编辑」：本页没有草稿槽（设计审计 §1）。
  */
 
@@ -61,12 +62,16 @@ export function InboxRow({
   onUnhold: (messageId: string) => void;
   onOpenSession: (sessionId: string) => void;
 }) {
-  // 异步作业占位回调卡（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派专属渲染
-  // （bash 科技蓝命令卡 + log tail；ask 未来问题卡），不走通用消息卡。无 client 时退回通用卡。
-  if (entry.async_job !== undefined && client !== undefined) {
+  // 异步作业占位回调卡（q-async-bash-viz，kind 无关）：**只有仍在跑**的占位走专属卡
+  // （沉底 / 不可消费）；done/failed 已返回 = 同步消息，走下方通用卡路径（计数 / 展开
+  // peek / 认领全复用，q-bash-inbox-integrate 用户裁定）。无 client 时一律退回通用卡。
+  if (entry.async_job?.status === 'running' && client !== undefined) {
     return <AsyncJobCard entry={entry} client={client} />;
   }
   const human = entry.from === HUMAN_SOURCE;
+  // 已返回的异步作业（done/failed）不是 human 源也可认领：服务端 claim 对它放行
+  // （running 才跳过），用户侧收口与同步消息同语义。取消 / 留档仍按来源分档。
+  const claimable = human || entry.async_job !== undefined;
   const sessionId = entry.session_id;
   return (
     <article
@@ -124,24 +129,24 @@ export function InboxRow({
         </Button>
         <span className="flex-1" />
         {human && (
-          <>
-            <Button
-              variant="dangerGhost"
-              size="small"
-              disabled={busy}
-              onClick={() => onCancel(entry.message_id)}
-            >
-              {t('inbox.cancel')}
-            </Button>
-            <Button
-              variant="plain"
-              size="small"
-              disabled={busy}
-              onClick={() => onClaim(entry.message_id)}
-            >
-              {t('chat.pending.claim')}
-            </Button>
-          </>
+          <Button
+            variant="dangerGhost"
+            size="small"
+            disabled={busy}
+            onClick={() => onCancel(entry.message_id)}
+          >
+            {t('inbox.cancel')}
+          </Button>
+        )}
+        {claimable && (
+          <Button
+            variant="plain"
+            size="small"
+            disabled={busy}
+            onClick={() => onClaim(entry.message_id)}
+          >
+            {t('chat.pending.claim')}
+          </Button>
         )}
         {!human && canUnhold(entry) && (
           <Button
