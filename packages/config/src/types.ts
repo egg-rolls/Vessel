@@ -1293,6 +1293,16 @@ export interface UiConfig {
    */
   showArchived?: boolean;
   /**
+   * 会话卡片列表是否展示「已退休会话」（q-retired-session-toggle；默认 false = 隐藏）。
+   *
+   * 退休会话 = rotate 之前的旧身体会话（`session.agent.primary === false`，旧 gateway
+   * 回落 roster `body_history` 反查）。默认隐藏因为它们不再代表能派活的对象，混在列表里
+   * 只拉长扫描路径。隐藏**不是**删除：搜索与直接 URL 仍可打开；打开开关后回到列表，
+   * 灰色子标题现状保留。与 showArchived 分工：那个管「已归档 Team / 已停用 agent」，
+   * 这个管 retired body 的会话。
+   */
+  showRetiredSessions?: boolean;
+  /**
    * 错误展示层级（0.14；默认 user：只展示 run/tool/permission 级错误）。
    * all = 同时展示 internal / process 级错误。
    */

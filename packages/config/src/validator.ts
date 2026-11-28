@@ -1140,6 +1140,14 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       value: ui.showArchived,
     });
   }
+  // q-retired-session-toggle：会话卡片列表是否显示退休会话（缺省 false = 隐藏）。
+  if (ui.showRetiredSessions !== undefined && typeof ui.showRetiredSessions !== 'boolean') {
+    errors.push({
+      path: 'ui.showRetiredSessions',
+      message: 'ui.showRetiredSessions must be a boolean',
+      value: ui.showRetiredSessions,
+    });
+  }
   if (
     ui.errorLevel !== undefined &&
     (typeof ui.errorLevel !== 'string' || !UI_ERROR_LEVELS.has(ui.errorLevel))
@@ -4445,6 +4453,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'showInternalEvents',
     'messageVisibility',
     'showArchived',
+    'showRetiredSessions',
     'errorLevel',
     'askUser',
     'expandCards',
