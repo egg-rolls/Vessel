@@ -3018,14 +3018,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * q-async-bash-viz：异步作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填
-   * 结果正文 + 合并 kind 专属 payload + 转可消费），再唤醒模型读取（synthetic wake）。
-   * **不是另插一条**：完成结果只存这一条 inbox 条目（单一真相源，杜绝「工具返回一次 +
-   * inbox 又插一次」双份）。**kind 无关**：bash/ask 共享同一机制。
+   * q-inbox-admit-restore（用户裁示：恢复正文 admit 投递，废 synthetic wake）：
+   * 异步作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填结果正文 +
+   * 合并 kind 专属 payload），占位卡自此**只管卡片视觉**（quiet 留档，模型可 read）。
    *
-   * 占位是 quiet（结果正文由模型自己 read 拉，不直投成 run input），故唤醒走
-   * {@link scheduleInboxWake}（摘要唤醒）而非队头直投。忙 / 无 body 时唤醒返回 false，但结果
-   * 已落 inbox unread —— 下一次 run 的 inbox notice hook 照样 surfaced，结果不丢。
+   * **结果投递与占位卡解耦**：结果另落一条正常可消费条目（wake 模式，origin 随条目
+   * 落盘），走 {@link dispatchInbox} 收口链 —— idle → 队头直投成正文 run（正文 = 作业
+   * 结果，不是「去 inbox 读」的 synthetic 唤醒）；busy → 留队列 + noticeDirty，
+   * run 收口由 settleHandle 补投（既有链条，无上界延迟）。预算拒绝同样留队列
+   * （dispatchInbox 不再点火兜底），预算允许时再投。
+   *
    * 返回是否更新成功（无占位 = false ⇒ 调用方退回 admit 旧路径）。
    */
   async completeAsyncJob(meta: {
@@ -3048,7 +3050,34 @@ export class AgentServiceImpl implements AgentService {
       ...(meta.endedAt !== undefined ? { ended_at: meta.endedAt } : {}),
     });
     if (!updated) return false;
-    void this.scheduleInboxWake(record.id).catch(() => {});
+    // kind 取自占位卡（机制层 kind 无关）：source 用 kind 标签（与占位同口径），
+    // origin 按 kind 映射（bash → bash_job；未来消费者在此扩展映射）。
+    const card = inbox.findByIds(record.id, [`async-job-${meta.jobId}`])[0];
+    const kind = card?.async_job?.kind ?? 'bash';
+    const appended = inbox.append(
+      record.id,
+      {
+        // 独立 id：占位卡（quiet）与结果投递条目（可消费、可成 run input）是两条，
+        // 同 id 幂等会吞掉这次 append。jobId 派生 ⇒ 重复完成调用不产生第二条。
+        id: `async-job-${meta.jobId}-result`,
+        ts: meta.endedAt ?? this.now(),
+        source: kind,
+        text: meta.content,
+        ...(kind === 'bash' ? { origin: 'bash_job' as const } : {}),
+      },
+      { delivery: 'wake' },
+    );
+    if (!appended.accepted) {
+      // inbox 满：结果仍在占位卡里（可 read），不丢；只记日志，不点火。
+      this.logger.warn('agent.async_job.result_enqueue_failed', {
+        agent_id: record.id,
+        job_id: meta.jobId,
+        reason: appended.reason,
+      });
+      return true;
+    }
+    this.noticeDirty.add(record.id);
+    void this.dispatchInbox(record.id).catch(() => {});
     return true;
   }
 
