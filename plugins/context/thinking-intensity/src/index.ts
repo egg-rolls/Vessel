@@ -79,6 +79,9 @@ function beforeLlm(ctx: HookContext): HookResult | undefined {
       ...(entry !== undefined && model !== undefined
         ? { availableLevels: entry.availableLevels(model) }
         : {}),
+      // none 形状的能力说明（q-ti-hint）：观测即记，不等降级闸——auto 档也要能
+      // 在菜单 footer 看到「为什么只有 auto」。i18n key，宿主经插件 catalog 解析。
+      ...(entry?.hint !== undefined ? { hint: entry.hint } : {}),
     });
   }
 
@@ -96,7 +99,7 @@ function beforeLlm(ctx: HookContext): HookResult | undefined {
   if (params === undefined) {
     if (sessionId !== undefined) {
       const observed = state.observed.get(sessionId);
-      if (observed !== undefined) observed.hint = 'level_unsupported';
+      if (observed !== undefined) observed.hint = 'thinking-intensity.hint.level_unsupported';
     }
     return undefined;
   }
