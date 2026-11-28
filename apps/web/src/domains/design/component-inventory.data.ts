@@ -20,7 +20,7 @@ export interface InventoryEntry {
   previews: string[];
 }
 
-export const INVENTORY_COMMIT = 'ca96675a';
+export const INVENTORY_COMMIT = '1c531a00';
 
 export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
   {
@@ -28,12 +28,9 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     kind: 'component',
     reexport: false,
     consumerCount: 0,
-    consumers: [
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    consumers: [],
+    uiConsumers: [],
+    previews: [],
   },
   {
     module: 'Badge',
@@ -54,8 +51,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/integrations/ToolsPanel.tsx',
       'domains/kanban/KanbanCard.tsx',
     ],
-    uiConsumers: [
-    ],
+    uiConsumers: [],
     previews: [
       'components/ui/card-shell.preview.tsx',
       'components/ui/entity-header.preview.tsx',
@@ -83,9 +79,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/ComposerAttach.tsx',
       'domains/chat/ComposerChrome.tsx',
     ],
-    uiConsumers: [
-      'components/ui/MessageFold.tsx',
-    ],
+    uiConsumers: ['components/ui/MessageFold.tsx'],
     previews: [
       'components/ui/card-shell.preview.tsx',
       'components/ui/entity-header.preview.tsx',
@@ -103,14 +97,9 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
     kind: 'util',
     reexport: true,
     consumerCount: 2,
-    consumers: [
-      'domains/agents/AgentListRow.tsx',
-      'domains/nodes/NodePanelView.tsx',
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    consumers: ['domains/agents/AgentListRow.tsx', 'domains/nodes/NodePanelView.tsx'],
+    uiConsumers: [],
+    previews: [],
   },
   {
     module: 'CardShell',
@@ -122,25 +111,17 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/SessionRefBlock.tsx',
       'domains/chat/ToolImageCard.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'components/ui/card-shell.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['components/ui/card-shell.preview.tsx'],
   },
   {
     module: 'clipboard',
     kind: 'util',
     reexport: false,
     consumerCount: 1,
-    consumers: [
-      'domains/teams/useTeamsView.ts',
-    ],
-    uiConsumers: [
-      'components/ui/MessageActions.tsx',
-    ],
-    previews: [
-    ],
+    consumers: ['domains/teams/useTeamsView.ts'],
+    uiConsumers: ['components/ui/MessageActions.tsx'],
+    previews: [],
   },
   {
     module: 'cn',
@@ -169,9 +150,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'components/ui/MessageActions.tsx',
       'components/ui/SidebarShell.tsx',
     ],
-    previews: [
-      'domains/chat/composer-controls.preview.tsx',
-    ],
+    previews: ['domains/chat/composer-controls.preview.tsx'],
   },
   {
     module: 'CountBadge',
@@ -187,11 +166,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/pending/PendingClusterCard.tsx',
       'domains/settings/dialog/CategoryTree.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/badges.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/badges.preview.tsx'],
   },
   {
     module: 'DataTable',
@@ -208,11 +184,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/settings/CapabilitiesView.tsx',
       'domains/settings/ConfigView.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/data-table.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/data-table.preview.tsx'],
   },
   {
     module: 'EntityHeader',
@@ -225,11 +198,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/team/BodyTranscripts.tsx',
       'domains/team/TeamChatHeader.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'components/ui/entity-header.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['components/ui/entity-header.preview.tsx'],
   },
   {
     module: 'Field',
@@ -250,25 +220,17 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/nodes/AddNodeDialog.tsx',
       'domains/observe/EvalsPanel.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/form.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/form.preview.tsx'],
   },
   {
     module: 'FilterPopover',
     kind: 'component',
     reexport: false,
     consumerCount: 1,
-    consumers: [
-      'domains/runs/RunsTable.tsx',
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-      'components/ui/filter-popover.preview.tsx',
-    ],
+    consumers: ['domains/runs/RunsTable.tsx'],
+    uiConsumers: [],
+    previews: ['components/ui/filter-popover.preview.tsx'],
   },
   {
     module: 'ghost-control',
@@ -282,10 +244,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/settings/dialog/SettingRow.tsx',
       'domains/settings/dialog/SettingsSearchBar.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    uiConsumers: [],
+    previews: [],
   },
   {
     module: 'Icon',
@@ -306,12 +266,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/StreamItems.tsx',
       'domains/chat/image-preview.tsx',
     ],
-    uiConsumers: [
-      'components/ui/MessageActions.tsx',
-    ],
-    previews: [
-      'domains/chat/composer-controls.preview.tsx',
-    ],
+    uiConsumers: ['components/ui/MessageActions.tsx'],
+    previews: ['domains/chat/composer-controls.preview.tsx'],
   },
   {
     module: 'KeyValueList',
@@ -330,11 +286,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/team/MemberDetail.tsx',
       'domains/team/RoleConversionSection.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/key-value.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/key-value.preview.tsx'],
   },
   {
     module: 'MessageActions',
@@ -351,11 +304,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/image-preview.tsx',
       'domains/team/TeamMessageRow.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/chat/assistant-text.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/chat/assistant-text.preview.tsx'],
   },
   {
     module: 'MessageFold',
@@ -367,25 +317,17 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/chat/Transcript.tsx',
       'domains/team/TeamMessageRow.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'components/ui/message-fold.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['components/ui/message-fold.preview.tsx'],
   },
   {
     module: 'RichComposer',
     kind: 'component',
     reexport: false,
     consumerCount: 2,
-    consumers: [
-      'domains/chat/Composer.tsx',
-      'domains/team/TeamComposer.tsx',
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    consumers: ['domains/chat/Composer.tsx', 'domains/team/TeamComposer.tsx'],
+    uiConsumers: [],
+    previews: [],
   },
   {
     module: 'SearchInput',
@@ -406,9 +348,7 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/team/TeamChatMembersAside.tsx',
       'domains/teams/TeamsListColumn.tsx',
     ],
-    uiConsumers: [
-      'components/ui/FilterPopover.tsx',
-    ],
+    uiConsumers: ['components/ui/FilterPopover.tsx'],
     previews: [
       'components/ui/sidebar-shell.preview.tsx',
       'domains/design/previews/ui/toolbar.preview.tsx',
@@ -433,26 +373,17 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/pending/PendingClusterCard.tsx',
       'domains/plugins/PluginHostView.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/section.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/section.preview.tsx'],
   },
   {
     module: 'SidebarShell',
     kind: 'component',
     reexport: false,
     consumerCount: 2,
-    consumers: [
-      'domains/chat/SessionList.tsx',
-      'domains/teams/TeamsListColumn.tsx',
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-      'components/ui/sidebar-shell.preview.tsx',
-    ],
+    consumers: ['domains/chat/SessionList.tsx', 'domains/teams/TeamsListColumn.tsx'],
+    uiConsumers: [],
+    previews: ['components/ui/sidebar-shell.preview.tsx'],
   },
   {
     module: 'Stat',
@@ -464,11 +395,8 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/observe/MetricsPanel.tsx',
       'domains/settings/CapabilitiesView.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-      'domains/design/previews/ui/stat.preview.tsx',
-    ],
+    uiConsumers: [],
+    previews: ['domains/design/previews/ui/stat.preview.tsx'],
   },
   {
     module: 'useEnteringItemKeys',
@@ -481,22 +409,16 @@ export const COMPONENT_INVENTORY: readonly InventoryEntry[] = [
       'domains/inbox/InboxView.tsx',
       'domains/team/TeamTranscript.tsx',
     ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    uiConsumers: [],
+    previews: [],
   },
   {
     module: 'useTypewriterText',
     kind: 'hook',
     reexport: false,
     consumerCount: 1,
-    consumers: [
-      'domains/chat/ReasoningBlock.tsx',
-    ],
-    uiConsumers: [
-    ],
-    previews: [
-    ],
+    consumers: ['domains/chat/ReasoningBlock.tsx'],
+    uiConsumers: [],
+    previews: [],
   },
 ];

@@ -187,19 +187,42 @@ for (const info of modules) {
   lines.push(`    kind: '${info.kind}',`);
   lines.push(`    reexport: ${info.reexport},`);
   lines.push(`    consumerCount: ${info.consumers.length},`);
-  lines.push('    consumers: [');
-  for (const consumer of info.consumers.slice(0, 12)) lines.push(`      '${consumer}',`);
-  lines.push('    ],');
-  lines.push('    uiConsumers: [');
-  for (const consumer of info.uiConsumers) lines.push(`      '${consumer}',`);
-  lines.push('    ],');
-  lines.push('    previews: [');
-  for (const preview of info.previews) lines.push(`      '${preview}',`);
-  lines.push('    ],');
+  lines.push(
+    info.consumers.length === 0
+      ? '    consumers: [],'
+      : `    consumers: [\n${info.consumers
+          .slice(0, 12)
+          .map((consumer) => `      '${consumer}',`)
+          .join('\n')}\n    ],`,
+  );
+  lines.push(
+    info.uiConsumers.length === 0
+      ? '    uiConsumers: [],'
+      : `    uiConsumers: [\n${info.uiConsumers
+          .map((consumer) => `      '${consumer}',`)
+          .join('\n')}\n    ],`,
+  );
+  lines.push(
+    info.previews.length === 0
+      ? '    previews: [],'
+      : `    previews: [\n${info.previews
+          .map((preview) => `      '${preview}',`)
+          .join('\n')}\n    ],`,
+  );
   lines.push('  },');
 }
 lines.push('];', '');
 writeFileSync(OUT, lines.join('\n'));
+
+// 产出过一遍 biome format（仓库根配置），保证快照文件本身门禁绿。
+try {
+  execSync(`bunx @biomejs/biome format --write "${OUT}"`, {
+    cwd: join(WEB_SRC, '..', '..', '..'),
+    stdio: 'ignore',
+  });
+} catch {
+  /* biome 不可用时留原样（调用方可手动 format） */
+}
 
 // 控制台摘要（审计用）。
 for (const info of modules) {
