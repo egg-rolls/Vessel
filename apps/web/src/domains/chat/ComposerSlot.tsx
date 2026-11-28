@@ -3,13 +3,13 @@ import type { PendingFetchState } from '../../gateway/interaction-hydration';
 import type { AskUserAnswer, MessageRef, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { ComposerQuote } from '../../stores/composerDraftStore';
-import type { AttachBrowseClient } from './AttachDialog';
 import { Composer } from './Composer';
 import type { ComposerContextUsage } from './ComposerChrome';
 import type { MemberModelSwitchProps } from './MemberModelSwitch';
 import { AskPrompt, PermissionPrompt, type PromptQueueChip } from './PromptSlots';
 import type { PendingQueueItem } from './pending-permissions';
 import type { SessionRefChip, SessionRefScope } from './session-ref';
+import type { ComposerListClient } from './useComposerEditorPort';
 
 /**
  * `interactions.list` 拉取失败的可见条（0.59）。
@@ -101,12 +101,12 @@ export function ComposerSlot({
   refs?: readonly MessageRef[];
   /** 删除一条引用（下标即 refs 里的位置）。 */
   onRemoveRef?: (index: number) => void;
-  /** 加一条引用（现有 addRef）：工具栏「引用文件」入口用；缺省时不渲染该入口。 */
+  /** 加一条引用（现有 addRef）：经编辑端口供插件「引用文件」入口用。 */
   onAddRef?: (ref: MessageRef) => boolean;
   /** 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关）；透传给 Composer。 */
   onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
-  /** 目录浏览数据源（attachments.list）：与 onAddRef 一起决定是否出工具入口。 */
-  client?: AttachBrowseClient;
+  /** 目录浏览数据源（attachments.list）：经编辑端口供插件弹层浏览档。 */
+  client?: ComposerListClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
   /** 会话归属成员的模型切换入口；透传给 Composer 工具栏（权限 / ask 卡替换输入框时不显示）。 */

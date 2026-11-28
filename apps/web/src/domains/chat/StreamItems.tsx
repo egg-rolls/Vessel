@@ -761,7 +761,7 @@ const QUEUED_ICON_VEIL = 'bg-white/10 enabled:hover:bg-white/20';
  * 键就落在消息正文**上方**（用户报过）。这里把它们放进展开体、跟在正文段落之后。
  *
  * 两颗都是**圆形图标键**（`composerIconControlClass` 的 32px 正圆 + `Icon`）—— 与输入框的
- * 发送键 / 回形针同一套形状与三态，只是色调走次要档（`composerQuietIconTone`）：卡面是
+ * 发送键 / 次要图标键同一套形状与三态，只是色调走次要档（`composerQuietIconTone`）：卡面是
  * 琥珀底，主色调的 accent 圆在暖底上会读成「主操作」，而这几颗都是次要动作。名字只走
  * `aria-label` + `title`（同一句 i18n），不再用可见文字：卡宽要跟列一致，几个中文标签会把
  * 那一行挤到换行。底色不用形状层的不透明灰，见 `QUEUED_ICON_VEIL`。

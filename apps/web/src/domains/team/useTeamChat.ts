@@ -88,7 +88,7 @@ export function useTeamChat({
   /**
    * 加 / 删一条待发送引用。
    *
-   * 形状校验在「引用文件」入口（`attach-paths`，与会话页同一套）里先做完，这里只写草稿槽；
+   * 形状校验在插件「引用文件」入口（file-refs 插件 attach-paths，与会话页同一套）里先做完，这里只写草稿槽；
    * 条数上限由草稿槽自己的 `addRef` 兜底（32 条）。
    * 发送时 `submitContent` 把它们一起交给 `teams.post`（`refs`），成功后随草稿清空；
    * 引用同源三处：成员的投递（core `Message.refs`）、Team 日志（时间线 chip）、

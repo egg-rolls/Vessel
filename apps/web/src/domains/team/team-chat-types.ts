@@ -39,10 +39,11 @@ export interface TeamChatClient {
     message_id: string;
   }): Promise<TeamRecallDeliveryResult>;
   /**
-   * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
+   * 附件引用浏览（节点侧只读 `attachments.list`）。
    *
-   * 团队页与会话页用的是同一份弹层；列的是**这个 Team 所在节点**的目录。
-   * 旧 gateway 没有这个方法时弹层把错误显示出来，粘贴路径那条路仍可用。
+   * file-ref P3 起入口归 file-refs 插件弹层，经编辑端口消费本能力；
+   * 列的是**这个 Team 所在节点**的目录。旧 gateway 没有这个方法时
+   * 插件弹层给降级提示，粘贴路径那条路仍可用。
    */
   listAttachments(params?: AttachmentListParams): Promise<AttachmentListResult>;
 }
