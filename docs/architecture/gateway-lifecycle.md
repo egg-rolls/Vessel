@@ -32,7 +32,7 @@ Node API 与本地 Hub **拉起来**；平台**不拥有**它们的生命周期�
 
 - `--no-keep-nodes` / `--keep-nodes` 是 stop 的兼容别名（前者 = `--stop-nodes`，后者 = 缺省）；`--all` 只表示**所有 gateway 实例**，不表示连 node 一起停。**`gateway restart` 的 `--stop-nodes` / `--no-keep-nodes` 已弃用**：只打 warning 指路 `vessel restart`，不再停 node（用户裁定 #6：gateway restart 恒平台-only）。
 - `vessel restart [name]`：name 先按 gateway 实例名匹配（重启该实例舰队），未命中再按 registry node 名匹配（委托 `node restart` 只重启该 node）；缺省 = 本舰队全量。stop 段复用 `stopGateway` 共享接缝（缺省优雅不限时 + 进度，`--force` 传播），start 段复用既有 daemon start 接缝；确认一次覆盖 stop+start。
-- `vessel stop`：缺省停 resolved data root 内所有实例的舰队，停前只读清点 + y/N 确认（`--yes` 跳过；非交互无 `--yes` 拒绝）；`--connect` 远程停需 opt-in（只认显式 flag，远程不强杀，见 [REVERSE-PROXY.md §12](../operations/REVERSE-PROXY.md)）。standalone hub / external node 只报告不动。
+- `vessel stop`：缺省停 resolved data root 内所有实例的舰队，停前只读清点 + y/N 确认（`--yes` 跳过；非交互无 `--yes` 拒绝）；`--connect` 远程停需 opt-in（只认显式 flag，远程不强杀，见 [remote-shutdown.md](../operations/remote-shutdown.md)）。standalone hub / external node 只报告不动。
 - 两种停止都要打印「谁还在跑 / 停了谁、哪个没停下来及原因」。
 
 ## Node 停止 / restart 与 drain-to-quiesce

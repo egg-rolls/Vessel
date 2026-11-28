@@ -49,6 +49,9 @@ interface HookContext {
   readonly systemPrompt?: string;
   /** BeforeLlm 唯一的注入位：尾部追加消息（持久化，不写 system） */
   messages?: Message[];
+  /** BeforeTool / AfterTool：当前工具名与输入（BeforeTool 可经 HookResult.updatedInput 改写） */
+  tool?: string;
+  input?: unknown;
   [key: string]: unknown;
 }
 
@@ -67,6 +70,8 @@ interface HookResult {
   updatedInput?: unknown;
   /** @deprecated 不再进 system；runtime 自动转成 vessel:hook 尾部消息 */
   additionalContext?: string;
+  /** BeforeLlm：本次请求额外头/参数，经 ChatRequest.extra_headers/extra_params 透传适配器（合并闸 provider/request-extras.ts）；仅 BeforeLlm 消费，其它阶段忽略 */
+  requestExtras?: { headers?: Record<string, string>; params?: Record<string, unknown> };
 }
 
 enum HookType {
@@ -77,6 +82,8 @@ enum HookType {
   OnError = 'on_error',
 }
 ```
+
+`HookContext` 另有 additive 观察/身份字段（缺省 = 装配未填，消费方回退现状基线）：`refs?`（本轮输入附件引用，只读）、`request_index?`（本 run 第几次 LLM 请求，0 起）、`model?` / `providerName?`（本次请求模型与 provider 身份）、`cwd?` / `agent_id?`（成员实际工作目录与稳定 id）、`emitFact?`（BeforeLlm 事实发射端口：把仅 UI 可见的环境通知落 `message.injected` 事实而不写模型上下文，见 [event-visibility](event-visibility.md)）。
 
 `HookResult` 只承载当次 hook 的决定；跨 hook 注入统一写 `HookContext.messages`。
 BeforeLlm 的 system 冻结，动态上下文只能尾部追加（见 [context](context.md#prefix)）。

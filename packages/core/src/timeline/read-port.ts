@@ -20,6 +20,7 @@
  * | `read()`（有 `sinceSeq` + `limit`） | `readTimelineRange`（0.56 范围读：只开窗口内那几个块） | O(页)：缺省一页 6 个块、首屏一段 120 个块 |
  * | `lastSeq()` | `wal.log` 尾窗 + 最后一个块文件的尾帧（**不读整份**） | O(64 KiB) |
  * | `readTailMatches()` | `wal.log` 尾窗（事实行） | 首窗 64 KiB，扩窗到 4 MiB 后放弃 |
+ * | `readLatestOfType()` | `type.idx` 定位 + `readTimelineRange` 精确读那一条事实 | O(索引 + 一页)，与日志大小无关；索引不可信 ⇒ `undefined`（调用方退尾窗） |
  *
  * `readTailMatches` 只扫 `wal.log`：chunk 家族在**块**里，而那两张卡（用量 / 系统消息）
  * 要的类型全是事实行（`context.*` / `llm.request` / `llm.response` / `prompt.system_context`）。
@@ -47,6 +48,7 @@ import { sessionDirPath } from '../tenant/index.js';
 import type { SessionEventRecord, SessionIndexPatch } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
 import { lastBlockName } from './blocks.js';
+import { loadTypeIndexSnapshot } from './index.js';
 import { assertSessionFormatSupported } from './legacy-format.js';
 import { isTimelineBlobRef, TIMELINE_LAYOUT, type TimelineRecord } from './types.js';
 import {
@@ -314,6 +316,53 @@ export class TimelineEventLog {
       if (start === 0) return { records: [], bytesRead }; // 整份文件都看过了
       if (window >= maxBytes) return { records: [], bytesRead }; // 预算用完：不扫全盘
       window = Math.min(window * 4, maxBytes);
+    }
+  }
+
+  /**
+   * 按 `type.idx` **精确定位**该 type 的最新一条事实记录（读不出 ⇒ `undefined`）。
+   *
+   * 为什么需要它：`readTailMatches` 的触达上界是距尾部 4 MiB —— 只发过一次、之后被
+   * 去重压住的事件（典型：`prompt.system_context`）在长会话里会老化出尾窗，尾窗回扫
+   * 永远够不到。索引定位 + 范围读精确取那一条，触达与日志大小无关。
+   *
+   * 三条纪律（ADR-105 §5「索引永不当判据」在这里的落法）：
+   *
+   * 1. **索引只用于定位，答案必须是事实记录本身**：拿到最大 seq 后走 `readTimelineRange`
+   *    读回那一条，并校验 `seq` / `type` 与索引所说一致 —— 索引错了最多退回兜底，
+   *    不会把索引里的数字当成数据下发；
+   * 2. **新鲜度闸门**：索引落盘有节流（写者 `flush` 路径 ≤2 s / 500 条滞后）。只有
+   *    `session.idx.last_seq ≥ wal.log 最后一条事实行 seq` 时才信它的 type 列表 ——
+   *    事实行只活在 `wal.log`，覆盖过最后一条事实 ⟹ 该 type 的列表必然完整；不满足
+   *    就返回 `undefined`，让调用方退回尾窗（新事件就在尾部，尾窗找得到）；
+   * 3. **任何失败都静默降级**：索引缺失/损坏、范围读不可判（小会话门槛等）、校验不过
+   *    ⇒ `undefined`，调用方退回既有尾窗回扫。本方法不抛错、不写盘。
+   */
+  async readLatestOfType(sessionId: string, type: string): Promise<SessionEventRecord | undefined> {
+    await this.settled(sessionId);
+    const dir = this.sessionDir(sessionId);
+    const snapshot = await loadTypeIndexSnapshot(dir).catch(() => undefined);
+    if (snapshot === undefined) return undefined;
+    const seqs = snapshot.types.get(type);
+    if (seqs === undefined || seqs.length === 0) return undefined;
+
+    // 新鲜度闸门（纪律 2）：索引覆盖到 wal.log 最后一条事实行才可信。
+    const factHead = await lastWalFactSeq(join(dir, TIMELINE_LAYOUT.walLog));
+    if (snapshot.session.last_seq < factHead) return undefined;
+
+    // 最大 seq（落盘时升序，但不拿排序当判据：显式取最大，乱序索引也定位得对）。
+    let seq = 0;
+    for (const candidate of seqs) if (candidate > seq) seq = candidate;
+    try {
+      const { records } = await readTimelineRange(dir, { sinceSeq: seq - 1, limit: 1 });
+      const record = records[0];
+      // 校验（纪律 1）：读回来的必须就是索引指的那一条、那个 type。
+      if (record === undefined || record.seq !== seq || record.type !== type) return undefined;
+      // readTimelineRange 已做外置 blob 取回（与整份读同一口径），这里不再二次还原。
+      return toSessionEventRecord(record);
+    } catch {
+      // 范围读不可判（小会话门槛 / 锚点定位不到 / 覆盖算术不过）⇒ 交回调用方兜底。
+      return undefined;
     }
   }
 

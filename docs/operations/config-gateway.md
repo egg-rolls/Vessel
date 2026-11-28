@@ -56,7 +56,7 @@ gateway:
 平台 token 恒要求（浏览器会话 cookie 不构成停止能力）+ 必须经**已配置共享密钥**的 TLS 反代
 （`proxy_secret_env` + 密钥头）；非回环未配反代密钥一律拒（fail-closed）。没开：远程停回
 `401 remote_shutdown_disabled`，提示 SSH 到主机跑 `vessel stop`。完整形态见
-[REVERSE-PROXY §12](REVERSE-PROXY.md)。
+[remote-shutdown.md](remote-shutdown.md)。
 
 ## `gateway.web_dist`（静态产物目录）
 

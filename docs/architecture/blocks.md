@@ -2,7 +2,7 @@
 title: 消息块协议（信封规范 / type 注册表 / vessel-block fence）
 kind: current
 triggers: [block, envelope, quote, session-ref, vessel-block, fence, lift, registry, 块, 信封, 引用, 会话引用, 提升, 注册表, 固定标记, legacy]
-paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx, packages/core/src/runtime/tool-attachment.ts, packages/core/src/runtime/tool-calling-loop.ts]
+paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx, apps/web/src/domains/chat/InlineText.tsx, apps/web/src/domains/chat/InlineRefChip.tsx, apps/web/src/domains/chat/use-ref-preview.ts, apps/web/src/domains/chat/use-in-view.ts, apps/web/src/domains/chat/attachment-preview-cache.ts, packages/core/src/runtime/tool-attachment.ts, packages/core/src/runtime/tool-calling-loop.ts]
 ---
 
 # 消息块协议
@@ -71,12 +71,12 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
    | tool file | `[tool file]` 注记 + 结构化 refs（P2） | 无专用解析器：file lift 按 refs 出 chip，注记为正文 |
    | refs 尾注 | `[refs] N attachments: …` | refs-notice-hook（服务端注入，Web 按 name 识别） |
    | runtime notice | `[runtime] <summary>` + `  · ` details 行 | env-notice.ts#runtimeEnvCard |
-   | file token | `vessel-ref:` scheme markdown 链接 | 用户正文：file lift（file-token.ts → RefCard）；助手正文：link-enhancers / 插件 FileRefLinkCard |
+   | file token | `vessel-ref:` scheme markdown 链接 | 用户正文：InlineText/InlineRefChip 内联 chip（file lift 停剥正文，`liftBlocks().inline` 分流）；助手正文：宿主 vessel-ref enhancer / 插件 FileRefLinkCard |
 
 4. **新 type 统一 fenced 格式**（见 §5 vessel-block fence spec）。
 5. **块与 refs**：块**引用** refs（按 path/sha256），不复制字节、不替代 refs。
    image 块 = refs[kind=image] + 注记的渲染提升；file 块 = 正文 vessel-ref token
-   卡 + 剩余 refs chip（occurrence 去重，见 §3.2）。数据通道（ingest/边界/投递）
+   内联 chip + 剩余 refs 尾部 chip（occurrence 去重，见 §3.2）。数据通道（ingest/边界/投递）
    一个字不动。
 6. **块与 notice**：notice 保持独立 runtime 通道（hook 注入 / scope 词表 /
    cadence / 签名去重），**不并入块 wire**——它是 runtime 事实不是业务内容，
@@ -125,8 +125,9 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
   会话闸，LRU 缓存）；无 ref → `useAttachmentPreview`（`attachments.preview`，
   path 寻址 + 过期探针，经 attachment-preview-cache 去重）。**承重验收点**：
   chip 视口懒加载（IntersectionObserver，入视口才探预览）+ 同 path 缓存 /
-  inflight 去重，防长历史多图翻页 RPC 风暴。非图一律图标 chip（宿主无 PDF
-  字节预览通道）。历史只读：只解析投影，不回填不改写 `Message.content`
+  inflight 去重，防长历史多图翻页 RPC 风暴。非图一律图标 chip；**PDF 点击预览
+  （2.2.4 宿主 PDF 字节预览通道，`use-ref-preview.ts` isPdf，RefCard/InlineRefChip
+  两侧同形）**。历史只读：只解析投影，不回填不改写 `Message.content`
   （复制 / 编辑 / quote 仍拿原文逐字节）。
 - **[tool image] 注记保留折叠**（裁示②）：ToolImageCard 图条目换 InlineRefChip
   同形（字节 meta 收 hover），注记原文收卡内折叠区；零模型侧变化（token 化
@@ -232,7 +233,7 @@ node-local 路径，地址（2/3 段）/ human / 裸名跨节点升级路显式�
 | quote 信封 | 格式不变；lift 已收编注册表 |
 | session-ref 信封 | 新消息固定标记（§3.1）；旧消息双词 + zh field legacy 永久 |
 | [tool image] 注记 + refs | 不动；ToolImageCard 经注册表消费 |
-| vessel-ref token + 插件卡 | 用户正文 token 提升为宿主 RefCard（§3.2）；助手正文 link 槽不动（x:file-refs:vessel-ref 登记不变），插件 bundle 零改动 |
+| vessel-ref token + 插件卡 | 用户正文 token 内联 chip（InlineText/InlineRefChip，§3.2）；助手正文宿主 vessel-ref enhancer 优先（x:file-refs:vessel-ref 登记不变），插件 bundle 零改动 |
 | vessel:notice / [refs] / [runtime] | wire 不动；notice lift 收编 |
 | 历史消息（无 message_id / 旧 locale 头部） | 全走 legacy 解析器 + 既有降级；**不回填不改写** |
 | 旧 gateway / 旧 node | images.blob not_found ⇒ 元数据 chip（既有）；无 composer 贡献 ⇒ 空注册（既有） |

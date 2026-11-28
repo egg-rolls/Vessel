@@ -285,6 +285,46 @@ export async function writeIndexSnapshot(
 }
 
 /**
+ * 读侧轻量加载：**只读 `session.idx` + `type.idx`**（不读 `run.idx`）。
+ *
+ * 给「按 type 定位最新一条事实」的读路径用（`read-port.ts#readLatestOfType`）：它只需要
+ * 「该 type 的 seq 列表」+「索引覆盖到哪（`session.last_seq`，新鲜度闸门用）」，run 区间
+ * 与它无关 —— 大会话的 `run.idx` 可能是三个文件里最大的一个，白读一遍纯浪费。
+ *
+ * 口径与 {@link loadIndexSnapshot} 一致：任一文件缺失/损坏 ⇒ `undefined`（调用方退回
+ * 尾窗回扫）。**索引在这里只用于定位，不是数据的证据**（ADR-105 §5）：调用方拿到 seq 后
+ * 必须读回事实记录本身并逐条校验，索引错了最多让人多走一次兜底，读出的结果不会变。
+ */
+export async function loadTypeIndexSnapshot(
+  sessionDir: string,
+): Promise<Pick<TimelineIndexSnapshot, 'session' | 'types'> | undefined> {
+  const paths = indexPaths(sessionDir);
+  const sessionRead = await readCrcNdjsonFile<SessionIndexLine>(
+    paths.session,
+    validateSessionIndex,
+  );
+  const session = sessionRead.items[0];
+  if (session === undefined) return undefined;
+
+  const typeRead = await readCrcNdjsonFile<TypeIndexFile>(paths.type, validateTypeIndex);
+  const typeFile = typeRead.items[0];
+  if (typeFile === undefined) return undefined;
+
+  const types = new Map<string, number[]>();
+  for (const [type, seqs] of typeFile.types) types.set(type, seqs);
+
+  return {
+    session: {
+      first_seq: session.first_seq,
+      last_seq: session.last_seq,
+      count: session.count,
+      holes: session.holes,
+    },
+    types,
+  };
+}
+
+/**
  * 读索引；任一文件缺失/损坏 ⇒ `undefined`（调用方应重建）。
  *
  * `maxBytes` 是**增量路径的预算闸门**（第十一条）：三个文件的 `stat` 之和超过它 ⇒ 直接
