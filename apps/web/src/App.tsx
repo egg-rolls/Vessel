@@ -1,6 +1,7 @@
 import { AppShell } from './app/AppShell';
 import { AuthProvider } from './auth/AuthProvider';
 import { ToastProvider } from './components/ToastProvider';
+import { AttachmentLightbox } from './domains/chat/attachment-lightbox';
 import { ComposerExtensionsProvider } from './domains/plugins/composer-extensions';
 import { ConnectionProvider } from './gateway/ConnectionProvider';
 import { NodeProvider } from './gateway/NodeProvider';
@@ -22,6 +23,8 @@ export default function App() {
           <NodeProvider>
             <ComposerExtensionsProvider>
               <AppShell />
+              {/* 宿主标准附件预览（插件经 host.attachments.openPreview 打开；单例） */}
+              <AttachmentLightbox />
             </ComposerExtensionsProvider>
           </NodeProvider>
         </ConnectionProvider>

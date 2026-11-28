@@ -131,4 +131,52 @@
     color: var(--danger);
     background: var(--line);
   }
+
+  /* ── q-image-chip-inline：composer chip 行高融合 ──────────────────────
+     只收敛 refs 槽卡片（.file-ref-card）；link 槽卡片（.file-ref-link，
+     消息正文面）保持原形态。chip 总高 = 16.8 内容 + 2 内衬 + 2 描边 ≈ 20.8px，
+     小于输入框文字行盒（14px × 1.6 = 22.4px）—— 行内混排不撑行。
+     缩略图 / 种类 ICON 收到 1em（12px）方形，与文件名 / 徽标 / × 同高。 */
+
+  .file-ref-card {
+    gap: 4px;
+    padding: 1px 5px;
+  }
+
+  .file-ref-card .file-ref-thumb {
+    width: 1em;
+    height: 1em;
+    border-radius: 3px;
+  }
+
+  .file-ref-card .file-ref-icon {
+    width: 12px;
+    height: 12px;
+  }
+
+  /* 图片 chip 体 = 真 button（开宿主预览弹窗）：重置按钮外观，继承 chip 排版；
+     × 是兄弟 button，不嵌套、点击不冒泡到体。 */
+  .file-ref-body {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .file-ref-body:hover .file-ref-name {
+    color: var(--accent);
+  }
+
+  .file-ref-body:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
 }

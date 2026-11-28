@@ -25,6 +25,8 @@ import { stageFiles } from '../../gateway/node/attachments';
 import type { PluginCatalogItem } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resolvedTheme, useTheme } from '../../state/theme';
+import { openAttachmentLightbox } from '../chat/attachment-lightbox';
+import { refDisplayName } from '../chat/MessageRefs';
 import { fetchPluginCatalog } from './plugin-catalog';
 
 /** 插件的 manifest 授权面（白名单复核的数据源）。 */
@@ -157,6 +159,20 @@ export function usePluginHost(pluginId: string, surface: PluginHostSurface): Ves
       attachments: {
         preview: (path) => live.current.client.previewAttachment(path),
         stage: (files) => stageFiles(live.current.client, files),
+        // 宿主标准预览弹窗：取字节 → 开既有 ImageLightbox（大图+路径+复制）。
+        // 字节不可用 ⇒ reject，插件侧自行 toast（fail-closed 同 preview/stage）。
+        openPreview: async (path) => {
+          const result = await live.current.client.previewAttachment(path);
+          if (result.status !== 'ok' || result.dataUrl === undefined) {
+            throw new Error(`attachment_preview_unavailable: ${result.status}`);
+          }
+          openAttachmentLightbox({
+            url: result.dataUrl,
+            name: refDisplayName({ kind: 'file', path }),
+            path,
+            staging: result.staging === true,
+          });
+        },
       },
       subscribeEvent: (type, cb) => {
         const store = live.current.eventStore;
