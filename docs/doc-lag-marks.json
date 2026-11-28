@@ -1,1 +1,27 @@
-{"docs/operations/config-ui.md": {"at": "2026-11-28", "reason": "q-subscript-p1：ui-settings.ts 仅注释词数 17→20；ENV_GRANULARITY_SCOPES 派生 Object.keys 自动跟随，机制未变（该叶 lag 窗口仅本批 1 commit，全窗确认）", "sha": "8a42f0ef"}, "docs/operations/TROUBLESHOOTING-401.md": {"at": "2026-11-28", "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：401 排障口径与现态一致，lag 窗口纯它叶 churn；main 合入 2.2.8 批时落标记", "sha": "267cbe93"}, "docs/architecture/host.md": {"at": "2026-11-28", "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：host 架构描述与现态一致；main 合入 2.2.8 批时落标记", "sha": "267cbe93"}, "docs/operations/BUN-WIN32-SEGFAULT.md": {"at": "2026-11-28", "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：Bun Win32 段fault 记录与现态一致；main 合入 2.2.8 批时落标记", "sha": "267cbe93"}, "docs/architecture/state.md": {"at": "2026-11-28", "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：state 架构描述与现态一致；main 合入 2.2.8 批时落标记", "sha": "267cbe93"}}
+{
+  "docs/operations/config-ui.md": {
+    "at": "2026-11-28",
+    "reason": "q-subscript-p1：ui-settings.ts 仅注释词数 17→20；ENV_GRANULARITY_SCOPES 派生 Object.keys 自动跟随，机制未变（该叶 lag 窗口仅本批 1 commit，全窗确认）",
+    "sha": "8a42f0ef"
+  },
+  "docs/operations/TROUBLESHOOTING-401.md": {
+    "at": "2026-11-28",
+    "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：401 排障口径与现态一致，lag 窗口纯它叶 churn；main 合入 2.2.8 批时落标记",
+    "sha": "267cbe93"
+  },
+  "docs/architecture/host.md": {
+    "at": "2026-11-28",
+    "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：host 架构描述与现态一致；main 合入 2.2.8 批时落标记",
+    "sha": "267cbe93"
+  },
+  "docs/operations/BUN-WIN32-SEGFAULT.md": {
+    "at": "2026-11-28",
+    "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：Bun Win32 段fault 记录与现态一致；main 合入 2.2.8 批时落标记",
+    "sha": "267cbe93"
+  },
+  "docs/architecture/state.md": {
+    "at": "2026-11-28",
+    "reason": "doc-refresh 终核（doc-refresh-final-9866df10.md §3）语义确认无需改：state 架构描述与现态一致；main 合入 2.2.8 批时落标记",
+    "sha": "267cbe93"
+  }
+}
