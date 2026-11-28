@@ -76,7 +76,7 @@ VESSEL_NO_EXTERNAL_PLUGINS=1 bun run src/cli.ts \
 
 ## 3. 停止与重启：缺省只停平台层，舰队动词才整舰队真停
 
-- `gateway stop --instance blue`（**缺省**）：**只停平台层**，node/hub/池 engine 全保留（handoff marker，下一次 start adopt 回来）。`--stop-nodes`（`--no-keep-nodes` 别名）才是显式整停：node 先经进程内 drain-to-quiesce（**不 interrupt、不写 resume 标记**，不限时等活跃 run 自然跑完），受理失败 / 显式 `--force` 才回退强杀（带 `stop.forced` / `drain.skipped` 审计）；hub 停；池只 terminate **owned**（adopt/external 永不杀）。
+- `gateway stop --instance blue`（**缺省**）：**只停平台层**，node/hub/池 engine 全保留（handoff marker，下一次 start adopt 回来）。`--stop-nodes`（`--no-keep-nodes` 别名）才是显式整停：node 先经进程内 drain-to-quiesce（**不 interrupt、不写 resume 标记**，不限时等活跃 run 自然跑完），受理失败 / 显式 `--force` / quiesce 后 30s 未自死才强杀（带 `stop.forced` / `drain.skipped` 审计）；hub 停；池只 terminate **owned**（adopt/external 永不杀）。
 - 舰队级 `vessel stop --instance blue` / `vessel restart --instance blue`（stop→start，**stop 未全成 → 不 start**）。`gateway restart` 恒平台-only，其 `--stop-nodes` 已弃用（warning 指路 `vessel restart`）。优雅等待缺省**不限时** + 每 5s 进度；显式 `--timeout` 到点不自动强杀。drain/force 完整语义见 [gateway-lifecycle](../architecture/gateway-lifecycle.md)。
 - **不要只 taskkill platform 进程**：Windows 句柄继承会让 detached 子进程继续持有监听 socket，新 gateway bind 不上；恒用命令整舰队停（Windows 强杀为无条件 `taskkill /T /F` 整棵子树）。
 - 停后若仍有 detached engine 残留（crash 残留 / adopted external），按 `~/.vessel/engine-pool-blue/engines/*.json` 的 pid 手工清理；池禁用（size=0）后 gateway 会按上一纪元 routing manifest 自动清扫 owned 残留（`sweepDisabledPool`）。
@@ -85,7 +85,7 @@ VESSEL_NO_EXTERNAL_PLUGINS=1 bun run src/cli.ts \
 
 - **切换 = 换入口**（裁决②）：浏览器/CLI 改指 B 行；A 行可停可留。**数据不迁移**：B 行是全新会话宇宙，旧会话不在 B 行出现。升级后**刷新浏览器页面**（旧前端缓存对新后端会假报 timeline 缺口）。
 - **回退 = 入口换回 A 行**：A 根/配置/端口未被触碰，零成本。
-- 离线迁移是**单向门**（裁决②不做，只作警示）：成员快照 v4→v5 首写一次性清旧 model 字段（留 `.v4.bak`，备份失败放弃写入），旧二进制不认 v5；新线也不支持旧格式会话（`legacy_session_unsupported`，需用旧线导出）。若将来要迁移：停两行 → 整根备份 → 复制；回退顺序 = 停进程 → 恢复 `.v4.bak` → 回退二进制，不能反。
+- 离线迁移是**单向门**（裁决②不做，只作警示）：成员快照 v4→v5 首写一次性清旧 model 字段（留 `.v4.bak`，备份失败放弃写入），旧二进制不认 v5；新线也不支持旧格式会话（`legacy_session_unsupported`，需用旧线导出）。用户配置同样有单向门：新线首载自动把本线用户层 `models.vendors/aliases` 迁移为 `credentials+entries`（留 `<config>.pre-model-registry.bak`，`model-migration.ts`；只动 `--user-config` 指向的文件，A 行配置不受波及），旧二进制不认新块，回退 = 恢复 .bak。若将来要迁移数据：停两行 → 整根备份 → 复制；回退顺序 = 停进程 → 恢复 `.v4.bak` → 回退二进制，不能反。
 
 ## 5. 风险与纪律
 
@@ -97,7 +97,7 @@ VESSEL_NO_EXTERNAL_PLUGINS=1 bun run src/cli.ts \
 | R4 | OS 服务拉错版本：任务名 `VesselGateway` 冻结，命令 `vessel gateway start` 按 PATH 解析、无版本 pin、无根 flag | 本机未装 = 无需动作；**双行期不跑 install-service**；装过先卸载 |
 | R5 | 外部插件共享 + marketplace install **写 `~/.vessel/config.yaml`** 波及生产线 | `VESSEL_NO_EXTERNAL_PLUGINS=1`；双行期不跑 marketplace install |
 | R6 | 更新缓存/staging 共享（`~/.vessel/update-check.json` / `updates/`） | B 行 `update.auto_check: false`；双行期不跑更新 apply |
-| R7 | 数据格式单向门 | 不共享 dataDir；见 §4 |
+| R7 | 数据/配置格式单向门（会话快照 v4→v5；models 块自动迁移） | 不共享 dataDir / 用户配置；见 §4 |
 | R8 | **同 workspace 双版本并行写 = 不安全**：write.lock 是合作式协议，只有新版 edit/write 持锁；旧线（A 行）无 write 工具、无锁 = 非合作写入者，可静默覆盖新版正在编辑的文件；expected_content 只能事后检出（报错不写），不能阻止旧版写入 | **B 行用独立 worktree/workspace**；必须共享时：A 行对该 workspace 只读，或人工文件分区 + B 行恒带 expected_content |
 | R9 | 浏览器旧前端缓存假报缺口 | 刷新页面；每舰队 serve 自己 checkout 的 dist，不共享 `VESSEL_STATIC_DIR` |
 | R10 | 舰队 yaml 可被工具读（自定义路径不在 denylist） | 密钥不进 yaml（§1） |
