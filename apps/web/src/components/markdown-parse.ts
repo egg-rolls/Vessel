@@ -33,7 +33,17 @@ const HEADING = /^\s{0,3}(#{1,6})\s+(.*)$/;
 const HR = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const LIST_ITEM = /^\s{0,3}([-*+]|\d+[.)])\s+(.*)$/;
 const BLOCKQUOTE = /^\s{0,3}>\s?(.*)$/;
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+// 分隔行允许单列（q-table-separator-min-cols，vessel-block fence 试点暴露）：
+// `*` 量词放宽旧「至少两列 dashes」限制，`| --- |` 也是合法分隔行。
+// 单列裸 `---` 不在此放行 —— 那是 HR 的领地（见 isTableSeparator 的管道守卫）。
+const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+/** 是否表格分隔行：正则之外还要求行内至少一个管道符。
+ * 放宽单列后裸 `---` 也命中正则，但它必须保持水平线（HR）语义，
+ * 不能把含 `|` 的段落下一行抢成表格。多列分隔行天然含管道，零损失。 */
+function isTableSeparator(line: string): boolean {
+  return line.includes('|') && TABLE_SEPARATOR.test(line);
+}
 
 function splitTableRow(line: string): string[] {
   const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
@@ -73,7 +83,7 @@ function startsBlock(lines: string[], index: number): boolean {
   if (FENCE.test(line) || HEADING.test(line) || HR.test(line)) return true;
   if (LIST_ITEM.test(line) || BLOCKQUOTE.test(line)) return true;
   const next = lines[index + 1];
-  return line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next);
+  return line.includes('|') && next !== undefined && isTableSeparator(next);
 }
 
 /** 行首空白宽度（与 LIST_ITEM 的 `\s` 口径一致：tab 记 1）。 */
@@ -178,7 +188,7 @@ export function parseMarkdown(
     }
 
     const next = lines[index + 1];
-    if (line.includes('|') && next !== undefined && TABLE_SEPARATOR.test(next)) {
+    if (line.includes('|') && next !== undefined && isTableSeparator(next)) {
       const tableStart = index;
       const header = splitTableRow(line);
       const rows: string[][] = [];
