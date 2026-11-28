@@ -1536,6 +1536,10 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toolImage.copyPath': 'Copy path',
   'chat.toolImage.pathCopied': 'Path copied',
   'chat.toolImage.staging': 'temp (not ingested)',
+  // q-tool-card-slot: tool attachment result card (new [tool media] anchor; legacy card copy untouched).
+  'chat.toolMedia.group': 'Tool attachments',
+  'chat.toolMedia.title': 'Tool attachments',
+  'chat.toolMedia.count': '{count} items',
   // q-pdf-preview-channel: PDF preview modal (close / path copy / staging reuse chat.toolImage.*).
   'chat.pdf.previewNamed': 'Preview {name}',
   // q-block-cardshell-unify: unified file card (body vessel-ref token lift; CardShell surface).

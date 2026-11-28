@@ -146,6 +146,12 @@ const TranscriptMessage = memo(function TranscriptMessage({
     if (imageBlock !== undefined) {
       return <BlockView block={imageBlock} />;
     }
+    // 新锚工具附件注入（q-tool-card-slot）：整条成 ToolResultCard（注册表
+    // tool-media 块，插槽 = 伪消息同一管线）；旧前缀仍走上面的 legacy image 块。
+    const mediaBlock = blocks.find((block) => block.type === 'tool-media');
+    if (mediaBlock !== undefined) {
+      return <BlockView block={mediaBlock} />;
+    }
     if (message.content.trim().length > 0) {
       actions.push({
         id: 'copy',

@@ -941,15 +941,45 @@ function identityRunId(message: Message): string | undefined {
 export const TOOL_IMAGE_NOTE_PREFIX = '[tool image] ';
 
 /**
- * 这条消息是不是 media view 等工具的图片附件注入（`[tool image] …` + image refs）。
- * 是则返回它的引用（渲染成 ToolImageCard）；不是返回 undefined（照常渲染）。
+ * 工具附件注入的新识别锚（q-tool-card-slot 裁示①）：与 core
+ * `tool-calling-loop.ts#TOOL_MEDIA_NOTE_PREFIX` 逐字一致。锚行形状
+ * `[tool media] N image(s)/file(s) from tool X:`，其后每 ref 一行 vessel-ref token。
+ * 旧 `[tool image]` 前缀永久双认（legacy ToolImageCard 冻结）；新锚走 ToolResultCard。
+ */
+export const TOOL_MEDIA_NOTE_PREFIX = '[tool media] ';
+
+/**
+ * 这条消息是不是工具附件注入（旧 `[tool image] …` + image refs ∨ 新 `[tool media] …`
+ * + 任意 refs）。是则返回它的引用；不是返回 undefined（照常渲染）。
+ *
+ * 判据扩「旧前缀∨新锚」（q-tool-card-slot）：三个非渲染消费点
+ * （isCardInputMessage / inputsByRun / lastUserTs）经本函数自动继承双认。
+ * 渲染分流：旧前缀 → image lift（legacy ToolImageCard）；新锚 → tool-media lift
+ * （ToolResultCard 插槽），见 lift-blocks.ts。
  */
 export function toolImageRefsOf(message: Message): readonly MessageRef[] | undefined {
   if (message.role !== 'user') return undefined;
-  if (!message.content.startsWith(TOOL_IMAGE_NOTE_PREFIX)) return undefined;
   const refs = message.refs;
-  if (refs === undefined || !refs.some((ref) => ref.kind === 'image')) return undefined;
-  return refs;
+  if (refs === undefined) return undefined;
+  if (message.content.startsWith(TOOL_IMAGE_NOTE_PREFIX)) {
+    return refs.some((ref) => ref.kind === 'image') ? refs : undefined;
+  }
+  if (message.content.startsWith(TOOL_MEDIA_NOTE_PREFIX)) {
+    return refs.length > 0 ? refs : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 新锚行的工具名（裁示②：`from tool X`，卡头 title 来源）。锚行无 from 段
+ * （tools 为空）时返回 undefined —— 卡头回落通用标题。只读首行，不扫全文。
+ */
+export function toolMediaToolName(content: string): string | undefined {
+  const newline = content.indexOf('\n');
+  const firstLine = newline >= 0 ? content.slice(0, newline) : content;
+  const match = / from tool ([^:(\n]+)/.exec(firstLine);
+  const name = match?.[1]?.trim();
+  return name !== undefined && name.length > 0 ? name : undefined;
 }
 
 /**

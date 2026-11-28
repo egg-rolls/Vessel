@@ -67,7 +67,8 @@ export function useRefPreview(card: FileTokenCard, active = true): RefPreviewSta
 
   const url = sha256 !== undefined ? blob.url : pathPreview.url;
   const loading =
-    (active && (sha256 !== undefined ? blob.status === 'loading' : pathPreview.status === 'loading')) ||
+    (active &&
+      (sha256 !== undefined ? blob.status === 'loading' : pathPreview.status === 'loading')) ||
     pdfLoading;
   const expired = (sha256 === undefined && pathPreview.status === 'gone') || pdfExpired;
   const staging = sha256 === undefined && pathPreview.staging === true;

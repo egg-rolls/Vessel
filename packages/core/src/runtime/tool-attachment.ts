@@ -37,9 +37,10 @@
  * 结果全部写回后**按 type 分条追加 user 消息**（既有注入通道 `appendInjectedMessages`，
  * 身份盖章 / 事件 / 落盘全复用）。为什么不把 refs 挂在 role:'tool' 消息上：OpenAI
  * 兼容传输的 tool 消息 content 只能是字符串（图块会被 400），而 user 消息附图是三家
- * 传输都支持的既有通路 —— 正是「像用户消息附图那样」。为什么分条：前端 image lift
- * 按「`[tool image] ` 前缀 + image refs」整条成卡（吞正文），vessel-block fence 试点
- * 要求整条正文恰为单闭合 fence —— 混合内容塞一条会被卡吞掉，分条各自命中既有 lift。
+ * 传输都支持的既有通路 —— 正是「像用户消息附图那样」。为什么分条：前端附件 lift
+ * 按「`[tool media] ` 锚（旧 `[tool image] ` 前缀历史双认）+ refs」整条成卡（吞正文），
+ * vessel-block fence 试点要求整条正文恰为单闭合 fence —— 混合内容塞一条会被卡吞掉，
+ * 分条各自命中既有 lift。
  *
  * image 只接受 `kind:'image'` 的引用；没有 sha256 的引用不会入池（plan 记
  * `not_ingested`），loop 侧也不会为它注入消息（不声称「附上了」一张发不出去的图）。

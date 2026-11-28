@@ -272,55 +272,78 @@ async function gateToolResult(outcome: ToolExecutionOutcome, sessionId: string):
 }
 
 /**
- * 工具结果附图的注入文案（q-media-view）：告诉模型这条 user 消息带着工具读出的图。
- *
- * 与 `[refs]` 尾注同一口径（英文、只列前 3 条路径）；明说「内联取决于模型视觉能力」，
- * 不声称一定发出去了 —— 投递事实由 `image.sent` / `context.image_dropped` 事件表达。
+ * 工具附件注入的识别锚（q-tool-card-slot 裁示①）：极短 ASCII 前缀，零 wire 新字段。
+ * 与 web `transcript-items.ts#TOOL_MEDIA_NOTE_PREFIX` 逐字一致。旧 `[tool image]` /
+ * `[tool file]` 前缀的历史消息永久双认（legacy 渲染器冻结，不回填）。
+ */
+const TOOL_MEDIA_NOTE_PREFIX = '[tool media] ';
+
+/** 路径 → 文件名（Windows / POSIX 分隔符都认；与 web file-token#pathBasename 同口径）。 */
+function refBasename(path: string): string {
+  const parts = path.split(/[\\/]/).filter((part) => part.length > 0);
+  return parts[parts.length - 1] ?? path;
+}
+
+/** 每 ref 一行 canonical vessel-ref token（与 composer 用户附图消息同形）。 */
+function refTokenLines(refs: readonly MessageRef[]): string {
+  return refs.map((ref) => `[${refBasename(ref.path)}](<vessel-ref:${ref.path}>)`).join('\n');
+}
+
+/** 锚行：`[tool media] N image(s)/file(s) from tool X:`（裁示②：卡头工具名来源）。 */
+function toolMediaAnchorLine(
+  noun: string,
+  refs: readonly MessageRef[],
+  tools: readonly string[],
+  omitted: number,
+): string {
+  const from = tools.length > 0 ? ` from tool ${[...new Set(tools)].join(' / ')}` : '';
+  const cap = omitted > 0 ? ` (${String(omitted)} more omitted: over per-message ref cap)` : '';
+  return `${TOOL_MEDIA_NOTE_PREFIX}${String(refs.length)} ${noun}${from}${cap}:`;
+}
+
+/**
+ * 工具结果附图的注入文案（q-tool-card-slot token 化）：锚行 + 每图一行 vessel-ref
+ * token + 极短英文 attached hint。refs 通道原样不动（vision/plan 只读 refs，
+ * content 文本不参与内联/传输）；投递事实不进 prose —— 由 `image.sent` /
+ * `context.image_dropped` 事件表达，UI 从 image_delivery 读三态 chip。
  */
 function toolImageAttachmentNote(
   refs: readonly MessageRef[],
   tools: readonly string[],
   omitted: number,
 ): string {
-  const shown = refs.slice(0, 3).map((ref) => ref.path);
-  if (refs.length > 3) shown.push(`+${String(refs.length - 3)} more`);
   const noun = refs.length === 1 ? 'image' : 'images';
-  const from = tools.length > 0 ? ` from tool ${[...new Set(tools)].join(' / ')}` : '';
-  const cap = omitted > 0 ? ` (${String(omitted)} more omitted: over per-message ref cap)` : '';
   return (
-    `[tool image] ${String(refs.length)} ${noun}${from}: ${shown.join(', ')}${cap}. ` +
-    'Attached to this message for direct viewing (inlined when the model supports vision; ' +
-    'delivery facts: image.sent / context.image_dropped).'
+    `${toolMediaAnchorLine(noun, refs, tools, omitted)}\n` +
+    `${refTokenLines(refs)}\n` +
+    'Attached for direct viewing (inlined when the model supports vision).'
   );
 }
 
 /**
- * 工具结果附文件的注入文案（块 P2）：与 `[tool image]` 同一口径（英文、只列前 3 条
- * 路径、超上限明说）。文件不走视觉内联 —— refs 在用户侧渲成既有 chip，模型侧读
- * 注记 + refs 元信息（需要内容时按需读文件，既有通路）。
+ * 工具结果附文件的注入文案（q-tool-card-slot token 化）：与附图同一锚形。
+ * 文件不走视觉内联 —— 模型读 token 知路径，需要内容时按需读文件（既有通路）。
  */
 function toolFileAttachmentNote(
   refs: readonly MessageRef[],
   tools: readonly string[],
   omitted: number,
 ): string {
-  const shown = refs.slice(0, 3).map((ref) => ref.path);
-  if (refs.length > 3) shown.push(`+${String(refs.length - 3)} more`);
   const noun = refs.length === 1 ? 'file' : 'files';
-  const from = tools.length > 0 ? ` from tool ${[...new Set(tools)].join(' / ')}` : '';
-  const cap = omitted > 0 ? ` (${String(omitted)} more omitted: over per-message ref cap)` : '';
   return (
-    `[tool file] ${String(refs.length)} ${noun}${from}: ${shown.join(', ')}${cap}. ` +
-    'Attached to this message as file references (read them on demand if needed).'
+    `${toolMediaAnchorLine(noun, refs, tools, omitted)}\n` +
+    `${refTokenLines(refs)}\n` +
+    'Attached as file references (read them on demand if needed).'
   );
 }
 
 /**
  * typed blocks → 注入 user 消息（块 P2；docs/architecture/blocks.md §3/§5）。
  *
- * **按 type 分条**，不混进一条消息：前端 image lift 按「`[tool image] ` 前缀 +
- * image refs」整条成卡（吞正文），vessel-block fence 试点要求整条正文恰为单闭合
- * fence —— 混合内容塞一条会被卡吞掉。分条后各自命中既有 lift，前端零新解析器。
+ * **按 type 分条**，不混进一条消息（裁示④保持口径）：前端附件 lift 按「`[tool media] `
+ * 锚（旧 `[tool image] ` 前缀历史双认）+ refs」整条成卡（吞正文），vessel-block fence
+ * 试点要求整条正文恰为单闭合 fence —— 混合内容塞一条会被卡吞掉。分条后各自命中既有
+ * lift，前端零新解析器。
  *
  * - quote：信封原文（`[引用消息 <id>]` + `> snippet` + 空行，composeQuoteText 同形；
  *   snippet 折叠空白成单行，镜像 quoteSnippetOf 的 flatten 口径）；

@@ -5,7 +5,9 @@
  * 按注册表 order 依次调用各 type 的 lift（收编既有解析器，不重写）：
  * - quote：`quote-ref.ts#liftQuoteForDisplay`（信封最外层，先剥）；
  * - session-ref：`session-ref.ts#liftSessionRefForDisplay`（本批新补，zh/en 双词）；
- * - image：`transcript-items.ts#toolImageRefsOf`（整条消息成卡）；
+ * - image：`transcript-items.ts#toolImageRefsOf`（旧 `[tool image] ` 前缀整条成卡，legacy 冻结）；
+ * - tool-media：新锚 `[tool media] `（q-tool-card-slot）整条成 ToolResultCard，插槽 =
+ *   剥锚行伪消息过同一 liftBlocks（token/fence 零新解析器）；
  * - notice：`env-notice.ts#runtimeEnvCard`（统一装配入口的包装）；
  * - file：结构化 `Message.refs` + 正文 vessel-ref token（**不剥正文**：token 留
  *   body 原位，match 结果经 `inline` 字段喂 InlineText 气泡内渲 chip；按 path
@@ -37,7 +39,12 @@ import { type FileTokenMatch, matchFileTokens, scanFileTokens } from './file-tok
 import './host-vessel-ref';
 import { composeQuoteText, liftQuoteForDisplay } from './quote-ref';
 import { composeSessionRefText, liftSessionRefForDisplay } from './session-ref';
-import { toolImageRefsOf } from './transcript-items';
+import {
+  TOOL_IMAGE_NOTE_PREFIX,
+  TOOL_MEDIA_NOTE_PREFIX,
+  toolImageRefsOf,
+  toolMediaToolName,
+} from './transcript-items';
 import { parseVesselBlockFence } from './vessel-block';
 
 export interface LiftBlocksResult {
@@ -117,6 +124,9 @@ registerBlockType({
   owner: 'host',
   component: blockViews.image,
   lift: ({ message }) => {
+    // legacy 专用（q-tool-card-slot）：只认旧 `[tool image] ` 前缀（历史双认永久，
+    // ToolImageCard 冻结不删不改）。新锚 `[tool media] ` 由下方 tool-media lift 认领。
+    if (!message.content.startsWith(TOOL_IMAGE_NOTE_PREFIX)) return [];
     const refs = toolImageRefsOf(message);
     if (refs === undefined) return [];
     return [
@@ -128,6 +138,46 @@ registerBlockType({
             ? { imageDelivery: message.image_delivery }
             : {}),
           note: message.content,
+          ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
+        },
+        body: '',
+      },
+    ];
+  },
+});
+
+registerBlockType({
+  type: 'tool-media',
+  surface: 'card',
+  order: 35,
+  owner: 'host',
+  component: blockViews['tool-media'],
+  lift: ({ message }) => {
+    // 新锚（q-tool-card-slot 裁示①）：`[tool media] ` 前缀 + refs 整条成卡。
+    // 插槽 = 剥掉锚行后的伪消息过**同一** liftBlocks（零新解析器）：token 认
+    // file-token（matchFileTokens 继承 delivery 三态），fence 认 vessel-block。
+    // 伪消息正文不再带锚前缀 ⇒ 本 lift 不会递归认领（首行已是 token / hint）。
+    if (!message.content.startsWith(TOOL_MEDIA_NOTE_PREFIX)) return [];
+    const refs = toolImageRefsOf(message);
+    if (refs === undefined) return [];
+    const newline = message.content.indexOf('\n');
+    const slotContent = newline >= 0 ? message.content.slice(newline + 1) : '';
+    const slot = liftBlocks({
+      role: 'user',
+      content: slotContent,
+      refs: [...refs],
+      ...(message.image_delivery !== undefined
+        ? { image_delivery: [...message.image_delivery] }
+        : {}),
+    });
+    const tool = toolMediaToolName(message.content);
+    return [
+      {
+        type: 'tool-media',
+        payload: {
+          slot,
+          ...(tool !== undefined ? { tool } : {}),
+          refCount: refs.length,
           ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
         },
         body: '',
@@ -171,7 +221,7 @@ registerBlockType({
     // refs chip / token 卡只属于用户输入侧（助手消息历史/实时都不渲 refs，保持
     // 既有行为；助手正文的 vessel-ref 链接仍走 Markdown link-enhancers 内联卡）。
     if (message.role !== 'user') return [];
-    // 工具图片卡内部已渲非图 refs（MessageRefs）：整条成卡时不重复出 chip。
+    // 工具附件卡（legacy image ∨ 新 tool-media）内部已渲 refs：整条成卡时不重复出 chip。
     if (toolImageRefsOf(message) !== undefined) return [];
     // 正文 vessel-ref token **不剥正文**（图片内嵌气泡精炼 D3）：token 留 body
     // 原位由 InlineText 内联成 chip；半截形状不命中（流式逐字不闪）。与结构化
