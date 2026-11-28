@@ -144,8 +144,9 @@ export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDeliv
  * 「工具返回一次 + inbox 又插一次」的双份。
  *
  * `running` 占位**不可被 read 消费 / 弹出**（readable/visible/inputHead 都跳过它），
- * 在 list 里**沉底**（pinned-bottom）；done/failed 后回到正常可读队列（仍可 read 消费，
- * 但 `quiet` 留档语义保证它不会被当成 run input 直投 —— 唤醒读取，正文由模型自己拉）。
+ * 在 list 里**沉底**（pinned-bottom）；done/failed 后回到正常可读队列（仍可 read 消费）。
+ * q-inbox-admit-restore 起占位卡**只管卡片视觉**（quiet 留档，永不当 run input）；
+ * 结果投递是**另一条独立正常条目**（completeAsyncJob 落盘，走队头直投成正文 run）。
  *
  * **通用解耦**：占位行为（不可消费 / 沉底 / 原位复原 / 防双真相 / 不计 unread）全部
  * **kind 无关**。`kind` 是消费者类别扩展点 —— `'bash'` 首个消费者，`'ask'` 未来消费者
@@ -239,6 +240,13 @@ export interface StoredInboxMessage {
    * 解析时跳过自身难保的求救者。缺省 = 普通消息 / 老条目。
    */
   distress?: true;
+  /**
+   * 投递来源语义（q-inbox-admit-restore，additive）：`AdmitInput.origin` 随条目落盘。
+   * 作业结果以正常条目排队（wake 模式）等队头直投，直投时原样带回 admit ——
+   * `bash_job` 据此跳过 canView（成员自己的作业回报它自己，private 成员也收得到）。
+   * 缺省 = 普通消息 / 老条目（照常加载，直投不带 origin）。
+   */
+  origin?: 'ask_answer' | 'bash_job';
 }
 
 export interface AgentInboxEntryInput {
@@ -265,6 +273,8 @@ export interface AgentInboxEntryInput {
   async_job?: InboxAsyncJobMeta;
   /** q-distress-message：求救消息标记（可缺省，additive）；随条目落盘。 */
   distress?: true;
+  /** 投递来源语义（可缺省，additive）：`AdmitInput.origin`；队头直投原样带回 admit。 */
+  origin?: 'ask_answer' | 'bash_job';
 }
 
 export interface AgentInboxListEntry {
@@ -753,6 +763,7 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
       : {}),
     ...(message.quiet === true ? { quiet: true as const } : {}),
     ...(message.distress === true ? { distress: true as const } : {}),
+    ...(message.origin !== undefined ? { origin: message.origin } : {}),
     ...(fromName !== undefined ? { from_name: fromName } : {}),
     ...(refs.length > 0 ? { refs } : {}),
     ...(message.async_job !== undefined ? { async_job: cloneAsyncJob(message.async_job) } : {}),
@@ -850,6 +861,8 @@ export class AgentInboxStore implements AgentInboxPort {
       ...(delivery === 'quiet' ? { quiet: true as const } : {}),
       // 求救标记随条目落盘：防循环判定在重投 / 重启恢复后仍然认得它。
       ...(message.distress === true ? { distress: true as const } : {}),
+      // 投递来源语义随条目落盘：队头直投据此还原 origin（bash_job 跳 canView）。
+      ...(message.origin !== undefined ? { origin: message.origin } : {}),
       ...(fromName !== undefined ? { from_name: fromName } : {}),
       ...(refs.length > 0 ? { refs } : {}),
       // 异步作业占位元数据随条目落盘（running 占位不可消费 / 沉底；完成时原位更新）。

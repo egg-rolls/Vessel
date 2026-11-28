@@ -255,36 +255,6 @@ function inboxSourceOf(message: AgentMessage): string {
 }
 
 /**
- * synthetic 摘要唤醒的固定输入 —— **不再是默认路径**（0.51 回归修复）。
- *
- * idle 时队列里有可直投的正文，service 会把**队头那条的正文**直接投成下一轮 run input
- * （见 `AgentService.dispatchInbox`）；只有投不进去时才退回这条摘要：「去 inbox 读」，
- * 正文由模型自己拉。判据与理由写在 `dispatchInbox` 的注释里。
- *
- * **不带数字**：未读条数只由 BeforeLlm 的 notice hook 计算，避免两处来源分叉。
- */
-const INBOX_WAKE_INPUT =
-  '[inbox] unread notifications; use the inbox tool (action="list") and read what you need. ' +
-  'Do not reply with a normal send.';
-
-/**
- * 唤醒输入在会话里的身份（`AgentMessage.input_name` → `Message.name`）。
- *
- * 唤醒不是谁说的话，而是**运行时上下文**：标成 `vessel:notice` 后，Web 的时间线
- * （`runtime-visibility` 的 notice 种类 → 环境信息卡）与 TUI 的人类可读投影
- * （跳过 `vessel:*`）都按环境信息处理，不再把它画成用户气泡。
- *
- * 用 `vessel:notice` 而不是新造一个 `vessel:inbox-wake`：`inbox` hook 每轮的
- * `[inbox] N unread` 尾消息已经是 `vessel:notice`，唤醒就是同一件事的另一半
- * （同一 scope 还会在 Web 里折叠成一张卡）；新名字会多出一个只有一处生产的种类，
- * 却仍要同步 Web 的 kind 词表。
- *
- * **正文一个字都没改**：唤醒的判定依赖 run id（`syntheticRunIds`）与
- * `INBOX_WAKE_INPUT` 文本，与 name 无关。
- */
-const INBOX_WAKE_NAME = 'vessel:notice';
-
-/**
  * rotate 交接嘱托在会话里的身份（`AgentMessage.input_name` → `Message.name`）。
  *
  * 内置 `agent` 工具的 rotate 动作把上一具身体写好的 `startup_prompt` 投给新身体
@@ -983,10 +953,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly urgentMessages = new Map<string, AgentMessage>();
   /** 0.41：因后续 urgent 被取消、但消息会重投的 run id；settle 时不清理 urgent id。 */
   private readonly interruptCancelledRunIds = new Set<string>();
-  /** 0.41：synthetic inbox 摘要唤醒 run（内存；不产生父级可见的成员停下通知）。 */
-  private readonly syntheticRunIds = new Set<string>();
   /**
-   * 0.41：一次 inbox 投递（队头直投 or synthetic 摘要唤醒）在途的 agent id。
+   * 0.41：一次 inbox 投递（队头直投）在途的 agent id。
    *
    * 同一目标同时只允许一步投递：否则两次 settle / 一次 notify 撞上一次 settle 会把
    * 同一条队头投两遍。忙时不入这个集合（根本没开始投）。
@@ -2858,9 +2826,6 @@ export class AgentServiceImpl implements AgentService {
     entry.pending.length = 0;
     for (const runId of entry.queuedRuns) {
       this.scheduler.cancel(runId, `body retired: ${reason}`);
-      // 被取消的 synthetic wake 不会 settle；立刻清掉它的 run / wake 标记，
-      // 否则 rotate 后同一 agent 的 inbox 投递会被 `inboxPending` 永远挡住。
-      this.syntheticRunIds.delete(runId);
     }
     entry.queuedRuns.clear();
     this.inboxPending.delete(entry.agentId);
@@ -2932,8 +2897,6 @@ export class AgentServiceImpl implements AgentService {
       entry.pending.length = 0;
       for (const runId of entry.queuedRuns) {
         this.scheduler.cancel(runId, 'agent closed');
-        // 同 retire：被取消的 synthetic wake 不会 settle，必须在此清标记。
-        this.syntheticRunIds.delete(runId);
       }
       entry.queuedRuns.clear();
       this.inboxPending.delete(entry.agentId);
@@ -2975,7 +2938,8 @@ export class AgentServiceImpl implements AgentService {
    *
    * 会话绑定：经 sessionId resolve 成员，inbox 按 agentId。占位 `quiet`（永不当 run input）、
    * running 态不可被 read 消费 / 弹出（readable 排除）、list 沉底。完成时
-   * {@link completeAsyncJob} 按 jobId **原位更新同一条目**，不另插一条 —— 单一真相源。
+   * {@link completeAsyncJob} 按 jobId **原位更新占位**（卡片视觉），结果另落独立正常
+   * 条目投递（q-inbox-admit-restore：占位卡与结果投递解耦）。
    *
    * kind 专属细节放 `payload`（机制层不解释）：bash={command,pid,log_path}；ask={question,...}。
    * 占位的 `session_id` 只放进 `async_job` 元数据（展示 / 归属关联），**不**写条目级
@@ -3018,14 +2982,16 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * q-async-bash-viz：异步作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填
-   * 结果正文 + 合并 kind 专属 payload + 转可消费），再唤醒模型读取（synthetic wake）。
-   * **不是另插一条**：完成结果只存这一条 inbox 条目（单一真相源，杜绝「工具返回一次 +
-   * inbox 又插一次」双份）。**kind 无关**：bash/ask 共享同一机制。
+   * q-inbox-admit-restore（用户裁示：恢复正文 admit 投递，废 synthetic wake）：
+   * 异步作业完成 —— 按 jobId **原位更新占位**（running→done/failed + 填结果正文 +
+   * 合并 kind 专属 payload），占位卡自此**只管卡片视觉**（quiet 留档，模型可 read）。
    *
-   * 占位是 quiet（结果正文由模型自己 read 拉，不直投成 run input），故唤醒走
-   * {@link scheduleInboxWake}（摘要唤醒）而非队头直投。忙 / 无 body 时唤醒返回 false，但结果
-   * 已落 inbox unread —— 下一次 run 的 inbox notice hook 照样 surfaced，结果不丢。
+   * **结果投递与占位卡解耦**：结果另落一条正常可消费条目（wake 模式，origin 随条目
+   * 落盘），走 {@link dispatchInbox} 收口链 —— idle → 队头直投成正文 run（正文 = 作业
+   * 结果，不是「去 inbox 读」的 synthetic 唤醒）；busy → 留队列 + noticeDirty，
+   * run 收口由 settleHandle 补投（既有链条，无上界延迟）。预算拒绝同样留队列
+   * （dispatchInbox 不再点火兜底），预算允许时再投。
+   *
    * 返回是否更新成功（无占位 = false ⇒ 调用方退回 admit 旧路径）。
    */
   async completeAsyncJob(meta: {
@@ -3048,7 +3014,34 @@ export class AgentServiceImpl implements AgentService {
       ...(meta.endedAt !== undefined ? { ended_at: meta.endedAt } : {}),
     });
     if (!updated) return false;
-    void this.scheduleInboxWake(record.id).catch(() => {});
+    // kind 取自占位卡（机制层 kind 无关）：source 用 kind 标签（与占位同口径），
+    // origin 按 kind 映射（bash → bash_job；未来消费者在此扩展映射）。
+    const card = inbox.findByIds(record.id, [`async-job-${meta.jobId}`])[0];
+    const kind = card?.async_job?.kind ?? 'bash';
+    const appended = inbox.append(
+      record.id,
+      {
+        // 独立 id：占位卡（quiet）与结果投递条目（可消费、可成 run input）是两条，
+        // 同 id 幂等会吞掉这次 append。jobId 派生 ⇒ 重复完成调用不产生第二条。
+        id: `async-job-${meta.jobId}-result`,
+        ts: meta.endedAt ?? this.now(),
+        source: kind,
+        text: meta.content,
+        ...(kind === 'bash' ? { origin: 'bash_job' as const } : {}),
+      },
+      { delivery: 'wake' },
+    );
+    if (!appended.accepted) {
+      // inbox 满：结果仍在占位卡里（可 read），不丢；只记日志，不点火。
+      this.logger.warn('agent.async_job.result_enqueue_failed', {
+        agent_id: record.id,
+        job_id: meta.jobId,
+        reason: appended.reason,
+      });
+      return true;
+    }
+    this.noticeDirty.add(record.id);
+    void this.dispatchInbox(record.id).catch(() => {});
     return true;
   }
 
@@ -4942,9 +4935,6 @@ export class AgentServiceImpl implements AgentService {
   ): void {
     this.interruptReasons.delete(handle.id);
     this.runCycleEdges.delete(handle.id);
-    // synthetic wake 结束：清 wake 标记（唤醒不是真实报告，不发成员停下通知）。
-    const synthetic = this.syntheticRunIds.delete(handle.id);
-    if (synthetic) this.inboxPending.delete(handle.agentId);
     // 被后续 urgent 抢占的 run 不清理 urgent id：它的消息会（或已经）重投。
     if (!this.interruptCancelledRunIds.delete(handle.id)) {
       const messageId = this.runMessageIds.get(handle.id);
@@ -4956,8 +4946,8 @@ export class AgentServiceImpl implements AgentService {
     if (outcome === 'cancelled') handle.markCancelled(failure ?? 'run cancelled');
     else if (outcome === 'failed') handle.fail(failure ?? 'run failed');
     else handle.complete(content ?? '');
-    // 成员真停了才报父级（窗口内又拿到工作就丢弃）：synthetic 唤醒不算报告。
-    if (!synthetic) this.schedulePeerStop(handle.agentId, outcome, failure);
+    // 成员真停了才报父级（窗口内又拿到工作就丢弃）。
+    this.schedulePeerStop(handle.agentId, outcome, failure);
     // run 结束、目标空闲且 run 期间有新 inbox 落盘：补一步投递 —— 队头直投成下一轮，
     // 投不进去才发摘要唤醒（判据见 `dispatchInbox`）。这就是「多条 ⇒ 每轮抽一条队头」
     // 的链条：直投成功时 `noticeDirty` 保持点亮，下一轮收口再来一次，直到队列空。
@@ -5937,7 +5927,8 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /**
-   * 队列 → 目标的一步投递：**队头直投**为主，synthetic 摘要唤醒为兜底。
+   * 队列 → 目标的一步投递：**队头直投**（q-inbox-admit-restore 起唯一路径；投不进去
+   * 留队列 + noticeDirty，不再点火 synthetic 兜底）。
    *
    * 为什么不再一律发唤醒：唤醒的 run input 只是一句「去 inbox 读」，正文要模型自己拉 ——
    * 实测连发 4 条后模型一次把剩下的全读出来，用户看到「4 条堆在一起」，而每条消息本该
@@ -5954,8 +5945,9 @@ export class AgentServiceImpl implements AgentService {
    * - 队头没有可直投条目（`inputHead` 为 undefined：全是 quiet 留档 / 空正文）：
    *   quiet 的语义就是「不要执行」（模型自述、投递失败的留档），唤醒模型去读也读不出
    *   一轮 run，只会白烧一次 turn。所以什么都不做。
-   * - 直投本身被拒（预算 cycle 冷却 / member_closed / scheduler 拒绝）：重试会撞同一个
-   *   闸，退回摘要唤醒 —— 至少让模型知道有东西要读，读哪些由它自己决定。
+   * - 直投本身被拒（预算 cycle 冷却 / member_closed / scheduler 拒绝）：**留队列 +
+   *   noticeDirty，不点火兜底**（q-inbox-admit-restore 修3）—— synthetic wake 会在轮间
+   *   插系统 run；预算允许 / 下一次 settle 时重投，正文不丢。
    *
    * 返回 true = 这一步真的让目标动了起来（直投或唤醒），用于交付事件与预算计边。
    */
@@ -5986,8 +5978,13 @@ export class AgentServiceImpl implements AgentService {
           content: head.text,
           agent_id: record.id,
           session_id: entry.bindingId,
-          from: head.source,
+          // bash_job = 成员自己的作业回报它自己：source 只是展示标签（'bash'），
+          // 真正的发送者是收件人自己（与 0.55 admit 旧路径同口径；origin 跳 canView）。
+          from: head.origin === 'bash_job' ? record.id : head.source,
           channel: 'direct',
+          // 投递来源语义原样带回（q-inbox-admit-restore）：bash_job 跳 canView，
+          // 执行内核据此渲染 tool:bash 身份。
+          ...(head.origin !== undefined ? { origin: head.origin } : {}),
           ...(head.refs !== undefined ? { refs: head.refs } : {}),
           ...(head.conversation_id !== undefined ? { conversation_id: head.conversation_id } : {}),
           // team 关联原样带回（append 同 id 幂等，防裁掉重落时丢关联）。
@@ -6013,87 +6010,11 @@ export class AgentServiceImpl implements AgentService {
       this.inboxPending.delete(agentId);
     }
     if (delivered) return true;
-    // 直投被拒：兜底用摘要唤醒（唤醒失败也只留队列，不丢消息）。
+    // 直投被拒（预算 / member_closed / scheduler）：**留队列 + 计数，不点火兜底**
+    // （q-inbox-admit-restore 修3）—— synthetic wake 会在轮间插一个系统 run（打断
+    // 协调流的根因形状）。消息留在队列，预算允许 / 下一次 settle 时自然重投。
     this.noticeDirty.add(agentId);
-    return this.scheduleInboxWake(agentId);
-  }
-
-  /**
-   * 排一次 synthetic 摘要唤醒（`dispatchInbox` 的兜底，不再是默认路径）。
-   * `inboxPending` 在 await 前同步加入；无 live body / rotate / 已有在途投递时返回 false。
-   */
-  private async scheduleInboxWake(agentId: string): Promise<boolean> {
-    if (!this.canDispatchInbox(agentId)) return false;
-    const record = this.registry.get(agentId);
-    if (record === undefined) return false;
-    const entries = this.liveEntries(agentId);
-    const entry = entries.find((candidate) => candidate.primary) ?? entries[0];
-    if (entry === undefined) return false;
-    this.inboxPending.add(agentId);
-    this.noticeDirty.delete(agentId);
-    try {
-      await this.submitWakeMessage(record, entry);
-      return true;
-    } catch (error) {
-      this.inboxPending.delete(agentId);
-      this.noticeDirty.add(agentId);
-      this.logger.warn('agent.inbox.wake_failed', {
-        agent_id: agentId,
-        session_id: entry.bindingId,
-        error: errorText(error),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * synthetic wake run：无 conversation_id、不 append / hold；executor 启动时先查
-   * readable unread，为 0 直接 complete、不调模型。run id 记入 `syntheticRunIds`，
-   * 据此跳过成员停下通知（否则每次唤醒都会给父级发一条噪音）。
-   */
-  private async submitWakeMessage(record: MemberRecord, entry: ExecutionUnitEntry): Promise<void> {
-    if (this.draining || entry.closing || entry.retired) {
-      throw new AgentError('member_closed', `member_closed: ${record.id}`);
-    }
-    const runId = this.newId();
-    const message: AgentMessage = {
-      id: this.newId(),
-      from: SYSTEM_PRINCIPAL,
-      to: record.id,
-      content: INBOX_WAKE_INPUT,
-      ts: this.now(),
-      source: 'system',
-      channel: 'direct',
-      // 结构化身份：唤醒是运行时上下文，不是人说的话（见 INBOX_WAKE_NAME）。
-      input_name: INBOX_WAKE_NAME,
-    };
-    entry.queuedRuns.add(runId);
-    this.syntheticRunIds.add(runId);
-    const task: ScheduledTask = {
-      agent: { id: record.id } as AgentHandle,
-      runId,
-      sessionId: entry.bindingId,
-      input: INBOX_WAKE_INPUT,
-      executor: async (scheduledRunId) => {
-        entry.queuedRuns.delete(scheduledRunId);
-        const readable = this.inbox?.list(record.id).unread ?? 0;
-        if (readable === 0) {
-          this.syntheticRunIds.delete(scheduledRunId);
-          this.inboxPending.delete(record.id);
-          const handle = new ExecutionUnitRunHandle(scheduledRunId, record.id, entry.bindingId);
-          handle.complete('');
-          return handle;
-        }
-        return this.startExecutionUnitRun(record, entry, message, scheduledRunId, false);
-      },
-    };
-    try {
-      await this.scheduler.submit(task);
-    } catch (error) {
-      entry.queuedRuns.delete(runId);
-      this.syntheticRunIds.delete(runId);
-      throw error;
-    }
+    return false;
   }
 
   /** 同一 agent 的打断重排串行执行（普通 admit 不经过此锁）。 */

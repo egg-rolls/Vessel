@@ -1759,9 +1759,9 @@ export interface AgentService {
     summary?: string;
   }): Promise<boolean>;
   /**
-   * q-async-bash-viz：异步作业完成 —— 按 jobId 原位更新占位（running→done/failed + 填结果
-   * 正文 + 合并 payload + 唤醒读取），不另插一条（单一真相源，kind 无关）。
-   * 返回是否更新成功（无占位 = false ⇒ 退回 admit）。
+   * q-inbox-admit-restore：异步作业完成 —— 按 jobId 原位更新占位（running→done/failed，
+   * 卡片视觉），结果另落独立正常条目走 dispatchInbox 投递（idle 直投正文 run / busy 留队列
+   * 补投；kind 无关）。返回是否更新成功（无占位 = false ⇒ 退回 admit）。
    */
   completeAsyncJob(meta: {
     jobId: string;

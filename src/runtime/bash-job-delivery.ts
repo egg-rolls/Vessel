@@ -50,10 +50,11 @@ export type BashJobDeliveryDeps = {
 /**
  * 注册唤醒投递 + 起作业占位。返回注销函数（宿主收口时调；进程级单槽，重复注册后者取代前者）。
  *
- * q-async-bash-viz（复用 inbox，灵魂出窍复原）：
+ * q-inbox-admit-restore（恢复正文 admit 投递，废 synthetic wake）：
  * - **起作业**：往 inbox 插一条 running 占位回调卡（科技蓝、不可消费、沉底），jobId 为键。
- * - **完成**：先按 jobId **原位更新占位**（running→done/failed + 填结果正文 + 唤醒读取）——
- *   完成路由本就进 inbox，改动只是匹配占位槽填充而非新插一条（单一真相源，防双份）。
+ * - **完成**：`completeAsyncJob` 按 jobId **原位更新占位**（running→done/failed，卡片视觉），
+ *   并把结果**另落一条正常可消费条目**走 dispatchInbox 收口链 —— idle → 队头直投成正文
+ *   run；busy → 留队列 + noticeDirty，settleHandle 补投。占位卡自此只管视觉（quiet 留档）。
  *   无占位（未起过 / 已被裁 / 无 inbox）时退回既有 admit 投递（结果不丢）。
  */
 export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
@@ -99,7 +100,8 @@ export function registerBashJobDelivery(deps: BashJobDeliveryDeps): () => void {
       }
       inflight += 1;
       try {
-        // 先试原位更新占位（单一真相源）：成功 = 结果已落 inbox + 唤醒读取，标 announced。
+        // 先试原位更新占位 + 结果独立条目投递（completeAsyncJob 内收口）：
+        // 成功 = 结果已落 inbox（占位卡视觉 + 可消费投递条目），标 announced。
         const filled = await deps.service.completeAsyncJob({
           jobId: completion.jobId,
           sessionId: completion.sessionId,
