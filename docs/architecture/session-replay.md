@@ -67,25 +67,16 @@ seq；② 末条 = 区间内最后一个非洞 seq；③ 实收条数 `=== count
 - `gap` 帧对**时间线 epoch 永不发**（`packages/serve/src/protocol.ts:193-213` 自述「过渡期字段，B2 落地即删」）：
   时间线段用 `count` + `holes` 表达完整性，缺一条就是客户端自己算错。
 
-## 5. 单区间封顶与按段续拉（已落地，见 §7）
+## 5. 单段封顶与按段续拉
 
-- 分页只在**区间内部**发生：每页 ≤ 500 条（`collectTimelineRange` 的 `pageLimit` 默认 500，
-  `timeline-protocol.ts:405-409`），停止条件只有「游标不前进 / 已到区间右端 / `has_more !== true`」（`:432`）。
-- 硬上界 `MAX_TIMELINE_RANGE_PAGES = 200`（`:388`）⇒ 单区间约 **100,000 条**（200 × 500）。触顶**不静默截断**：
-  记 `error: 'range page cap reached'`（`:437-441`），调用方照走四条校验，于是它变成**可见**缺口。
-- **已落地（0.55）**：触顶后**按段续拉** —— 剩余区间重新声明成下一段继续拉，而不是整段变成缺口；
-  目标口径是「区间可续、声明不撒谎」。收口点在客户端两侧，见 §7。上一句里那两个常量名/行号是
-  0.54 施工期口径（现名 `MAX_TIMELINE_SEGMENTS = 200` / `TIMELINE_SEGMENT_MAX_EVENTS = 2000`）。
+- 回填按**段**声明：单段上限 `TIMELINE_SEGMENT_MAX_EVENTS = 2000`（`apps/web/src/gateway/timeline-protocol.ts`），段数上界 `MAX_TIMELINE_SEGMENTS = 200`。分页只在段内部发生，页数上界由区间长度算出（`count / pageLimit + 2`），停止条件只有「游标不前进 / 已到段右端 / `has_more !== true`」。
+- 触顶**不静默截断**：记 `error: 'page bound hit'`，调用方照走四条校验，于是它变成**可见**缺口；剩余区间重新声明成下一段继续拉（「区间可续、声明不撒谎」），收口点在客户端两侧，见 §7。
 
 ## 6. 相关文档与未核实
 
-- 落盘口径（新格式 / 旧格式 / 迁移目标）：[event-log-policy.md](event-log-policy.md)；事件命名与可见性：[events.md](events.md)
+- 落盘口径（新格式 / 旧格式 / 迁移目标）：[event-log-policy.md](event-log-policy.md)；事件命名：[event-catalog](event-catalog.md)；可见性：[event-visibility](event-visibility.md)
 - 0.53 悬空项的结案（`U` 为何是空集、两指针不变式、chunk 的内存窗口）：[unacked-queue-closure.md](unacked-queue-closure.md)
-- 0.53 三源形态的历史记录（只作历史引用）：[refresh-gap-design.md](../specs/refresh-gap-design.md)、
-  外加一次 217 个真实会话 / 1,048 个 run 的刷新丢失实测（环 1 万槽 ≈ 一个 run 最后 200 秒：
-  5–10 分钟的 run **82%** 会丢正文、中位丢 **9.8%**；>10 分钟的 run **94%** 会丢、中位丢 **21.6%**；
-  而丢掉的正文 **100% 已在磁盘的 `llm.response` 里**，丢的只是屏幕能不能重建）
-- 迁移分 A/B/C 三阶段、受影响 9 项、可回退；施工单随实现轮维护，不进本仓
+- 0.53 三源形态的历史记录与刷新丢失实测（历史引用，细节不在本仓）：[refresh-gap-design.md](../specs/refresh-gap-design.md)
 
 **未核实**（不按已实现写）：
 
