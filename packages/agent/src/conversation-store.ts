@@ -12,6 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
+import { errorText } from './error-text.js';
 import type { BudgetBlockReason, BudgetDimension } from './types.js';
 
 export const CONVERSATION_STORE_VERSION = 1;
@@ -347,8 +348,4 @@ export class ConversationStore {
     this.prune();
     return true;
   }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

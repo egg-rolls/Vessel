@@ -103,7 +103,7 @@ export async function reloadGateway(options: ReloadGatewayOptions): Promise<Relo
   } catch (error) {
     if (error instanceof RpcClientError) {
       const hint =
-        error.code === 'not_found'
+        error.code === 'method_not_found'
           ? ' (this gateway build does not expose gateway.reload yet)'
           : '';
       return { ok: false, error: `${error.code}: ${error.message}${hint}`, code: error.code };
@@ -162,8 +162,10 @@ export async function shutdownGateway(
     return { ok: true };
   } catch (error) {
     if (error instanceof RpcClientError) {
+      // q-error-e1（D4）：只有 method_not_found 才说明该 build 未暴露 gateway.shutdown；
+      // 资源 not_found 不再误报「版本过期」（也可能是打错目标）。
       const hint =
-        error.code === 'not_found'
+        error.code === 'method_not_found'
           ? ' (this gateway build does not expose gateway.shutdown yet)'
           : '';
       return { ok: false, error: `${error.code}: ${error.message}${hint}`, code: error.code };

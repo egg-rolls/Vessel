@@ -47,11 +47,12 @@ export function ChannelsPanel() {
   const errorState = resource.state.status === 'error' ? resource.state : null;
   const error = errorState?.error ?? null;
   if (error && !channel) {
-    // 「渠道未启用」是配置状态，不是故障：`feishu.status` 在 default tenant 未启用时抛
-    // `not_found`、其它 tenant 未配置时抛 `forbidden`，REST 兜底是 `channel_disabled`。
+    // 「渠道未启用」是配置状态，不是故障：`feishu.status` 未启用时抛
+    // `not_supported`（q-error-e1 D4 能力拆义）、其它 tenant 未配置时抛 `forbidden`，
+    // REST 兜底是 `channel_disabled`。
     // 画成「加载失败 + 重试」会让人以为重试能修好，而它永远不会成功。
     const code = errorState?.code;
-    if (code === 'not_found' || code === 'channel_disabled' || code === 'forbidden') {
+    if (code === 'not_supported' || code === 'channel_disabled' || code === 'forbidden') {
       return (
         <NotEnabledState
           variant="page"

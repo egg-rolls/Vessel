@@ -92,6 +92,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel-agent/core';
+import { errorText } from './error-text.js';
 import { normalizeRefs } from './refs.js';
 import { HUMAN_PRINCIPAL } from './team-address.js';
 
@@ -768,10 +769,6 @@ function cloneMessage(message: StoredInboxMessage): StoredInboxMessage {
     ...(refs.length > 0 ? { refs } : {}),
     ...(message.async_job !== undefined ? { async_job: cloneAsyncJob(message.async_job) } : {}),
   };
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export class AgentInboxStore implements AgentInboxPort {

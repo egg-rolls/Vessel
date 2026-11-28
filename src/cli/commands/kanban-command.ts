@@ -59,8 +59,12 @@ function cap(text: string, max = CELL_MAX): string {
 }
 
 function errorResult(error: unknown): CommandResult {
+  // q-error-e1（D4）：板未配置 = 能力缺失 not_supported；缺卡/缺板文件 = 资源 not_found。
+  if (error instanceof RpcClientError && error.code === 'not_supported') {
+    return { exitCode: 1, stdout: '', stderr: t('kanban.unavailable') };
+  }
   if (error instanceof RpcClientError && error.code === 'not_found') {
-    // 缺卡（view id 不存在）与板未配置/缺文件都是 not_found：前者直报消息，后者给提示。
+    // 缺卡（view id 不存在）与缺板文件都是 not_found：前者直报消息，后者给提示。
     if (error.message.includes('task not on board')) {
       return { exitCode: 1, stdout: '', stderr: `${error.code}: ${error.message}` };
     }

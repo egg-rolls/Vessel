@@ -1874,8 +1874,8 @@ async function runWithConfig(result: BootstrapResult) {
           const reset = (metrics as { reset?: () => void } | undefined)?.reset;
           if (typeof reset !== 'function') {
             throw Object.assign(
-              new Error(`not_found: metrics are not available for tenant "${result.tenantId}"`),
-              { code: 'not_found' },
+              new Error(`not_supported: metrics are not available for tenant "${result.tenantId}"`),
+              { code: 'not_supported' },
             );
           }
           reset.call(metrics);

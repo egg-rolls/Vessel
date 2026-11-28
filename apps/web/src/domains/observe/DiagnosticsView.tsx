@@ -122,7 +122,7 @@ export function DiagnosticsView() {
   const runtime = health?.runtime;
   const mcpServers = useMemo(() => resourceData(mcp.state) ?? [], [mcp.state]);
   const mcpError = mcp.state.status === 'error' ? mcp.state : null;
-  const mcpNotEnabled = mcpError?.code === 'not_found' || mcpError?.code === 'mcp_disabled';
+  const mcpNotEnabled = mcpError?.code === 'not_supported' || mcpError?.code === 'mcp_disabled';
   const manifest = resourceData(capabilities);
   const enabledPlugins = useMemo(
     () => (manifest ? manifest.plugins.filter((plugin) => plugin.enabled) : []),

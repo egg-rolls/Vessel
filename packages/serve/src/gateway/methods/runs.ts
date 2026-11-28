@@ -191,11 +191,17 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         if (live !== undefined) return { run: liveRunStatus(live) };
         const durableStore = durable();
         if (!durableStore) {
-          throw new RpcError('not_found', `Run not found: ${runId}`);
+          throw new RpcError('not_found', `Run not found: ${runId}`, {
+            resource: 'run',
+            id: runId,
+          });
         }
         const checkpoint = await durableStore.store.load(runId);
         if (!checkpoint) {
-          throw new RpcError('not_found', `Run not found: ${runId}`);
+          throw new RpcError('not_found', `Run not found: ${runId}`, {
+            resource: 'run',
+            id: runId,
+          });
         }
         return { run: normalizeDurableRun(checkpoint as unknown as Record<string, unknown>) };
       },
@@ -290,11 +296,19 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         const runId = stringParam(params, 'run_id');
         const control = runControl();
         if (control === undefined) {
-          throw new RpcError('not_found', `Run not found: ${runId}`);
+          throw new RpcError('not_found', `Run not found: ${runId}`, {
+            resource: 'run',
+            id: runId,
+          });
         }
         // 先按 snapshot 判存在，不泄漏不存在的 run。
         const target = liveRunsOf(control).find((run) => run.run_id === runId);
-        if (target === undefined) throw new RpcError('not_found', `Run not found: ${runId}`);
+        if (target === undefined) {
+          throw new RpcError('not_found', `Run not found: ${runId}`, {
+            resource: 'run',
+            id: runId,
+          });
+        }
         const cancelled = await control.cancel(runId);
         // scheduler 不会为 queued-cancel 产出 core 事件，也就没有 RunRecord；
         // 补一条终态 RunRecord，否则该 run 会从列表消失。
@@ -323,7 +337,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
       handler: async (params) => {
         const durableStore = durable();
         if (!durableStore?.store || !durableStore.resume) {
-          throw new RpcError('not_found', 'Durable resume is not available');
+          throw new RpcError('not_supported', 'Durable resume is not available');
         }
         const runId = stringParam(params, 'run_id');
         if (!reserveResume(runId)) {
@@ -340,7 +354,10 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         }
         if (!checkpoint) {
           releaseResume(runId);
-          throw new RpcError('not_found', `Run not found: ${runId}`);
+          throw new RpcError('not_found', `Run not found: ${runId}`, {
+            resource: 'run',
+            id: runId,
+          });
         }
         if (!isResumableStatus(checkpoint.status)) {
           releaseResume(runId);
@@ -357,6 +374,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
             throw new RpcError(
               'not_found',
               error instanceof Error ? error.message : 'Run not found',
+              { resource: 'run', id: runId },
             );
           }
           throw new RpcError('conflict', error instanceof Error ? error.message : 'Resume failed');

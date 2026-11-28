@@ -8,7 +8,7 @@
  */
 
 import type { PrincipalScope } from '@vessel-agent/config';
-import type { RunEvent } from '@vessel-agent/core';
+import { type FrozenRpcCode, lookupErrorCode, type RunEvent } from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 /**
@@ -16,46 +16,13 @@ import { PROTOCOL_VERSION } from './protocol.js';
  */
 export const RPC_VERSION = PROTOCOL_VERSION;
 
-/** 冻结错误码（A-3 §10.2） */
-export type RpcErrorCode =
-  | 'unauthorized'
-  | 'forbidden'
-  | 'not_found'
-  | 'invalid_params'
-  | 'data_locked'
-  | 'quota_exceeded'
-  | 'conflict'
-  | 'internal'
-  // 0.12：注入的可选能力未提供（DECISION-023 §2.3，如未注入的 gateway.reload）。
-  | 'not_supported'
-  // 0.13：交互请求已过期/已随 run 取消（DECISION-024 §2.2）。
-  | 'expired'
-  // 0.13 Addendum A：run 已结束 / 重启后找不到 run，权限请求失效。
-  | 'run_ended'
-  // 0.34 CONTRACT-0.34-context C7：sessions.compact。
-  | 'session_not_found'
-  | 'compact_unavailable'
-  // 0.52 S1a：node 正在优雅退出（fence 已打开）。**可重试**：等 node 回来再发，
-  // 客户端按「稍后重试」处理，不要当终态错误展示。
-  | 'gateway_restarting'
-  // 自重启 Option A（node.restart.self）：触发者会话此刻没有活跃 run /
-  // run_id 与活跃 run 不符 / continuation 标记落盘失败。
-  | 'no_active_run'
-  | 'run_mismatch'
-  | 'marker_failed'
-  // q-restart-tool（gateway.restart）：预约段失败（无运行中 node / 无平台 gateway /
-  // 编排者 spawn 失败等）；message 携 CLI selfRestartReserveCommand 同款原因。
-  | 'restart_reserve_failed'
-  // 0.54 B1（ADR-105 §6 / D4）：时间线订阅的两个稳定码。
-  // - `legacy_session_unsupported`：**0.54 之前的旧格式会话**（只有 `events.ndjson`、
-  //   没有 timeline 标记）。0.55 起「只读冻结」不再是中间态：这种目录读、写、迁移全不支持，
-  //   读面必须报这个码（给空段 = 把「没人能解析」说成「没有事件」）。与 core 写者同名同义
-  //   （`packages/core/src/timeline/types.ts`）。
-  // - `timeline_unavailable`：装配层没开 timeline 读面（端口缺失）。与上一条分开：
-  //   「服务端没开这个能力」不是「这个会话坏了」，混成一个码会误导排障。
-  // 两条与根 `src/rpc/types.ts` 逐字同步（main 已补），所以这里可以直接抛。
-  | 'legacy_session_unsupported'
-  | 'timeline_unavailable';
+/**
+ * 冻结错误码（A-3 §10.2）。q-error-e1 起单源在 core `types/error-registry.ts`
+ * （FROZEN_RPC_ERROR_CODES），本联合与根 `src/rpc/types.ts` 白名单都从它派生，
+ * 不再手抄（逐码历史注释见 core 注册表）。additive 追加：method_not_found
+ * （用户裁定①，未知 RPC 方法专用；not_found 拆义 D4）。
+ */
+export type RpcErrorCode = FrozenRpcCode;
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
@@ -446,42 +413,38 @@ function toErrorBody(error: unknown): RpcErrorBody {
       ...(error.details !== undefined ? { details: error.details } : {}),
     };
   }
-  const code = (error as { code?: unknown }).code;
-  const mapped = mapExternalErrorCode(code);
-  if (mapped !== null) {
+  const message = error instanceof Error ? error.message : String(error);
+  const rawCode = (error as { code?: unknown }).code;
+  const domainCode =
+    typeof rawCode === 'string' && /^[a-z][a-z0-9_]*$/.test(rawCode) ? rawCode : undefined;
+  const mapped = mapExternalErrorCode(rawCode);
+  // q-error-e1（D2 边界保真）：details additive 携带 domain_code/classified_by，
+  // 稳定领域码不再死在最后一跳（error_id/operation/cause 属 E2）。stack 不上 wire。
+  if (mapped !== null && domainCode !== undefined) {
     return {
       code: mapped,
-      message: error instanceof Error ? error.message : String(error),
+      message,
+      details: { domain_code: domainCode, classified_by: 'registry' },
     };
   }
-  return {
-    code: 'internal',
-    message: error instanceof Error ? error.message : String(error),
-  };
+  if (domainCode !== undefined) {
+    // 未注册码兜底 internal，标 registry-miss（可观测漂移信号）。
+    return {
+      code: 'internal',
+      message,
+      details: { domain_code: domainCode, classified_by: 'registry-miss' },
+    };
+  }
+  return { code: 'internal', message, details: { classified_by: 'message' } };
 }
 
+/**
+ * 外部错误码 → 冻结码（q-error-e1：原白名单 switch 收敛为查单一注册表）。
+ * 冻结码登记 rpcCode=自身（放行）；领域码按注册表唯一映射口；无映射返回 null。
+ */
 function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
-  switch (code) {
-    case 'unauthorized':
-    case 'forbidden':
-    case 'not_found':
-    case 'invalid_params':
-    case 'data_locked':
-    case 'quota_exceeded':
-    case 'conflict':
-    case 'internal':
-    case 'not_supported':
-    case 'expired':
-    case 'run_ended':
-    // 0.55：core 的读口为旧格式会话抛的是 `TimelineError`（不是 RpcError），
-    // 这里按冻结的错误码放行，让它以 `legacy_session_unsupported` 抵达客户端
-    // （否则会被折成 `internal`，用户拿不到「用 0.54 导出」那句修复提示）。
-    case 'legacy_session_unsupported':
-    case 'timeline_unavailable':
-      return code;
-    default:
-      return null;
-  }
+  if (typeof code !== 'string' || !/^[a-z][a-z0-9_]*$/.test(code)) return null;
+  return lookupErrorCode(code)?.rpcCode ?? null;
 }
 
 /** 创建分发器；方法表在启动期冻结 */
@@ -497,8 +460,10 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
     // 静态方法优先；动态源（plugin.*）只在静态表未命中时解析。
     const method = table.byName.get(request.method) ?? options.dynamic?.resolve(request.method);
     if (!method) {
+      // q-error-e1（D4 / 用户裁定①）：未知方法专用 method_not_found，不再与
+      // 资源不存在/能力未注入共用 not_found（F3.2 三义重载根修）。
       return failure(id, {
-        code: 'not_found',
+        code: 'method_not_found',
         message: `Unknown method: ${request.method}`,
         details: { method: request.method },
       });

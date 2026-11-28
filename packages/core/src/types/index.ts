@@ -6,6 +6,7 @@
 export * from './context.js';
 export * from './env-cadence.js';
 export * from './error.js';
+export * from './error-registry.js';
 export * from './event.js';
 export * from './guardrail.js';
 export * from './hook.js';

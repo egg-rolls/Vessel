@@ -418,7 +418,7 @@ export function createOfflineAttentionTarget(options: {
     }
     const definition = byName.get(method);
     if (definition === undefined) {
-      throw new RpcClientError('not_found', `Offline attention does not support ${method}`);
+      throw new RpcClientError('method_not_found', `Offline attention does not support ${method}`);
     }
     const result = await definition.handler((params ?? {}) as Record<string, unknown>, ctx);
     if (method === 'ask.respond' || method === 'permission.respond') {

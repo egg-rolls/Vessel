@@ -102,18 +102,20 @@ export function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('not_found:');
 }
 
-/** 旧 gateway 没有 /v1/rpc 或 runs.* 时回退到 WS legacy 方法；业务错误不回退。 */
+/** 旧 gateway 没有 /v1/rpc 或 runs.* 时回退到 WS legacy 方法；业务错误不回退。
+ * q-error-e1（D4）：只认方法级信号（method_not_found/method_not_allowed/404/405）。 */
 export function canFallbackToLegacyRuns(error: unknown): boolean {
   if (!(error instanceof GatewayHttpError)) return false;
   if (error.status === 404 || error.status === 405) return true;
-  return error.code === 'method_not_allowed';
+  return error.code === 'method_not_allowed' || error.code === 'method_not_found';
 }
 
-/** 旧 gateway 没有 canonical RPC 时回退到既有 REST 读接口。 */
+/** 旧 gateway 没有 canonical RPC 时回退到既有 REST 读接口。
+ * q-error-e1（D4）：资源 not_found 不再触发回退空结果——只认方法级信号。 */
 export function canFallbackToRest(error: unknown): boolean {
   if (!(error instanceof GatewayHttpError)) return false;
   if (error.status === 404 || error.status === 405) return true;
-  return error.code === 'method_not_allowed' || error.code === 'not_found';
+  return error.code === 'method_not_allowed' || error.code === 'method_not_found';
 }
 
 /** 服务端返回的 messages 可能是旧数据/空值；统一成前端可渲染的形状 */

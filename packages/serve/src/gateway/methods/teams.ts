@@ -37,7 +37,7 @@ export interface TeamMethodsDeps {
 /** 未注入按 `not_found` 处理。 */
 function requireTeamControl(teams: TeamControlLike | undefined): TeamControlLike {
   if (!teams) {
-    throw new RpcError('not_found', 'Team control is not available');
+    throw new RpcError('not_supported', 'Team control is not available');
   }
   return teams;
 }
@@ -64,7 +64,10 @@ function actorOf(ctx: RpcMethodContext): string {
  */
 function assertTeamScope(scope: string | undefined, teamId: string): void {
   if (scope !== undefined && teamId !== scope) {
-    throw new RpcError('not_found', `Team not found: ${teamId}`);
+    throw new RpcError('not_found', `Team not found: ${teamId}`, {
+      resource: 'team',
+      id: teamId,
+    });
   }
 }
 
@@ -153,14 +156,21 @@ function mapTeamError(error: unknown): never {
   if (code === undefined) throw new RpcError('internal', message);
   // 0.38：撤回目标不存在或不在可读窗口内。
   if (code === 'message_not_found') {
-    throw new RpcError('not_found', message, { team_code: code });
+    throw new RpcError('not_found', message, { team_code: code, resource: 'message' });
   }
   if (
     code === 'team_not_found' ||
     code === 'team_conversation_not_found' ||
     code === 'unknown_member'
   ) {
-    throw new RpcError('not_found', message);
+    throw new RpcError('not_found', message, {
+      resource:
+        code === 'unknown_member'
+          ? 'agent'
+          : code === 'team_conversation_not_found'
+            ? 'team_conversation'
+            : 'team',
+    });
   }
   // S10.3：archive 的前置条件与只读状态是业务冲突，不是参数错误。
   // S1：日志游标超出本地保留窗口。仍是 conflict，但带独立 reason 供客户端停止翻页。
@@ -366,7 +376,12 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
                   ...(membersLimit !== undefined ? { members_limit: membersLimit } : {}),
                 };
           const detail = await control.get(teamId, options);
-          if (!detail) throw new RpcError('not_found', `Team not found: ${teamId}`);
+          if (!detail) {
+            throw new RpcError('not_found', `Team not found: ${teamId}`, {
+              resource: 'team',
+              id: teamId,
+            });
+          }
           if (scope === undefined) return detail;
           return { ...detail, team: redactTeamSummary(detail.team) };
         } catch (error) {
@@ -506,7 +521,12 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             member,
             from: actorOf(ctx),
           });
-          if (!result) throw new RpcError('not_found', `Team not found: ${teamId}`);
+          if (!result) {
+            throw new RpcError('not_found', `Team not found: ${teamId}`, {
+              resource: 'team',
+              id: teamId,
+            });
+          }
           return result;
         } catch (error) {
           return mapTeamError(error);
@@ -542,7 +562,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         try {
           const control = requireTeamControl(teams);
           if (typeof control.budget !== 'function') {
-            throw new RpcError('not_found', 'Team budget is not available');
+            throw new RpcError('not_supported', 'Team budget is not available');
           }
           const teamId = stringParam(params, 'team_id');
           assertTeamScope(teamScopeOf(ctx), teamId);
@@ -586,7 +606,12 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             ...(dimension !== undefined ? { dimension } : {}),
             ...(max !== undefined ? { max } : {}),
           });
-          if (!result) throw new RpcError('not_found', `Team not found: ${teamId}`);
+          if (!result) {
+            throw new RpcError('not_found', `Team not found: ${teamId}`, {
+              resource: 'team',
+              id: teamId,
+            });
+          }
           return result;
         } catch (error) {
           return mapTeamError(error);

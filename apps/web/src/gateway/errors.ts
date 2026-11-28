@@ -13,6 +13,7 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   forbidden_origin: 'gateway.error.forbidden_origin',
   invalid_host: 'gateway.error.invalid_host',
   not_found: 'gateway.error.not_found',
+  method_not_found: 'gateway.error.method_not_found',
   invalid_params: 'gateway.error.invalid_params',
   invalid_request: 'gateway.error.invalid_request',
   conflict: 'gateway.error.conflict',

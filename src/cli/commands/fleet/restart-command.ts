@@ -46,6 +46,7 @@ import { resolveGatewayToken } from '../../../gateway/transport-factory';
 import { t } from '../../../i18n';
 import { effectiveNodeTokenAuto } from '../../../node/token-derive';
 import { createHttpRpcClient } from '../../../rpc/http-client';
+import { RpcClientError } from '../../../rpc/types';
 import type { GatewaySelector } from '../../args';
 import { ui } from '../../output';
 import {
@@ -577,7 +578,9 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
         }
       } catch (error) {
         // not_found = 记录缺失（视为终态缺失，交给启动对账）；网络抖动继续轮询。
-        if (String(error).includes('not_found')) {
+        // q-error-e1（D2）：结构化 code 判定——子串 includes('not_found') 会把
+        // method_not_found（未知方法）误读成「记录缺失」。
+        if (error instanceof RpcClientError && error.code === 'not_found') {
           print(ui.warn('self-restart orchestrator: triggering run record missing; proceeding'));
           break;
         }

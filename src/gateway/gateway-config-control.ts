@@ -46,7 +46,7 @@ export function createGatewayConfigSet(
     // S5：project 层写 <project>/vessel.yaml（setUserConfigValue 的 configPath 选项已支持）。
     const targetPath = request.scope === 'project' ? options.projectConfigPath : configPath;
     if (targetPath === undefined) {
-      throw codedError('not_found', 'Project config write is not available');
+      throw codedError('not_supported', 'Project config write is not available');
     }
     await setUserConfigValue(request.key, request.value, { configPath: targetPath });
   };

@@ -285,7 +285,7 @@ export interface GatewayOptions {
   pluginsReload?: () => Promise<PluginReloadResult>;
   /**
    * S4（vscode-settings-design §4.4）：`plugins.config.set` 的写面（asm 注入
-   * setPluginConfigValue）。缺省 = not_found（旧装配 / node 本地 RPC 无写端口）。
+   * setPluginConfigValue）。缺省 = not_supported（旧装配 / node 本地 RPC 无写端口；q-error-e1 D4）。
    * handler 成功后由 gateway 广播 plugin.changed（config 快照变了）。
    */
   pluginsConfigSet?: (
@@ -343,13 +343,13 @@ export interface GatewayOptions {
   config?: ConfigGatewayOptionsLike;
   /**
    * 0.19 S3：本地 Team 控制面（app 注入 AgentTeamService）。
-   * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
+   * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_supported`（q-error-e1 D4）。
    */
   teams?: TeamControlLike;
   /**
    * q-kanban-view：任务看板读面 + 用户验收归档写面（canonical kanban.*）。
    * boardPath 由装配层解析（config kanban.board_path → 缺省 <cwd>/docs/dev/kanban/board.json）。
-   * 缺省 = `kanban.*` 仍进 manifest，但 handler 返回 `not_found`。
+   * 缺省 = `kanban.*` 仍进 manifest，但 handler 返回 `not_supported`（q-error-e1 D4）。
    */
   kanban?: KanbanMethodsDeps;
   /**
@@ -360,7 +360,7 @@ export interface GatewayOptions {
   jobs?: JobsPort;
   /**
    * 0.25：canonical agent 生命周期控制面（app 注入 AgentService 适配器）。
-   * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_found`。
+   * 缺省 = `agents.create|update|close` 仍进 manifest，但 handler 返回 `not_supported`（q-error-e1 D4）。
    */
   agent?: AgentControlLike;
   /**
@@ -3028,7 +3028,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       !methodTable.byName.has(frame.method) &&
       opts.pluginHostManager?.rpc.resolve(frame.method) === undefined
     ) {
-      // 0.4 WS 兼容：未知方法保持 method_not_allowed（HTTP RPC 用 not_found）
+      // 0.4 WS 兼容：未知方法保持 method_not_allowed（HTTP RPC 用 method_not_found，q-error-e1）
       sendResult(
         ws,
         frame.id,
@@ -3355,7 +3355,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** 飞书渠道未配置 → 0.4 not_found */
   function requireFeishu(): FeishuGatewayOptions {
     if (opts.feishu !== undefined) return opts.feishu;
-    throw new RpcError('not_found', 'Feishu channel is not enabled');
+    throw new RpcError('not_supported', 'Feishu channel is not enabled');
   }
 
   /** capabilities.list 的 tools（单执行面的 plugin host + 通用成员级工具，统一权限面） */

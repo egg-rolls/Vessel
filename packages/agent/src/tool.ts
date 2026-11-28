@@ -15,6 +15,7 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel-agent/core';
+import { errorText } from './error-text.js';
 import { deliveryFromNotify } from './inbox.js';
 import { HUMAN_PRINCIPAL } from './team-address.js';
 import { TeamMetadataCorruptError } from './team-store.js';
@@ -103,10 +104,6 @@ const MEMBER_STATES: readonly MemberState[] = [
 /** 与 AgentService 一致：对象且不是数组 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function invalid(message: string): AgentError {

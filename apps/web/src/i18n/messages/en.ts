@@ -2271,6 +2271,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'gateway.error.forbidden_origin': 'The request origin is not in node.allowed_origins.',
   'gateway.error.invalid_host': 'The Host header is not allowed by the gateway.',
   'gateway.error.not_found': 'The target does not exist or was deleted.',
+  'gateway.error.method_not_found':
+    'This gateway does not expose the method (older build or wrong target). Check the connection address and gateway version.',
   'gateway.error.invalid_params': 'The request parameters are invalid.',
   'gateway.error.invalid_request': 'The request format is invalid.',
   'gateway.error.conflict':

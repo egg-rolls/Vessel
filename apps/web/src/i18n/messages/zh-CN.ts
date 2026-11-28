@@ -2151,6 +2151,8 @@ export const messages = {
   'gateway.error.forbidden_origin': '请求来源不在 node.allowed_origins 中。',
   'gateway.error.invalid_host': 'Host 头不被 gateway 允许。',
   'gateway.error.not_found': '目标不存在或已被删除。',
+  'gateway.error.method_not_found':
+    '该 gateway 不支持此方法（版本较旧或打错了目标）。请核对连接地址与 gateway 版本。',
   'gateway.error.invalid_params': '请求参数不合法。',
   'gateway.error.invalid_request': '请求格式不合法。',
   'gateway.error.conflict': '操作与当前状态冲突，请刷新后重试。',

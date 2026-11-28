@@ -129,7 +129,10 @@ export function createJobMethods(deps: JobMethodsDeps): RpcMethodDefinition[] {
             : 8192;
         const tail = jobs.logTail(jobId, maxBytes);
         if (tail === null) {
-          throw new RpcError('not_found', `Job not found or log unavailable: ${jobId}`);
+          throw new RpcError('not_found', `Job not found or log unavailable: ${jobId}`, {
+            resource: 'job',
+            id: jobId,
+          });
         }
         return { job_id: jobId, tail };
       },

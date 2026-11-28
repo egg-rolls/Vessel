@@ -165,7 +165,7 @@ export function McpPanel() {
 
       {error && servers.length === 0 ? (
         // 同 ChannelsPanel：`mcp_disabled` 是「没配 mcp_servers」的配置状态，不是故障。
-        errorState?.code === 'mcp_disabled' || errorState?.code === 'not_found' ? (
+        errorState?.code === 'mcp_disabled' || errorState?.code === 'not_supported' ? (
           <NotEnabledState
             variant="page"
             title={t('integrations.mcp.disabledTitle')}

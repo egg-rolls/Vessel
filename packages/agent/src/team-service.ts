@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 import type { EventStream, Logger, MessageRef, RunEvent } from '@vessel-agent/core';
 import { type AddressStyle, DEFAULT_ADDRESS_STYLE, formatAddress } from './address-display.js';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
+import { errorText } from './error-text.js';
 import { type AgentInboxDelivery, DEFAULT_INBOX_DELIVERY } from './inbox.js';
 import { normalizeRefs } from './refs.js';
 import { addressSegmentCount, HUMAN_PRINCIPAL } from './team-address.js';
@@ -1938,10 +1939,6 @@ function resolveMember(member: string, visible: readonly MemberStatus[]): Member
     throw new TeamError('unknown_member', `unknown_member: ${member}`);
   }
   return match;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** 失败原因折成单行，避免一条 system 日志被正文换行撑开 */
