@@ -5294,6 +5294,11 @@ export class ExecutionUnit {
           : {}),
         // q-media-view：附图引用带给 loop，由它以带 refs 的 user 消息 surfaced。
         ...(result.refs !== undefined && result.refs.length > 0 ? { refs: result.refs } : {}),
+        // 块 P2 additive：typed blocks 带给 loop，由它以统一信封 / fence 的 user 消息
+        // surfaced（同一注入通道；事件不加字段，缺省 = 旧行为逐字节不变）。
+        ...(result.blocks !== undefined && result.blocks.length > 0
+          ? { blocks: result.blocks }
+          : {}),
       };
     } catch (error) {
       // 权限超时是致命错误（DECISION-022 §2.2）：终止 run，不折回工具错误让模型重试。

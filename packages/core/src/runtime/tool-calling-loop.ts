@@ -40,6 +40,7 @@ import type { GuardrailRunner } from './guardrail-runner.js';
 import type { HookRunner } from './hook-runner.js';
 import type { PrefixChangeReason, PromptPrefixGuard } from './prompt-prefix-guard.js';
 import type { RunTiming } from './run-timing.js';
+import type { ToolBlock } from './tool-attachment.js';
 import { isToolCall } from './tool-pipeline.js';
 import { isBridgeCall } from './tool-provenance.js';
 import { boundToolResult, writeToolOutput } from './tool-result-gate.js';
@@ -239,6 +240,12 @@ export interface ToolExecutionOutcome {
    * 请求期由视觉基座（`vision/plan.ts`）内联给多模态主模型。缺省 = 旧行为。
    */
   refs?: MessageRef[];
+  /**
+   * 工具结果附带的 typed blocks（块 P2 additive；来自 `attachToolBlocks` 回执）。
+   * loop 在本批工具结果全部写回后，按 type 分条以统一信封 / vessel-block fence 的
+   * user 消息 surfaced（同一既有注入通道）。缺省 = 旧行为。
+   */
+  blocks?: ToolBlock[];
 }
 
 /**
@@ -285,6 +292,106 @@ function toolImageAttachmentNote(
     'Attached to this message for direct viewing (inlined when the model supports vision; ' +
     'delivery facts: image.sent / context.image_dropped).'
   );
+}
+
+/**
+ * 工具结果附文件的注入文案（块 P2）：与 `[tool image]` 同一口径（英文、只列前 3 条
+ * 路径、超上限明说）。文件不走视觉内联 —— refs 在用户侧渲成既有 chip，模型侧读
+ * 注记 + refs 元信息（需要内容时按需读文件，既有通路）。
+ */
+function toolFileAttachmentNote(
+  refs: readonly MessageRef[],
+  tools: readonly string[],
+  omitted: number,
+): string {
+  const shown = refs.slice(0, 3).map((ref) => ref.path);
+  if (refs.length > 3) shown.push(`+${String(refs.length - 3)} more`);
+  const noun = refs.length === 1 ? 'file' : 'files';
+  const from = tools.length > 0 ? ` from tool ${[...new Set(tools)].join(' / ')}` : '';
+  const cap = omitted > 0 ? ` (${String(omitted)} more omitted: over per-message ref cap)` : '';
+  return (
+    `[tool file] ${String(refs.length)} ${noun}${from}: ${shown.join(', ')}${cap}. ` +
+    'Attached to this message as file references (read them on demand if needed).'
+  );
+}
+
+/**
+ * typed blocks → 注入 user 消息（块 P2；docs/architecture/blocks.md §3/§5）。
+ *
+ * **按 type 分条**，不混进一条消息：前端 image lift 按「`[tool image] ` 前缀 +
+ * image refs」整条成卡（吞正文），vessel-block fence 试点要求整条正文恰为单闭合
+ * fence —— 混合内容塞一条会被卡吞掉。分条后各自命中既有 lift，前端零新解析器。
+ *
+ * - quote：信封原文（`[引用消息 <id>]` + `> snippet` + 空行，composeQuoteText 同形；
+ *   snippet 折叠空白成单行，镜像 quoteSnippetOf 的 flatten 口径）；
+ * - file：全部 file 块合一条（注记 + refs，MESSAGE_REFS_MAX 截断与 image 同口径）；
+ * - table / code：每块一条，content = 单个闭合 vessel-block fence（模型侧投影 =
+ *   fence 原文，可见性对等天然满足；坏 payload 前端原文渲染兜底）。
+ *
+ * 可见性对等：每条消息的 content 就是模型读的文本，UI 投影同源；append-only：
+ * 全部末尾追加，经既有 appendInjectedMessages（身份盖章 / 事件 / 落盘全复用）。
+ */
+function toolBlockMessages(entries: readonly { block: ToolBlock; tool: string }[]): Message[] {
+  const messages: Message[] = [];
+  const fileRefs: MessageRef[] = [];
+  const fileFrom: string[] = [];
+  const fences: Message[] = [];
+  for (const { block, tool } of entries) {
+    switch (block.type) {
+      case 'quote': {
+        const snippet = block.snippet.replace(/\s+/g, ' ').trim();
+        if (snippet.length === 0) break;
+        const header =
+          block.messageId !== undefined && block.messageId.length > 0
+            ? `[引用消息 ${block.messageId}]`
+            : '[引用消息]';
+        messages.push({ role: 'user', content: `${header}\n> ${snippet}\n\n` });
+        break;
+      }
+      case 'file':
+        fileRefs.push(block.ref);
+        fileFrom.push(tool);
+        break;
+      case 'table': {
+        const payload = {
+          type: 'table',
+          ...(block.caption !== undefined ? { caption: block.caption } : {}),
+          columns: block.columns,
+          rows: block.rows,
+        };
+        fences.push({
+          role: 'user',
+          content: `\`\`\`vessel-block\n${JSON.stringify(payload)}\n\`\`\``,
+        });
+        break;
+      }
+      case 'code': {
+        const payload = {
+          type: 'code',
+          ...(block.language !== undefined && block.language.length > 0
+            ? { language: block.language }
+            : {}),
+          code: block.code,
+        };
+        fences.push({
+          role: 'user',
+          content: `\`\`\`vessel-block\n${JSON.stringify(payload)}\n\`\`\``,
+        });
+        break;
+      }
+    }
+  }
+  if (fileRefs.length > 0) {
+    const refs = fileRefs.slice(0, MESSAGE_REFS_MAX);
+    messages.push({
+      role: 'user',
+      content: toolFileAttachmentNote(refs, fileFrom, fileRefs.length - refs.length),
+      refs,
+    });
+  }
+  // 顺序对齐注册表 order：quote(10) → file(50) → vessel-block(60)。
+  messages.push(...fences);
+  return messages;
 }
 
 /**
@@ -928,6 +1035,8 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
         // q-media-view：本批工具结果附带的图片引用（已入池、带 sha256 的才算）。
         const attachedImages: MessageRef[] = [];
         const attachedFrom: string[] = [];
+        // 块 P2：本批工具结果附带的 typed blocks（quote/file/table/code）。
+        const attachedBlocks: { block: ToolBlock; tool: string }[] = [];
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // 执行 AfterTool 钩子（0.6.1 P2：携带 tool/input）
@@ -984,6 +1093,10 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
               attachedFrom.push(outcome.toolCall.function.name);
             }
           }
+          // 块 P2：typed blocks 收集（入口已校验形状；与 refs 通道独立）。
+          for (const block of outcome.blocks ?? []) {
+            attachedBlocks.push({ block, tool: outcome.toolCall.function.name });
+          }
         }
 
         // q-media-view：本批工具结果全部写回后，追加一条带 refs 的 user 消息（既有注入
@@ -1004,6 +1117,13 @@ export async function runToolCallingLoop(ctx: LoopContext): Promise<LoopResult> 
               refs,
             },
           ]);
+        }
+
+        // 块 P2：typed blocks 同样在整批之后按 type 分条追加（同一既有注入通道：
+        // 身份盖章 / message.injected 事件 / 落盘全复用；末尾追加 ⇒ 前缀守卫天然满足）。
+        // image 消息保持上方逐字节旧形状 —— 混合内容分条才能各自命中前端既有 lift。
+        if (attachedBlocks.length > 0) {
+          ctx.window.appendInjectedMessages(runId, toolBlockMessages(attachedBlocks));
         }
 
         cursor += batch.length;

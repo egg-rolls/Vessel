@@ -263,6 +263,7 @@ export {
 // 运行时
 export {
   assertToolNameLegality,
+  attachToolBlocks,
   attachToolImages,
   auditToolNames,
   type BoundedToolResult,
@@ -310,6 +311,9 @@ export {
   TOOL_NAME_PATTERN,
   TOOL_NAME_RULE,
   type TokenCut,
+  type ToolAttachmentReceipt,
+  type ToolBlock,
+  type ToolBlockAttachment,
   type ToolNameAlias,
   type ToolNameAudit,
   type ToolNameEntry,
