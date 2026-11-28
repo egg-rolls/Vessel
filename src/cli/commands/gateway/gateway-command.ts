@@ -13,6 +13,7 @@
  * @module vessel/gateway-command
  */
 
+import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -231,8 +232,18 @@ async function resolveContext(deps: GatewayCommandDeps): Promise<ResolvedContext
 
 /** stop 的平台终止方式（Windows 没有 POSIX 信号语义）。force = POSIX SIGKILL（§5.4）。 */
 function terminateProcess(pid: number, platform: NodeJS.Platform, force = false): void {
-  if (platform === 'win32') process.kill(pid);
-  else process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
+  if (platform === 'win32') {
+    // TP-1：Windows process.kill 是无条件 TerminateProcess，只杀主进程 —— 子进程成
+    // 孤儿（与 node-supervisor terminateChild / web-dist killBuildTreeByPid 同口径）。
+    // 无条件 taskkill /PID /T /F 整棵子树；进程已不在时 taskkill 非零退出，由调用方
+    // kill-confirm 等死确认兜底（与旧 ESRCH 语义同效）。force 与非 force 同口径。
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    return;
+  }
+  process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
 }
 
 function sleepDefault(ms: number): Promise<void> {
