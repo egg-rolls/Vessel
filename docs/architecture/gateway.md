@@ -60,7 +60,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 ### 静态托管与安全
 
-- `staticDir` 存在时，GET/HEAD 的非 API 路径托管 `apps/web/dist`；无扩展名路径回落 `index.html`（SPA）；路径解析后校验 root 前缀，防穿越；API 路径永不托管。
+- `staticDir` 存在时，GET/HEAD 的非 API 路径托管 `apps/web/dist`；无扩展名路径回落 `index.html`（SPA）；路径解析后校验 root 前缀，防穿越；API 路径永不托管。缓存：HTML 与**无内容哈希**资产（publicDir 直拷的 `/Vessel.svg`、`/favicon.ico`、`/apple-touch-icon.png` 等）`no-cache`（可再验证，升级即刷新）；仅文件名带内容哈希的 Vite 产物（`name-HASH.ext`）`public, max-age=31536000, immutable`。
 - 默认绑定 `127.0.0.1`；Host 只接受 `127.0.0.1` / `localhost` / `[::1]` 或显式 `hostname`。
 - **Origin allowlist**：`node.allowed_origins` / `--allowed-origin` 在启动时归一化为 `URL.origin`，拒绝 `*`、path、query；HTTP 与 WS upgrade 共用同一判定，无 Origin 放行（curl / peer），浏览器必须同源或在 allowlist。
 - **反代共享密钥（opt-in）**：配 `node.proxy_secret_env` / `gateway.proxy_secret_env` 后，「回环 = 本机」不再自动成立——**无凭据**请求必须由反代注入 `x-vessel-proxy-secret` 头才放行；带 Bearer token 的请求行为不变。不配 = 旧行为。语义与部署见 [REVERSE-PROXY.md](../operations/REVERSE-PROXY.md)。
