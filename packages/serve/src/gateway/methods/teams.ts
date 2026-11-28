@@ -432,6 +432,15 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
             from: actorOf(ctx),
             ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
             ...(refs.length > 0 ? { refs } : {}),
+            // q-error-e3 §3.7：RPC correlation（多目标，agent_id 缺省；E2 同款 additive）。
+            ...(ctx.request_id !== undefined
+              ? {
+                  triggered_by: {
+                    request_id: ctx.request_id,
+                    rpc_method: ctx.method ?? 'teams.post',
+                  },
+                }
+              : {}),
           });
         } catch (error) {
           return mapTeamError(error);

@@ -1295,7 +1295,20 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
 
         const inputs = prepared
           .filter((entry): entry is { input: AgentCreateLikeInput } => 'input' in entry)
-          .map((entry) => entry.input);
+          .map((entry) => entry.input)
+          // q-error-e3 §3.7：只有带 startup_prompt 的 create 才触发 run，correlation
+          // 才有意义（E2 send 同款口径）；单点注入，六分支不重复。
+          .map((input) =>
+            input.startup_prompt !== undefined && ctx.request_id !== undefined
+              ? {
+                  ...input,
+                  triggered_by: {
+                    request_id: ctx.request_id,
+                    rpc_method: ctx.method ?? 'agents.create',
+                  },
+                }
+              : input,
+          );
         if (inputs.length === 0) return mergeBatchResults(prepared, []);
         const batch = await control.create(inputs);
         // CREATE-0.39 §1.4：business failures are normalized to the contract codes.
@@ -1655,6 +1668,16 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
                 ...(entry.allow_auto_create !== undefined
                   ? { allow_auto_create: entry.allow_auto_create }
+                  : {}),
+                // q-error-e3 §3.7：dispatch 恒 work-only，correlation 恒有意义（E2 同款）。
+                ...(ctx.request_id !== undefined
+                  ? {
+                      triggered_by: {
+                        request_id: ctx.request_id,
+                        rpc_method: ctx.method ?? 'agents.dispatch',
+                        agent_id: to,
+                      },
+                    }
                   : {}),
               },
             };

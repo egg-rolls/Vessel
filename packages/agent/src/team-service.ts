@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventStream, Logger, MessageRef, RunEvent } from '@vessel-agent/core';
+import type { EventStream, Logger, MessageRef, RunEvent, RunTrigger } from '@vessel-agent/core';
 import { type AddressStyle, DEFAULT_ADDRESS_STYLE, formatAddress } from './address-display.js';
 import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import { errorText } from './error-text.js';
@@ -451,6 +451,7 @@ export class DefaultTeamService implements AgentTeamService {
               input.team_id,
               refs,
               messageId,
+              input.triggered_by,
             ),
       ),
     );
@@ -1474,6 +1475,7 @@ export class DefaultTeamService implements AgentTeamService {
     originTeamId?: string,
     refs: readonly MessageRef[] = [],
     teamMessageId?: string,
+    triggeredBy?: RunTrigger,
   ): Promise<TeamDelivery> {
     try {
       const result = await this.agent.dispatch({
@@ -1487,6 +1489,8 @@ export class DefaultTeamService implements AgentTeamService {
         ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
         // team 日志关联随投递落 inbox：编辑 / 删除这条 team 消息时按它级联消费副本。
         ...(teamMessageId !== undefined ? { team_message_id: teamMessageId } : {}),
+        // q-error-e3 §3.7：teams.post RPC correlation（缺省不写键，逐字节不变）。
+        ...(triggeredBy !== undefined ? { triggered_by: triggeredBy } : {}),
       });
       if (result.status === 'queued') {
         return {

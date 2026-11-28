@@ -2444,6 +2444,15 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
           ...(mode !== undefined ? { mode } : {}),
           ...(files !== undefined ? { files } : {}),
           ...(projectionMode !== undefined ? { projection_mode: projectionMode } : {}),
+          // q-error-e3 §3.7：只有带 startup_prompt 才触发 run（E2 同款口径）。
+          ...(startupPrompt !== undefined && ctx.request_id !== undefined
+            ? {
+                triggered_by: {
+                  request_id: ctx.request_id,
+                  rpc_method: ctx.method ?? 'sessions.create',
+                },
+              }
+            : {}),
         };
 
         try {
@@ -2512,13 +2521,22 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         },
       },
       result_schema: sessionActivateResultSchema,
-      handler: async (params) => {
+      handler: async (params, ctx) => {
         const control = requireSessionAgentControl(agent);
         const sessionId = stringParam(params, 'session_id');
         const startupPrompt = optionalString(params.startup_prompt);
         const input: SessionActivateLikeInput = {
           session_id: sessionId,
           ...(startupPrompt !== undefined ? { startup_prompt: startupPrompt } : {}),
+          // q-error-e3 §3.7：只有带 startup_prompt 才触发 run（E2 同款口径）。
+          ...(startupPrompt !== undefined && ctx.request_id !== undefined
+            ? {
+                triggered_by: {
+                  request_id: ctx.request_id,
+                  rpc_method: ctx.method ?? 'sessions.activate',
+                },
+              }
+            : {}),
         };
         try {
           return await control.activateSession(input);

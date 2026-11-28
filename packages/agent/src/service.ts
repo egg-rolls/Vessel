@@ -45,6 +45,7 @@ import {
   type RunRecordStore,
   RunResumeError,
   type RunStatus,
+  type RunTrigger,
   type RuntimePermissionConfig,
   type ScheduledTask,
   type Scheduler,
@@ -248,6 +249,23 @@ export type InboxSourceLabel =
   | typeof BASH_JOB_INBOX_SOURCE;
 
 /** inbox 条目的来源：只有「人对 ask 的答复」与普通人类消息在这里分家。 */
+/**
+ * q-error-e3 §3.7：raw create 输入里的 triggered_by 归一（只认 request_id+rpc_method
+ * 字符串形状；非法/缺省 → undefined，缺省路径逐字节不变）。
+ */
+function readRunTrigger(value: unknown): RunTrigger | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.request_id !== 'string' || typeof record.rpc_method !== 'string') {
+    return undefined;
+  }
+  return {
+    request_id: record.request_id,
+    rpc_method: record.rpc_method,
+    ...(typeof record.agent_id === 'string' ? { agent_id: record.agent_id } : {}),
+  };
+}
+
 function inboxSourceOf(message: AgentMessage): string {
   if (message.origin === 'ask_answer') return ASK_ANSWER_INBOX_SOURCE;
   // 0.55：后台作业的结果不是「谁说的话」，用固定标签而不是 from（from 就是收件人自己）
@@ -1654,7 +1672,12 @@ export class AgentServiceImpl implements AgentService {
       // q-startup-source-fix：创建者 = spawnedBy（工具层声明）或 parentId
       // （contractor 的 parent 缺省 owner）；peer 无 parentId，人 RPC 缺省
       // owner=human ⇒ 未登记 ⇒ deliverStartupPrompt 回落 system。
-      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy ?? parentId);
+      await this.deliverStartupPrompt(
+        record,
+        startupPrompt,
+        spawnedBy ?? parentId,
+        readRunTrigger(input.triggered_by),
+      );
     }
     return this.statusFor(record);
   }
@@ -1681,6 +1704,7 @@ export class AgentServiceImpl implements AgentService {
     record: MemberRecord,
     startupPrompt: string,
     creatorId?: string,
+    triggeredBy?: RunTrigger,
   ): Promise<void> {
     // 只认本机登记的创建者：保留 principal（human / system）、已失效的 id、
     // 未登记的外部地址一律回落 system —— 宁可保持现状，不冒认 agent。
@@ -1697,6 +1721,8 @@ export class AgentServiceImpl implements AgentService {
           from,
           channel: 'direct',
           conversation_id: generateConversationId(this.newId),
+          // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+          ...(triggeredBy !== undefined ? { triggered_by: triggeredBy } : {}),
           strict: false,
         },
         { startup: true },
@@ -2022,7 +2048,12 @@ export class AgentServiceImpl implements AgentService {
     if (startupPrompt !== undefined) {
       // q-startup-source-fix：只认 spawnedBy —— seeded 路径的 record.parentId
       // 是**源**的 parent，不是本次创建的创建者，不能拿来兜底。
-      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy);
+      await this.deliverStartupPrompt(
+        record,
+        startupPrompt,
+        spawnedBy,
+        readRunTrigger(input.triggered_by),
+      );
     }
     return this.statusFor(record);
   }
@@ -6313,6 +6344,8 @@ export class AgentServiceImpl implements AgentService {
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
         ...(refs.length > 0 ? { refs } : {}),
+        // q-error-e3 §3.7：RPC correlation 透传（E2 同款 additive，缺省不变）。
+        ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
         strict: false,
       });
 
@@ -6676,6 +6709,7 @@ export class AgentServiceImpl implements AgentService {
       // activate 时 startup_prompt 是**人写的开场白**，一个字节都不标 —— 那份裁定
       // （按正文渲染）继续成立，只是不再覆盖 agent 写的交接书。
       const handoffName = allowActiveRun ? rotateHandoffInputName(epoch) : undefined;
+      const startupTrigger = readRunTrigger(raw.triggered_by);
       try {
         await this.admitInternal(
           {
@@ -6685,6 +6719,8 @@ export class AgentServiceImpl implements AgentService {
             from: SYSTEM_PRINCIPAL,
             channel: 'direct',
             conversation_id: generateConversationId(this.newId),
+            // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+            ...(startupTrigger !== undefined ? { triggered_by: startupTrigger } : {}),
             strict: false,
           },
           {
@@ -7142,6 +7178,7 @@ export class AgentServiceImpl implements AgentService {
       const startupPrompt =
         raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
       if (startupPrompt !== undefined) {
+        const activateTrigger = readRunTrigger(raw.triggered_by);
         try {
           await this.admitInternal(
             {
@@ -7151,6 +7188,8 @@ export class AgentServiceImpl implements AgentService {
               from: SYSTEM_PRINCIPAL,
               channel: 'direct',
               conversation_id: generateConversationId(this.newId),
+              // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+              ...(activateTrigger !== undefined ? { triggered_by: activateTrigger } : {}),
               strict: false,
             },
             { startup: true },
