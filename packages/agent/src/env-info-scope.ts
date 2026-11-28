@@ -67,6 +67,7 @@ export const ENV_INFO_SCOPES = [
   'conflict',
   'files',
   'health',
+  'agent',
   'script',
   'doc-lag',
   'code-heaviness',
