@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/file-refs",
-  "version": "2.3.0",
+  "version": "2.2.10",
   "description": "File reference UX — drag/paste auto-staging refs, in-composer icon cards, vessel-ref link cards (toggleable/removable)",
   "type": "module",
   "main": "src/index.ts",
@@ -42,7 +42,7 @@
   "vessel": {
     "id": "file-refs",
     "name": "File References",
-    "version": "2.3.0",
+    "version": "2.2.10",
     "description": "文件引用 UX：OS 文件拖拽 / 截图粘贴自动上传暂存并在指针位置插入引用卡片；消息 vessel-ref 链接渲染为卡片。可开关 / 可删除剥离（A7/A9）。",
     "side": "ui",
     "ui": {
