@@ -1428,6 +1428,19 @@ async function runWithConfig(result: BootstrapResult) {
       });
     }
 
+    // P2 收集器（ADR-107）：feature 声明的 hotApply scope appliers 在此收编进
+    // reloadAppliers（第二集中注册区的收编接缝——后续 feature 声明 scope 即自动
+    // 流入，主干零改动；本批 kanban 走 config 子应用器，scope 形态暂无贡献）。
+    // 与手写 applier 同名 = 装配错误 fail-closed（与收集器内部键冲突同口径）。
+    for (const [scope, applier] of Object.entries(result.assembly?.hotApply.appliers ?? {})) {
+      if (scope in reloadAppliers) {
+        throw new Error(
+          `assembly collector: hotApply scope "${scope}" conflicts with a hand-written applier (ADR-107 fail-closed)`,
+        );
+      }
+      reloadAppliers[scope] = applier;
+    }
+
     // 0.61：hub 派生的来源集（join 时下发并存档）。读盘失败 / 旧 hub / 未 join
     // ⇒ undefined，行为与今天逐字一致：node 绝不因为 hub 不可达而拒绝启动或放宽白名单。
     // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
