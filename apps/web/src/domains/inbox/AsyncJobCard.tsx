@@ -8,11 +8,8 @@
  * - 渲染层**按 kind 分派**专属卡：`bash`→科技蓝命令卡 + log tail（按需 jobs.log）；
  *   `ask`→未来问题卡；其余 kind→通用状态卡。inbox 核心通用，kind 细节只在渲染层。
  *
- * 身份 / 状态 / 归属全部来自服务端那一次读；模型侧消费仍由 inbox read 完成。
- * 用户侧收口（q-bash-inbox-integrate）：done/failed 卡给「我已处理」认领键
- * （调用方接 `agents.claim`，与 inbox 消息卡同语义）；running 占位不可消费 ⇒ 无键。
- * 键放展开体末尾（QueuedNotice 同款先例）：折叠态 `<details>` 只渲染 `<summary>`，
- * `actions` 槽同样不可见，所以不走那个槽 —— 与条带消息卡「展开才见处置键」同口径。
+ * 身份 / 状态 / 归属全部来自服务端那一次读；写操作（消费）由模型 inbox read 完成，
+ * 本卡不给「取消 / 我已处理」（running 占位不可消费；done/failed 结果由模型读走）。
  */
 import { useEffect, useState } from 'react';
 import { Badge, Button } from '../../components/ui';
@@ -240,16 +237,9 @@ function GenericJobBody({
 export function AsyncJobCard({
   entry,
   client,
-  onClaim,
-  claimBusy = false,
 }: {
   entry: AsyncJobCardEntry;
   client: GatewayClient;
-  /** 「我已处理」（q-bash-inbox-integrate）：调用方接 `agents.claim`；缺省 = 不渲染认领键。
-   *  只对 done/failed 生效 —— running 占位不可消费（服务端 claim 同口径跳过 `pending`）。 */
-  onClaim?: () => void;
-  /** 认领在途：键禁用 + 文案换「标记中…」（同一条同时只允许一次写操作）。 */
-  claimBusy?: boolean;
 }) {
   const job = entry.async_job as AsyncJobMeta;
   const running = job.status === 'running';
@@ -302,15 +292,6 @@ export function AsyncJobCard({
         <BashJobBody job={job} entry={entry} client={client} elapsed={elapsed} />
       ) : (
         <GenericJobBody job={job} entry={entry} elapsed={elapsed} />
-      )}
-      {/* 用户侧收口键（done/failed 才给）：展开体末尾，QueuedNotice 处置键同款位置。
-          文案 / 在途态复用 inbox 消息卡同一组键（chat.pending.claim / claimInFlight）。 */}
-      {!running && onClaim !== undefined && (
-        <div className="flex items-center justify-end gap-2 pt-1.5">
-          <Button variant="plain" size="small" disabled={claimBusy} onClick={onClaim}>
-            {claimBusy ? t('chat.pending.claimInFlight') : t('chat.pending.claim')}
-          </Button>
-        </div>
       )}
     </StreamCard>
   );
