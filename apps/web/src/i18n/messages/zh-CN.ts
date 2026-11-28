@@ -1419,11 +1419,9 @@ export const messages = {
   'chat.sessionRef.note': '引用会话',
   'chat.sessionRef.remove': '移除会话引用 {name}',
   'chat.sessionRef.reject.tooMany': '会话引用最多 {max} 条',
-  // 发送序列化：引用块随正文投递（接收 agent 读全量基础链，披露只影响 chip 徽章）。
+  // 引用块卡头（显示侧）。发送信封的头部/field 标签是 locale 无关固定标记
+  // （session-ref.ts，块 P1），不走 i18n。
   'chat.sessionRef.header': '引用会话',
-  'chat.sessionRef.field.agent': 'agent',
-  'chat.sessionRef.field.team': '团队',
-  'chat.sessionRef.field.node': '节点',
   'chat.refs.label': '引用的文件',
   'chat.refs.remove': '移除引用 {name}',
   'chat.refs.kind.file': '文件',

@@ -14,7 +14,6 @@
  * 不另走 `useNodeNames` 的 health-name 通道 —— 同一个节点在卡片与 chip 上必须同名。
  */
 import type { SessionInfo } from '../../gateway/types';
-import { t } from '../../i18n';
 import { sessionTitle } from '../../state/sessions';
 import type { ComposerSessionRef } from '../../stores/composerDraftStore';
 
@@ -155,24 +154,29 @@ export function sessionRefDescription(chip: SessionRefChip): string {
  * 与 chip 徽章的渐进披露不同：**发送恒带全量信息**（agent / 团队 / 节点有则必写）——
  * 披露是给人在输入框里看的降噪，接收方不该因为「恰好同队」就少知道一段归属。
  * 缺失字段省略，不写空段。无 chip 时原样返回（调用方无需分支）。
+ *
+ * 信封标记 locale 无关（块 P1）：头部恒写 `[引用会话]`，field 恒写固定 key
+ * `agent` / `team` / `node` —— AI 侧口径稳定，不随 UI locale 漂移（照 quote 范本）。
+ * 只对新发送生效；历史 zh/en 拼法由解析侧双认（legacy 永久，不回填）。
  */
 export function composeSessionRefText(text: string, chips: readonly SessionRefChip[]): string {
   if (chips.length === 0) return text;
   const lines = chips.map((chip) => {
     const parts = [`「${chip.title}」`];
-    if (chip.agentName) parts.push(`${t('chat.sessionRef.field.agent')}: ${chip.agentName}`);
-    if (chip.team) parts.push(`${t('chat.sessionRef.field.team')}: ${chip.team}`);
-    if (chip.node) parts.push(`${t('chat.sessionRef.field.node')}: ${chip.node}`);
+    if (chip.agentName) parts.push(`agent: ${chip.agentName}`);
+    if (chip.team) parts.push(`team: ${chip.team}`);
+    if (chip.node) parts.push(`node: ${chip.node}`);
     parts.push(`session_id: ${chip.sessionId}`);
     return `- ${parts.join(' · ')}`;
   });
-  return `[${t('chat.sessionRef.header')}]\n${lines.join('\n')}\n\n${text}`;
+  return `${SESSION_REF_HEADERS[0]}\n${lines.join('\n')}\n\n${text}`;
 }
 
 /**
- * 信封头部（块 P0 display lift）：compose 用 `t()` 随 UI locale 写头，历史消息里
- * zh / en 两种拼法都真实存在 —— 解析**双词必认**（legacy 永久保留，不回填不改写）。
- * locale 固定标记是 P1 的事（main 裁④），本批只补读取侧。
+ * 信封头部（块 P1 locale 固定标记，main 裁④）：首项是 canonical 固定标记
+ * `[引用会话]`（照 quote `[引用消息` 范本，locale 无关），compose 恒写它。
+ * 历史上 compose 曾用 `t()` 随 UI locale 写头，zh / en 两种拼法都真实存在 ——
+ * 解析**双词必认**（legacy 永久保留，不回填不改写，append-only）。
  */
 const SESSION_REF_HEADERS = ['[引用会话]', '[Referenced sessions]'] as const;
 
@@ -195,9 +199,11 @@ function parseSessionRefLine(line: string): SessionRefChip | null {
   }
   const sessionId = fields.get('session_id');
   if (sessionId === undefined || sessionId.length === 0) return null;
+  // 固定 key（agent/team/node）是 canonical；zh 标签（团队/节点）是 legacy
+  // 双认（历史消息里真实存在，永久保留）。agent 双语同形，无需别名。
   const agentName = fields.get('agent');
-  const team = fields.get('团队') ?? fields.get('team');
-  const node = fields.get('节点') ?? fields.get('node');
+  const team = fields.get('team') ?? fields.get('团队');
+  const node = fields.get('node') ?? fields.get('节点');
   return {
     sessionId,
     title: rawTitle.length > 0 ? rawTitle : sessionId,
