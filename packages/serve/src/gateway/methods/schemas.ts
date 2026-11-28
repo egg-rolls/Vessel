@@ -35,6 +35,9 @@ export const messageRefSchema = {
     name: { type: 'string' },
     mime: { type: 'string' },
     bytes: { type: 'integer', minimum: 0 },
+    // file-ref-ux A1（additive）：逐条内联开关。缺省 = 不内联（只留路径）；
+    // true = 入池时读图落 blob、请求期内联。入池闸在装配层按它判定。
+    inline: { type: 'boolean' },
   },
 };
 
@@ -96,6 +99,9 @@ export function readRefsParam(value: unknown): MessageRef[] {
     if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
       ref.bytes = Math.floor(record.bytes);
     }
+    // file-ref-ux A1：逐条内联开关。只写 `true` 键（false ≡ 缺省 = 不内联，
+    // 旧生产者形状逐字节不变）；与 agent normalizeRefs 同一口径。
+    if (record.inline === true) ref.inline = true;
     refs.push(ref);
   }
   return refs;
