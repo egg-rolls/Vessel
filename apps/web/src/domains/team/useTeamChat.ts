@@ -102,6 +102,12 @@ export function useTeamChat({
     (index: number) => useComposerDraftStore.getState().removeRef(draftKey, index),
     [draftKey],
   );
+  /** 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关；只写 true 键 / false 删键）。 */
+  const updateRef = useCallback(
+    (index: number, patch: { inline?: boolean }): boolean =>
+      useComposerDraftStore.getState().updateRef(draftKey, index, patch),
+    [draftKey],
+  );
   const [sends, setSends] = useState<LocalSend[]>([]);
   const [sending, setSending] = useState(false);
   /**
@@ -582,6 +588,7 @@ export function useTeamChat({
     refs,
     addRef,
     removeRef,
+    updateRef,
     retryHint,
     setRetryHint,
     sending,

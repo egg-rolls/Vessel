@@ -69,6 +69,11 @@ export interface TeamComposerProps {
    */
   onAddRef?: (ref: MessageRef) => boolean;
   /**
+   * 回写既有引用旗标（file-ref-ux：图片卡片 inline 开关）。缺省时端口
+   * `updateRef` 返回 false（插件侧能力探测后不渲染开关）。
+   */
+  onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
+  /**
    * 引用文件弹层的目录浏览数据源（本 Team 所在节点；与会话页同一份 `attachments.list`）。
    * 与 `onAddRef` 一起缺一不可：两者都在才出工具栏按钮。
    */
@@ -93,6 +98,7 @@ export function TeamComposer({
   refs = [],
   onRemoveRef,
   onAddRef,
+  onUpdateRef,
   client,
   contextUsage,
 }: TeamComposerProps) {
@@ -110,7 +116,13 @@ export function TeamComposer({
 
   // composer 内嵌扩展 + 编辑端口（与会话页同一份接缝）。
   const { atomicSchemes, dropHandlers } = useComposerExtensions();
-  const port = useComposerEditorPort({ editorRef: inputRef, refs, onAddRef, onRemoveRef });
+  const port = useComposerEditorPort({
+    editorRef: inputRef,
+    refs,
+    onAddRef,
+    onRemoveRef,
+    onUpdateRef,
+  });
   const dispatchFiles = (files: File[], offset: number | null) => {
     if (port === undefined || dropHandlers.length === 0) return;
     for (const handler of dropHandlers) {

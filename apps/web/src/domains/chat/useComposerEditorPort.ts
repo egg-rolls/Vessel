@@ -18,16 +18,18 @@ export function useComposerEditorPort({
   refs,
   onAddRef,
   onRemoveRef,
+  onUpdateRef,
 }: {
   editorRef: RefObject<RichComposerHandle | null>;
   refs: readonly MessageRef[];
   onAddRef?: (ref: MessageRef) => boolean;
   onRemoveRef?: (index: number) => void;
+  onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
 }): ComposerEditorPort | undefined {
   const { client } = useConnection();
   // live ref：端口对象稳定，能力读最新值（草稿 refs 每次渲染都变）。
-  const live = useRef({ refs, onAddRef, onRemoveRef, client });
-  live.current = { refs, onAddRef, onRemoveRef, client };
+  const live = useRef({ refs, onAddRef, onRemoveRef, onUpdateRef, client });
+  live.current = { refs, onAddRef, onRemoveRef, onUpdateRef, client };
   const available = onAddRef !== undefined && onRemoveRef !== undefined;
 
   return useMemo(() => {
@@ -36,6 +38,7 @@ export function useComposerEditorPort({
       refs: () => live.current.refs,
       addRef: (ref) => live.current.onAddRef?.(ref as MessageRef) ?? false,
       removeRef: (index) => live.current.onRemoveRef?.(index),
+      updateRef: (index, patch) => live.current.onUpdateRef?.(index, patch) ?? false,
       insertText: (text, at) => editorRef.current?.insertText(text, at),
       insertAtomic: (token, at) => editorRef.current?.insertAtomic(token, at),
       insertTransient: (scheme, data, at) =>

@@ -232,6 +232,12 @@ export interface ComposerRef {
   mime?: string;
   bytes?: number;
   sha256?: string;
+  /**
+   * 随消息内联投递旗标（core MessageRef.inline 同形，契约驱动非功能名）。
+   * 只写 true 键：缺省 / false ≡ 不内联（路径-only）。生产者经
+   * `ComposerEditorPort.updateRef` 回写；历史 / 旧草稿无此键 ⇒ 缺省关。
+   */
+  inline?: boolean;
 }
 
 /** 瞬态节点句柄（上传占位 → 落定 / 更新 / 删除；与宿主 RichComposer 同形）。 */
@@ -274,6 +280,12 @@ export interface ComposerEditorPort {
   refs(): readonly ComposerRef[];
   addRef(ref: ComposerRef): boolean;
   removeRef(index: number): void;
+  /**
+   * 按下标回写既有引用的旗标（不动顺序 / token 锚点）。patch 只认契约字段：
+   * `inline: true` 写键，`inline: false` 删键（≡缺省，与 P1a 闸同口径）。
+   * 返回 false = 下标越界。additive：旧宿主无此方法，插件须能力探测。
+   */
+  updateRef(index: number, patch: { inline?: boolean }): boolean;
   insertText(text: string, at?: number): void;
   insertAtomic(token: string, at?: number): void;
   insertTransient(scheme: string, data: unknown, at?: number): ComposerTransientHandle | null;

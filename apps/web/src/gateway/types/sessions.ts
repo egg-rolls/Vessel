@@ -57,6 +57,12 @@ export interface MessageRef {
    * 前端不读文件、不拼 URL。
    */
   sha256?: string;
+  /**
+   * 随消息内联投递旗标（与 core `MessageRef.inline` 对齐，P1a 契约）：
+   * 只写 true 键——缺省 / false ≡ 不内联（路径-only）。生产者 = 输入框图片
+   * 卡片开关（file-refs）；服务端 `readRefsParam` / ingest 只认 `=== true`。
+   */
+  inline?: boolean;
 }
 
 /**
