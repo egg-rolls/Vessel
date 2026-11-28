@@ -16,8 +16,10 @@ import {
   sessionTitle,
   takeSessions,
 } from '../../state/sessions';
+import { filterRetiredSessions } from '../../state/retired-visibility';
 import { resourceData } from '../../state/useResource';
 import { useShowArchived } from '../../state/useShowArchived';
+import { useShowRetiredSessions } from '../../state/useShowRetiredSessions';
 import { useAgentStore } from '../../stores/agentStore';
 import { adoptNewChatDraft } from '../../stores/composerDraftStore';
 import { nodeHealthEntry, useNodeStore } from '../../stores/nodeStore';
@@ -139,6 +141,9 @@ export function useChatSessions({
   const closedAgentSessions = useMemo(() => closedAgentSessionIds(rosters), [rosters]);
   // 「显示归档」与 Agents 域 / Team 成员栏同一个开关（0.52 起也决定「已停用 agent 的会话」是否列出）。
   const showArchived = useShowArchived();
+  // 「显示退休会话」（q-retired-session-toggle）：默认 false = 退休会话不列在卡片列表。
+  // 与 showArchived 分工：那个管已停用 agent 的会话，这个管 rotate 旧身体的会话。
+  const showRetiredSessions = useShowRetiredSessions();
   // 默认会话 = `main` 的 primary body（0.27）；roster 拿不到 main 时为 null，
   // 此时保持旧行为（草稿态发送不带 session_id，由服务端解析）。
   const mainSession = useMemo<MainSession | null>(() => {
@@ -406,8 +411,14 @@ export function useChatSessions({
   const [orderTick, setOrderTick] = useState(0);
   const orderedSessions = useStableSessionOrder(sessions, {
     inflight: sessionInflight,
-    // 显式时机：换连接纪元 / 换搜索 / 切「显示归档」/ 手动刷新（orderTick）。
-    resetKey: [String(epoch), debouncedQuery, String(showArchived), String(orderTick)].join('|'),
+    // 显式时机：换连接纪元 / 换搜索 / 切「显示归档」/ 切「显示退休会话」/ 手动刷新（orderTick）。
+    resetKey: [
+      String(epoch),
+      debouncedQuery,
+      String(showArchived),
+      String(showRetiredSessions),
+      String(orderTick),
+    ].join('|'),
   });
   const searchQuery = debouncedQuery.trim();
   const activeServerSearch = serverSearch?.query === searchQuery ? serverSearch : null;
@@ -420,14 +431,30 @@ export function useChatSessions({
     // 它们多数是 rotate / 注销后没被 prune 的残留，混在正常会话里只会让人以为还活着。
     // 打开「显示归档」后原样列回来、且**不**加任何徽标 —— 归档态本身已经由开关表达，
     // 再挂一个「已注销」标签属于重复表达。反查到不的（别的节点 / 旧 gateway）不动。
-    if (showArchived) return matched;
     // 两个来源都要认：会话自带归属（0.52，`session.agent.state === 'closed'`）优先，
     // roster 反查是旧 gateway / 旧数据的回落。
-    return matched.filter(
-      (session) =>
-        session.agent?.state !== 'closed' && !closedAgentSessions.has(session.session_id),
-    );
-  }, [activeServerSearch, orderedSessions, debouncedQuery, showArchived, closedAgentSessions]);
+    const visible = showArchived
+      ? matched
+      : matched.filter(
+          (session) =>
+            session.agent?.state !== 'closed' && !closedAgentSessions.has(session.session_id),
+        );
+    // q-retired-session-toggle（用户裁定）：退休会话（rotate 旧身体）默认不列。
+    // 判据与卡片灰色子标题同一套事实：session.agent.primary === false 主路径 +
+    // agentRetiredLabels（roster body_history 反查）回落。搜索是显式找回意图，
+    // 搜索态不叠加此过滤（退休会话仍搜得到）；数据层不动，直接 URL / 命令面板照常。
+    if (searchQuery) return visible;
+    return filterRetiredSessions(visible, showRetiredSessions, agentRetiredLabels);
+  }, [
+    activeServerSearch,
+    orderedSessions,
+    debouncedQuery,
+    showArchived,
+    closedAgentSessions,
+    searchQuery,
+    showRetiredSessions,
+    agentRetiredLabels,
+  ]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页
   useEffect(() => {

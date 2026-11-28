@@ -48,6 +48,9 @@ export function isRetiredSession(
   session: RetiredSessionLike,
   retiredIds: { has(sessionId: string): boolean },
 ): boolean {
+  // 自带归属是权威：现役 body 不许被滞后的 roster body_history 误藏
+  // （与 sessionAgentRetiredLabels「live body 优先」同纪律）。
+  if (session.agent?.primary === true) return false;
   return session.agent?.primary === false || retiredIds.has(session.session_id);
 }
 
