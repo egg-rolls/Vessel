@@ -786,10 +786,18 @@ button.tool-image-thumb:focus-visible {
   }
 }
 
-/* 角色切换比同角色消息多一档间距（16 + 8）。 */
+/* 角色切换比同角色消息多一档间距（8 + 8）。
+   主时间线里每条消息都包在 .transcript-row 里（Transcript.tsx），.msg-user /
+   .msg-assistant 不再是兄弟 —— 裸元素邻接选择器只在 RunItems（子 agent）那类
+   直接平铺的场景生效；行级用 :has 把同一语义补到 wrapper 上（q-chat-spacing）。 */
 
 .msg-user + .msg-assistant,
 .msg-assistant + .msg-user {
+  margin-top: var(--space-2);
+}
+
+.transcript-row:has(.msg-user) + .transcript-row:has(.msg-assistant),
+.transcript-row:has(.msg-assistant) + .transcript-row:has(.msg-user) {
   margin-top: var(--space-2);
 }
 
@@ -1167,6 +1175,14 @@ button.tool-image-thumb:focus-visible {
 
 .reasoning-live {
   color: var(--info);
+}
+
+/* 历史助手消息把思考与正文包在同一个 .msg-assistant 里（块级流、无 flex gap）：
+   思考卡下缘补一档 --space-2，与主时间线行距（Transcript 容器 gap-2）相等 ——
+   live 落盘成历史那一刻间距不塌缩（q-chat-spacing）。单侧 margin，不与任何
+   上边距叠加；思考是末子时不留尾距。live 侧 ReasoningBlock 是独立行，不命中。 */
+.msg-assistant > .reasoning-block:not(:last-child) {
+  margin-bottom: var(--space-2);
 }
 
 /* 思考卡头的操作组（`ReasoningBlock` 的 `.reasoning-actions`：复制按钮 + 时间）。
