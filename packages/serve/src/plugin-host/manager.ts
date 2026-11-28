@@ -586,6 +586,29 @@ function validateDescriptor(
         id: input.id,
       });
     }
+    // file-ref P3 additive：action = embed 具名导出（JS 标识符形状），与 menu
+    // 互斥，须 ui.embed（fail-closed，与内置 loader readToolbar 镜像同款）。
+    if (item.action !== undefined) {
+      if (typeof item.action !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(item.action)) {
+        throw pluginError(
+          'plugin_manifest_invalid',
+          'toolbar[].action must be a JS identifier (embed named export).',
+          { id: input.id },
+        );
+      }
+      if (item.menu !== undefined) {
+        throw pluginError(
+          'plugin_manifest_invalid',
+          'toolbar[].action and menu are mutually exclusive.',
+          { id: input.id },
+        );
+      }
+      if (uiEmbed === undefined) {
+        throw pluginError('plugin_manifest_invalid', 'toolbar[].action requires ui.embed.', {
+          id: input.id,
+        });
+      }
+    }
   }
 
   // 0.48 M1：HTTP 声明在 descriptor 复检阶段归一化；非法 → 插件 invalid。
@@ -1951,6 +1974,8 @@ export function renderContributions(
       order: item.order ?? 100,
       // P3 additive：通用 RPC 绑定菜单原样透传（loader readToolbarMenu 已校验形状）。
       ...(item.menu !== undefined ? { menu: item.menu } : {}),
+      // file-ref P3 additive：插件自持点击动作（loader 已校验形状/互斥/ui.embed）。
+      ...(item.action !== undefined ? { action: item.action } : {}),
     }))
     .sort((a, b) => a.order - b.order);
   // E1 amendment：bare 方法名；web iframe bridge 用它做 RPC 白名单。

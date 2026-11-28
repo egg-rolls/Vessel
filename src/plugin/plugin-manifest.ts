@@ -150,8 +150,11 @@ export interface PluginPanelContribution {
 /**
  * 输入框工具栏槽位（0.51 additive）。
  *
- * v1 只有会话 / 团队共用的 `composer` 一个槽位；插件只**声明**按钮，
- * 点击由宿主按 `id` 映射成宿主回调（插件拿不到宿主回调，无法内联执行）。
+ * v1 只有会话 / 团队共用的 `composer` 一个槽位。点击三档：
+ * - `action`（file-ref P3 additive）：插件 embed 模块具名导出，宿主注入
+ *   ComposerEditorPort 调用——插件自持点击动作，宿主零功能名；
+ * - `menu`：声明式 RPC 绑定菜单（q-thinking-plugin P3）；
+ * - 缺省：宿主按 `id` 映射成宿主回调（插件拿不到宿主回调，无法内联执行）。
  */
 export type PluginToolbarSlot = 'composer';
 
@@ -172,6 +175,13 @@ export interface PluginToolbarContribution {
    * 按 id 映射回调）。违规 ⇒ 丢 menu 保留普通按钮声明（单项丢弃，既有口径）。
    */
   menu?: PluginToolbarMenu;
+  /**
+   * 插件自持点击动作（file-ref P3 additive）：embed 模块具名导出函数名，
+   * 宿主点击时注入 ComposerEditorPort 调用（与 composer drop 槽同款接缝）。
+   * 与 `menu` 互斥；须为 JS 标识符形状。违规 ⇒ 丢 action 保留普通按钮声明
+   * （单项丢弃，既有口径）；无导出/无端口 ⇒ 宿主不渲染该条目（不渲染死按钮）。
+   */
+  action?: string;
 }
 
 /** 菜单档位项（静态档位表；文案走插件 i18n）。 */
@@ -718,9 +728,10 @@ function isToolbarSlot(value: unknown): value is PluginToolbarSlot {
  * `contributes.toolbar[]`（0.51 additive）：declarative 按钮声明。
  *
  * 与 panels 的区别：没有 `entry`（不挂 iframe），只声明「宿主工具栏上有一个
- * 按钮」；点击由宿主按 id 映射，宿主没有对应动作时该按钮不会渲染。
+ * 按钮」。点击三档：action（插件 embed 具名导出，宿主注入端口调用）/ menu
+ * （RPC 绑定菜单）/ 缺省宿主按 id 映射；宿主没有对应动作时该按钮不会渲染。
  */
-function readToolbar(value: unknown): PluginToolbarContribution[] {
+function readToolbar(value: unknown, hasUiEmbed: boolean): PluginToolbarContribution[] {
   if (!Array.isArray(value))
     fail('plugin_manifest_invalid', 'contributes.toolbar must be an array');
   const seen = new Set<string>();
@@ -739,6 +750,19 @@ function readToolbar(value: unknown): PluginToolbarContribution[] {
     const icon = readIcon(item.icon, `${field}.icon`);
     const order = optionalNumber(item.order, `${field}.order`);
     const menu = readToolbarMenu(item.menu, `${field}.menu`);
+    let action: string | undefined;
+    if (item.action !== undefined) {
+      action = requireString(item.action, `${field}.action`);
+      if (!PLUGIN_COMPONENT_RE.test(action)) {
+        fail('plugin_manifest_invalid', `${field}.action must match ${PLUGIN_COMPONENT_RE.source}`);
+      }
+      if (menu !== undefined) {
+        fail('plugin_manifest_invalid', `${field}.action and menu are mutually exclusive`);
+      }
+      if (!hasUiEmbed) {
+        fail('plugin_manifest_invalid', `${field}.action requires ui.embed`);
+      }
+    }
     return {
       slot: item.slot,
       id,
@@ -747,6 +771,7 @@ function readToolbar(value: unknown): PluginToolbarContribution[] {
       ...(icon !== undefined ? { icon } : {}),
       ...(order !== undefined ? { order } : {}),
       ...(menu !== undefined ? { menu } : {}),
+      ...(action !== undefined ? { action } : {}),
     };
   });
 }
@@ -1493,7 +1518,7 @@ function readContributions(
     out.events = stringArray(raw.events, 'contributes.events');
   }
   if (raw.panels !== undefined) out.panels = readPanels(raw.panels);
-  if (raw.toolbar !== undefined) out.toolbar = readToolbar(raw.toolbar);
+  if (raw.toolbar !== undefined) out.toolbar = readToolbar(raw.toolbar, hasUiEmbed);
   if (raw.composer !== undefined) out.composer = readComposer(raw.composer, hasUiEmbed);
   if (raw.http !== undefined) {
     out.http = readHttp(

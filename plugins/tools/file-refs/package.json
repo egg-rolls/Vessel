@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/file-refs",
-  "version": "2.2.9",
+  "version": "2.3.0",
   "description": "File reference UX — drag/paste auto-staging refs, in-composer icon cards, vessel-ref link cards (toggleable/removable)",
   "type": "module",
   "main": "src/index.ts",
@@ -42,7 +42,7 @@
   "vessel": {
     "id": "file-refs",
     "name": "File References",
-    "version": "2.2.9",
+    "version": "2.3.0",
     "description": "文件引用 UX：OS 文件拖拽 / 截图粘贴自动上传暂存并在指针位置插入引用卡片；消息 vessel-ref 链接渲染为卡片。可开关 / 可删除剥离（A7/A9）。",
     "side": "ui",
     "ui": {
@@ -71,7 +71,8 @@
           "card.copy-path": "Copy path",
           "card.path-copied": "Path copied",
           "drop.limit": "Reference limit reached (32)",
-          "drop.failed": "Could not upload {name}"
+          "drop.failed": "Could not upload {name}",
+          "attach.label": "Reference files"
         },
         "zh-CN": {
           "card.temporary": "临时",
@@ -86,9 +87,20 @@
           "card.copy-path": "复制路径",
           "card.path-copied": "路径已复制",
           "drop.limit": "引用已达上限（32 条）",
-          "drop.failed": "无法上传 {name}"
+          "drop.failed": "无法上传 {name}",
+          "attach.label": "引用文件"
         }
       },
+      "toolbar": [
+        {
+          "slot": "composer",
+          "id": "attach",
+          "label": "Reference files",
+          "titleKey": "attach.label",
+          "action": "onAttachClick",
+          "order": 10
+        }
+      ],
       "composer": [
         {
           "slot": "refs",

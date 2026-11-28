@@ -4,7 +4,7 @@
  * 清单来自 `COMPOSER_ICON_TONES`、class 来自 `COMPOSER_ICON_TONE_CLASS` —— 加一档
  * 色调只改 `composer-controls.ts` 一处，这里**不用动**。每档都套同一个形状层
  * （`composerIconControlClass`：32px 正圆 + 凹陷底 + 强描边），各出三颗：发送键的
- * 纸飞机（16px）、回形针（14px，墨迹缩到与纸飞机同占地）、以及禁用态。
+ * 纸飞机（16px）、次要图标键（14px，墨迹缩到与纸飞机同占地）、以及禁用态。
  * hover 是活的（`enabled:hover:`），把鼠标停上去就能看到第二态。
  *
  * 只读：按钮没有 onClick（点了不发消息、不开附件弹层），也不读草稿。
@@ -38,7 +38,7 @@ function IconControl({
 }: {
   tone: ComposerIconTone;
   icon: IconName;
-  /** 图标边长；回形针传 14（与真实调用点 `ComposerAttachButton` 一致）。 */
+  /** 图标边长；次要图标键传 14（与发送键同一占地口径）。 */
   size?: number;
   disabled?: boolean;
 }) {

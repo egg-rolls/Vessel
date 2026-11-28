@@ -142,6 +142,9 @@ function manifestToServeDescriptor(
               // TI5-2：通用 RPC 绑定菜单 additive 透传（loader readToolbarMenu 已
               // 校验形状；serve contributionsFor 同款条件透传进 plugins.list wire）。
               ...(item.menu !== undefined ? { menu: item.menu } : {}),
+              // file-ref P3 additive：插件自持点击动作（loader readToolbar 已校验
+              // 形状/互斥/ui.embed；serve 投影同款条件透传）。
+              ...(item.action !== undefined ? { action: item.action } : {}),
             })),
           }
         : {}),

@@ -12,12 +12,10 @@
  */
 
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { parseSegments, RichComposer, type RichComposerHandle } from '../../components/ui';
 import type { MessageRef, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
-import type { AttachBrowseClient } from '../chat/AttachDialog';
-import { composerAttachBinding } from '../chat/ComposerAttach';
 import {
   type ComposerContextUsage,
   ComposerField,
@@ -27,7 +25,7 @@ import {
   refIndexForId,
   refsToAttachmentsFiltered,
 } from '../chat/ComposerChrome';
-import { useComposerEditorPort } from '../chat/useComposerEditorPort';
+import { type ComposerListClient, useComposerEditorPort } from '../chat/useComposerEditorPort';
 import { useComposerExtensions } from '../plugins/composer-extensions';
 import { MentionPopover } from './MentionPopover';
 import {
@@ -74,10 +72,10 @@ export interface TeamComposerProps {
    */
   onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
   /**
-   * 引用文件弹层的目录浏览数据源（本 Team 所在节点；与会话页同一份 `attachments.list`）。
-   * 与 `onAddRef` 一起缺一不可：两者都在才出工具栏按钮。
+   * 目录浏览数据源（本 Team 所在节点的 `attachments.list`），经编辑端口交给
+   * 插件「引用文件」弹层的浏览档（file-ref P3：入口归插件，数据源仍是团队节点）。
    */
-  client?: AttachBrowseClient;
+  client?: ComposerListClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
 }
@@ -122,6 +120,7 @@ export function TeamComposer({
     onAddRef,
     onRemoveRef,
     onUpdateRef,
+    listClient: client,
   });
   const dispatchFiles = (files: File[], offset: number | null) => {
     if (port === undefined || dropHandlers.length === 0) return;
@@ -192,13 +191,6 @@ export function TeamComposer({
     ...refsToAttachmentsFiltered(refs, inlineCounts),
     ...mentionAttachments,
   ];
-
-  // 「引用文件」入口：与会话页同一份绑定（浏览 / 粘贴弹层），只是写到团队的草稿槽。
-  const refCount = refs.length;
-  const attach = useMemo(
-    () => composerAttachBinding({ client, onAddRef, refCount }),
-    [client, onAddRef, refCount],
-  );
 
   /** 引用区删除：mention 落回既有 chips 状态，附件引用回写下标。 */
   const removeRef = (id: string) => {
@@ -284,7 +276,7 @@ export function TeamComposer({
 
       <ComposerField
         contextUsage={contextUsage}
-        attach={attach}
+        port={port}
         primary={
           <ComposerSendButton
             label={sending ? t('team.composer.sending') : t('team.composer.send')}

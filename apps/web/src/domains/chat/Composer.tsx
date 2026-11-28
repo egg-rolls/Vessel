@@ -1,14 +1,12 @@
 import type { ComposerAttachment } from '@vessel-agent/plugin-ui';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from '../../components/Tooltip';
 import { Button, parseSegments, RichComposer, type RichComposerHandle } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { ComposerQuote } from '../../stores/composerDraftStore';
 import { useComposerExtensions } from '../plugins/composer-extensions';
-import type { AttachBrowseClient } from './AttachDialog';
 import { ChatDock } from './ChatDock';
-import { composerAttachBinding } from './ComposerAttach';
 import {
   type ComposerContextUsage,
   ComposerField,
@@ -28,7 +26,7 @@ import {
   sessionRefBadges,
   sessionRefDescription,
 } from './session-ref';
-import { useComposerEditorPort } from './useComposerEditorPort';
+import { type ComposerListClient, useComposerEditorPort } from './useComposerEditorPort';
 
 /**
  * 会话输入框卡片：卡片 > 引用区 > 字段容器 > (textarea + 工具栏)。
@@ -101,10 +99,10 @@ export function Composer({
    */
   onUpdateRef?: (index: number, patch: { inline?: boolean }) => boolean;
   /**
-   * 「引用文件」弹层的目录浏览数据源（节点侧 `attachments.list`）。
-   * 与 `onAddRef` 一起缺一不可；两者都在才出工具栏按钮。
+   * 目录浏览数据源（节点侧 `attachments.list`），经编辑端口交给插件
+   * 「引用文件」弹层的浏览档（file-ref P3：入口归插件，数据源仍是页面节点）。
    */
-  client?: AttachBrowseClient;
+  client?: ComposerListClient;
   /** 发送键左侧的上下文用量；缺省（未知）时不渲染。 */
   contextUsage?: ComposerContextUsage;
   /**
@@ -154,6 +152,7 @@ export function Composer({
     onAddRef,
     onRemoveRef,
     onUpdateRef,
+    listClient: client,
   });
 
   /** OS 文件（drop / 截图粘贴）→ 插件 drop 处理器（上传暂存 + 指针位置插卡）。 */
@@ -227,14 +226,6 @@ export function Composer({
     const index = refIndexForId(refs ?? [], id);
     if (index >= 0) onRemoveRef?.(index);
   };
-
-  // 「引用文件」入口的接线：弹层（浏览 / 粘贴）只交路径 + 种类，种类按扩展名粗判
-  // （`kind` 只影响 chip 的图标，不读内容、不上传）。
-  const refCount = refs?.length ?? 0;
-  const attach = useMemo(
-    () => composerAttachBinding({ client, onAddRef, refCount }),
-    [client, onAddRef, refCount],
-  );
 
   return (
     <ChatDock>
@@ -334,8 +325,8 @@ export function Composer({
         />
         <ComposerField
           contextUsage={contextUsage}
-          attach={attach}
           sessionId={sessionId}
+          port={port}
           slot={memberModel !== undefined ? <MemberModelSwitch {...memberModel} /> : undefined}
           primary={
             !hasToken || !connected ? (

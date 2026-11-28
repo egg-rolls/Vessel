@@ -62,7 +62,7 @@ export interface TeamControl {
    * 0.52：附件引用弹层的目录浏览（节点侧只读 `attachments.list`）。
    *
    * 与页面无关：会话页用当前节点的 `GatewayClient`，团队页用这个控制面 —— 列的是
-   * **团队所在那台节点**的目录。旧 gateway 没有这个方法时弹层降级成粘贴路径。
+   * **团队所在那台节点**的目录。旧 gateway 没有这个方法时插件弹层降级成粘贴路径。
    */
   listAttachments(params?: AttachmentListParams): Promise<AttachmentListResult>;
   /** 0.27：冻结 / 解冻成员创建闸门。 */
