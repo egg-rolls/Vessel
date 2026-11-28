@@ -57,10 +57,10 @@ import {
 // 实测（本机）单是求值它就要数百毫秒到数秒 —— 而 `node start` / `gateway start` /
 // `--run` 永远不会进那个界面。它现在按需加载（见 {@link startInkRepl}）。
 import { createAskAnswerDelivery } from './agent/ask-answer-delivery';
-import { DEFAULT_SERVE_PORT, parseArgs } from './cli/args';
+import { DEFAULT_SERVE_PORT, type GatewayCommand, type NodeCommand } from './cli/args';
+import { COMMAND_SCHEMA } from './cli/command-spec';
 import {
   deriveGatewayInstance,
-  isForegroundGatewayCommand,
   prepareForegroundGatewayStart,
   printSplitModePortError,
   resolveGatewayTargets,
@@ -68,7 +68,6 @@ import {
   stopGateway,
   writeForegroundGatewayPid,
 } from './cli/commands/gateway/gateway-command';
-import { isForegroundNodeCommand } from './cli/commands/node-command';
 import { runPluginCliCommand } from './cli/commands/plugin/plugin-cli-command';
 import type { FeishuChannelLike } from './cli/control-plane-types';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './cli/feishu-command';
@@ -82,6 +81,8 @@ import {
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli/help';
 import { planHelpSearch } from './cli/help-search';
 import { ui } from './cli/output';
+import { parseBySpec } from './cli/parse-engine';
+import { DISPATCH_ENTRIES } from './cli/project';
 import { buildCliConfigOverrides } from './config/cli-overrides';
 import { sanitizeConfigForSnapshot } from './config/config-snapshot';
 import {
@@ -333,14 +334,26 @@ if (helpPlan !== null) {
   process.exit(helpPlan.exitCode);
 }
 
-const parsed = parseArgs(process.argv.slice(2));
-if (!parsed.ok) {
+const parseResult = await parseBySpec(process.argv.slice(2));
+if (!parseResult.ok) {
   // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分；
   // 提示由同一份 help 规格生成，指向用户刚敲的那条命令。
-  console.error(renderUsageError(process.argv.slice(2), parsed.error));
+  console.error(renderUsageError(process.argv.slice(2), parseResult.error));
   process.exit(2);
 }
-const args = parsed.args;
+const parsed = parseResult.parsed;
+// W2：域对象经 schema load().domain 单源映射（foreground-capable spec）；
+// 下游路由消费 args.gateway/args.node 的形状不变，逐命令 CliArgs 字段由分派承接。
+const matchedSpec = COMMAND_SCHEMA.find((spec) => spec.path.join(' ') === parsed.path.join(' '));
+let gatewayCommand: GatewayCommand | null = null;
+let nodeCommand: NodeCommand | null = null;
+if (matchedSpec?.surface === 'foreground' && matchedSpec.load !== undefined) {
+  const loaded = await matchedSpec.load();
+  const domain = loaded.domain?.(parsed);
+  if (parsed.path[0] === 'gateway') gatewayCommand = (domain ?? null) as GatewayCommand | null;
+  else if (parsed.path[0] === 'node') nodeCommand = (domain ?? null) as NodeCommand | null;
+}
+const args = { ...parsed.globals, gateway: gatewayCommand, node: nodeCommand };
 markStartup('args');
 // 0.15: one-shot commands call loadConfig() without cliOverrides; mirror the
 // explicit --data-dir into the env layer so they resolve the same data root.
@@ -426,25 +439,39 @@ if (demoRequested) {
     gatewayCommand.daemon === undefined
   ) {
     gatewayCommand.daemon = await resolveRestartDaemonMode(gatewayCommand);
+    // W2：解析结果写回 flag（分派 thunk 映射同源读 --daemon；域对象供前台管线）
+    (parsed.flags as Record<string, unknown>)['--daemon'] = gatewayCommand.daemon;
   }
 }
-// 一次性命令注册表：按注册顺序命中第一个，执行后直接退出。
+// W2：foreground 判据读解析结果（spec.surface + daemon flag），取代手写谓词。
+const isForegroundGateway =
+  args.gateway !== null &&
+  ((args.gateway.kind === 'start' && args.gateway.daemon !== true) ||
+    (args.gateway.kind === 'restart' && args.gateway.daemon === false));
+const isForegroundNode =
+  args.node !== null && args.node.kind === 'start' && args.node.daemon !== true;
+// 一次性命令分派：schema 投射（路径相等命中），执行后直接退出。
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
 // dynamic import：--help / --version 早退路径不再加载注册表（S4 §2.3）。
 {
-  const { applyCommandLocale, matchCommand } = await import('./cli/registry');
-  // 0.49 G3a：`gateway nodes ...` 是 registry 管理命令，不进 gateway 一次性分发
-  // （后者不承载平台写语义）。
-  const gatewayNodes = args.gatewayNodes;
-  if (gatewayNodes !== null) {
+  const { applyCommandLocale } = await import('./cli/registry');
+  // 入口 flag 触发的一次性命令（--tools / --resume-run 无值；经 schema thunk 单源）
+  const entryName = args.tools ? 'tools' : args.resumeRunArg === '' ? 'resume-run-list' : null;
+  const entrySpec =
+    entryName !== null
+      ? COMMAND_SCHEMA.find((spec) => spec.path.join(' ') === entryName)
+      : undefined;
+  if (entrySpec !== undefined) {
     await applyCommandLocale();
-    const { runGatewayNodesCommand } = await import('./cli/commands/gateway/gateway-nodes-command');
-    process.exit(await runGatewayNodesCommand(gatewayNodes));
+    process.exit((await (await entrySpec.load()).run(parsed, { useMock })) ?? 0);
   }
-  const command = matchCommand(args);
+  const command =
+    !isForegroundGateway && !isForegroundNode
+      ? DISPATCH_ENTRIES.find((entry) => entry.match(parsed))
+      : undefined;
   if (command) {
     await applyCommandLocale();
-    process.exit((await command.run(args, { useMock })) ?? 0);
+    process.exit((await command.run(parsed, { useMock })) ?? 0);
   }
 }
 // 0.49 G3b（CONTRACT §4.1）：非 legacy 的 `gateway start/restart` 前台只跑
@@ -452,11 +479,7 @@ if (demoRequested) {
 // 因此不加载 node runtime / tenant 锁 / plugin host / node 监听。
 // 用户裁定 #1（start 即退）：`gateway start` 缺省 detach，父进程由注册表处理
 // （spawn 本分支后打印启动信息即退出）；只有显式 `--foreground` 才留在前台。
-if (
-  args.gateway !== null &&
-  isForegroundGatewayCommand(args.gateway) &&
-  process.env.VESSEL_LEGACY_SERVE !== '1'
-) {
+if (isForegroundGateway && process.env.VESSEL_LEGACY_SERVE !== '1') {
   const { applyCommandLocale } = await import('./cli/registry');
   await applyCommandLocale();
   // 启动诊断（0.50）：拆分路径**也**托管 dist（静态资源由平台 gateway 同源下发），
@@ -486,7 +509,7 @@ if (
   const { runPlatformGatewayForeground } = await import('./cli/commands/gateway/gateway-command');
   process.exit(
     await runPlatformGatewayForeground({
-      command: args.gateway,
+      command: args.gateway as Extract<GatewayCommand, { kind: 'start' | 'restart' }>,
       staticDir: resolveWebDistDir(platformWebDistConfig),
       ...(args.dataDirArg !== null ? { dataDirOverride: args.dataDirArg } : {}),
     }),
@@ -494,7 +517,7 @@ if (
 }
 // 0.12：legacy `--serve` / `VESSEL_LEGACY_SERVE=1` 的 `gateway start/restart`
 // 仍走现有 `--serve` 管线。`--daemon` 及其它 gateway 子命令已由注册表处理。
-const foregroundGateway = args.gateway !== null && isForegroundGatewayCommand(args.gateway);
+const foregroundGateway = isForegroundGateway;
 let foregroundGatewayLock: GatewayInstanceLock | undefined;
 let foregroundGatewayInstance: string = DEFAULT_GATEWAY_INSTANCE;
 /** 0.49 G1：`node start` 前台 = 只起 Node API 监听。 */
@@ -550,7 +573,7 @@ if (foregroundGateway && args.gateway !== null) {
   args.servePort = targetPort ?? DEFAULT_SERVE_PORT;
   args.servePortExplicit = gatewayArgs.kind === 'start' ? gatewayArgs.port !== undefined : true;
   if (targetHost !== undefined) args.serveHost = targetHost;
-} else if (args.node !== null && isForegroundNodeCommand(args.node)) {
+} else if (isForegroundNode) {
   nodeOnlyMode = true;
   const { config: nodeConfig } = await loadConfig(
     nodeConfigPath !== undefined ? { configPath: nodeConfigPath } : {},

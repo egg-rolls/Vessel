@@ -19,6 +19,7 @@
  */
 
 import type { MessageKey } from '../i18n';
+import type { GatewayCommand, NodeCommand } from './args';
 import {
   parseAttentionLimit,
   parseAttentionSelect,
@@ -752,6 +753,15 @@ export interface ParsedCommand<S extends { readonly flags?: readonly FlagLiteral
   readonly positionals: readonly string[];
   readonly globals: Globals;
 }
+
+/** 宽形状引擎产物（分派/域映射边界；逐命令字面量互锁在 defineCommand 内）。 */
+export interface ParsedCommandBase {
+  readonly path: readonly string[];
+  readonly flags: Readonly<Record<string, unknown>>;
+  readonly positionals: readonly string[];
+  readonly globals: Globals;
+  readonly help: boolean;
+}
 // ── i18n 键 path 约定派生（§8.8 main 裁定） ──
 
 /** 'install-service' → 'installService'（类型级）。 */
@@ -875,10 +885,9 @@ export interface CommandSpec extends CommandSpecBase {
   ) => string | null | Promise<string | null>;
   /** 懒实现引用：动态 import + flags→域选项映射（机械转录自现 registry 包装器） */
   readonly load: () => Promise<{
-    run: (
-      parsed: ParsedCommand<CommandSpecBase>,
-      ctx: CommandContext,
-    ) => Promise<number | undefined>;
+    run: (parsed: ParsedCommandBase, ctx: CommandContext) => Promise<number | undefined>;
+    /** foreground-capable spec 加法暴露域映射器（cli.ts 前台路由消费；run 复用同源） */
+    domain?: (parsed: ParsedCommandBase) => unknown;
   }>;
 }
 
@@ -894,6 +903,7 @@ export function defineCommand<const P extends readonly unknown[], const S extend
       readonly validate?: (parsed: ParsedCommand<S>) => string | null | Promise<string | null>;
       readonly load: () => Promise<{
         run: (parsed: ParsedCommand<S>, ctx: CommandContext) => Promise<number | undefined>;
+        domain?: (parsed: ParsedCommand<S>) => unknown;
       }>;
     },
 ): CommandSpec {
@@ -901,7 +911,7 @@ export function defineCommand<const P extends readonly unknown[], const S extend
   return {
     ...spec,
     summary: summary ?? (defaultSummaryKey(spec.path) as MessageKey),
-  } as CommandSpec;
+  } as unknown as CommandSpec;
 }
 
 /**
@@ -962,6 +972,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     helpArgs: '<bash|zsh|fish|powershell>',
     positionalCandidates: ['bash', 'zsh', 'fish', 'powershell'],
     positionalErrors: { extra: (token) => `Unexpected argument for completion: ${token}` },
+    unknownFlagError: (token) => `Unknown argument: ${token}`,
     load: async () => {
       const { runCompletionCommand } = await import('./commands/completion-command');
       const { isCompletionShell } = await import('./completion-spec');
@@ -1384,6 +1395,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       extra: () =>
         'Usage: vessel config set <key> <value> [--json] (supported keys: ui.*, observability.*, agent.*, emptyResponse.*, autoPrune.*, kanban.boardPath, vision.imageTokenBudgetRatio, envInjection.*)',
     },
+    unknownFlagError: unknownFor('config set'),
     // 白名单 + 逐键值校验（现 parseConfigArgs 1418-1451 逐字转录；懒 import 保重闭包不进 help 早退）
     validate: async (p) => {
       const key = p.positionals[0] ?? '';
@@ -1444,6 +1456,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Usage: vessel config explain <key> [--json] (e.g. data_dir / provider.model)',
       extra: () => 'Usage: vessel config explain <key> [--json] (e.g. data_dir / provider.model)',
     },
+    unknownFlagError: unknownFor('config explain'),
     load: async () => {
       const { configExplainCommand } = await import('./commands/config-command');
       const { printCommandResult } = await import('./command-support');
@@ -1515,6 +1528,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing eval suite (name or path)',
       extra: (token) => `Unexpected argument: ${token}`,
     },
+    unknownFlagError: (token) => `Unknown argument: ${token}`,
     load: async () => {
       const { runEvalCommand } = await import('./commands/eval-command');
       return {
@@ -1669,6 +1683,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing <path> for plugin install',
       extra: (token) => `Unexpected extra argument for plugin install: ${token}`,
     },
+    unknownFlagError: unknownFor('plugin install'),
     load: async () => {
       const { runPluginCommand } = await import('./commands/plugin/plugin-command');
       const { printCommandResult } = await import('./command-support');
@@ -1692,6 +1707,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing <name> for plugin enable',
       extra: (token) => `Unexpected extra argument for plugin enable: ${token}`,
     },
+    unknownFlagError: unknownFor('plugin enable'),
     validate: (p) => {
       const name = p.positionals[0] ?? '';
       return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
@@ -1715,6 +1731,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing <name> for plugin disable',
       extra: (token) => `Unexpected extra argument for plugin disable: ${token}`,
     },
+    unknownFlagError: unknownFor('plugin disable'),
     validate: (p) => {
       const name = p.positionals[0] ?? '';
       return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
@@ -1739,6 +1756,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing <name> for plugin remove',
       extra: (token) => `Unexpected extra argument for plugin remove: ${token}`,
     },
+    unknownFlagError: unknownFor('plugin remove'),
     validate: (p) => {
       const name = p.positionals[0] ?? '';
       return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
@@ -1901,6 +1919,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       '--node': { value: { kind: 'string', placeholder: '<id>' } },
     },
     positionalErrors: { extra: (token) => `Unexpected argument for kanban list: ${token}` },
+    unknownFlagError: unknownFor('kanban list'),
     validate: (p) => {
       const g = p.globals;
       const connectOnly =
@@ -1948,6 +1967,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'kanban view requires exactly one task id',
       extra: () => 'kanban view requires exactly one task id',
     },
+    unknownFlagError: unknownFor('kanban view'),
     validate: (p) => {
       const g = p.globals;
       const connectOnly =
@@ -2002,6 +2022,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     surface: 'one-shot',
     flags: ['--json', '--connect', '--connect-token', '--ca'],
     positionalErrors: { extra: () => 'model list takes no positional arguments' },
+    unknownFlagError: unknownFor('model list'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2050,6 +2071,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'model set requires <id>',
       extra: () => 'model set requires <id>',
     },
+    unknownFlagError: unknownFor('model set'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2079,6 +2101,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'model remove requires <id>',
       extra: () => 'model remove requires <id>',
     },
+    unknownFlagError: unknownFor('model remove'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2103,6 +2126,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'model set-default requires <ref>',
       extra: () => 'model set-default requires <ref>',
     },
+    unknownFlagError: unknownFor('model set-default'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2146,6 +2170,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'model credential-set requires <id>',
       extra: () => 'model credential-set requires <id>',
     },
+    unknownFlagError: unknownFor('model credential-set'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2180,6 +2205,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'model credential-remove requires <id>',
       extra: () => 'model credential-remove requires <id>',
     },
+    unknownFlagError: unknownFor('model credential-remove'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2204,6 +2230,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     surface: 'one-shot',
     flags: ['--json', '--connect', '--connect-token', '--ca'],
     positionalErrors: { extra: () => 'model credentials-list takes no positional arguments' },
+    unknownFlagError: unknownFor('model credentials-list'),
     validate: (p) => modelConnectError(p.globals),
     load: async () => {
       const { modelCommand } = await import('./commands/model');
@@ -2235,6 +2262,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     positionalErrors: {
       extra: () => 'model test requires [<entry>] (--credential <id> for a credential-level ping)',
     },
+    unknownFlagError: unknownFor('model test'),
     validate: (p) => {
       const connectError = modelConnectError(p.globals);
       if (connectError !== null) return connectError;
@@ -2302,19 +2330,18 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
         : null,
     load: async () => {
       const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
-      return {
-        run: async (parsed) => {
-          const f = parsed.flags;
-          return runGatewayCommand({
-            kind: 'start',
-            daemon: f['--foreground'] !== true,
-            ...(f['--instance'] !== undefined ? { instance: f['--instance'] } : {}),
-            ...(f['--port'] !== undefined ? { port: f['--port'] } : {}),
-            ...(f['--host'] !== undefined ? { host: f['--host'] } : {}),
-            ...(f['--log'] !== undefined ? { log: f['--log'] } : {}),
-          });
-        },
+      const domain = (parsed: ParsedCommand<CommandSpecBase>): GatewayCommand => {
+        const f = parsed.flags;
+        return {
+          kind: 'start',
+          daemon: f['--foreground'] !== true,
+          ...(f['--instance'] !== undefined ? { instance: f['--instance'] } : {}),
+          ...(f['--port'] !== undefined ? { port: f['--port'] } : {}),
+          ...(f['--host'] !== undefined ? { host: f['--host'] } : {}),
+          ...(f['--log'] !== undefined ? { log: f['--log'] } : {}),
+        };
       };
+      return { domain, run: async (parsed) => runGatewayCommand(domain(parsed)) };
     },
   }),
   defineCommand({
@@ -2439,21 +2466,20 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
         : null,
     load: async () => {
       const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
-      return {
-        run: async (parsed) => {
-          const f = parsed.flags;
-          return runGatewayCommand({
-            kind: 'restart',
-            daemon: f['--daemon'] === true ? true : undefined,
-            keepNodes: true,
-            ...(f['--force'] === true ? { force: true } : {}),
-            ...(f['--stop-nodes'] === true || f['--no-keep-nodes'] === true
-              ? { stopNodesDeprecated: true }
-              : {}),
-            ...selectorFromFlags(f),
-          });
-        },
+      const domain = (parsed: ParsedCommand<CommandSpecBase>): GatewayCommand => {
+        const f = parsed.flags;
+        return {
+          kind: 'restart',
+          daemon: f['--daemon'] === true ? true : undefined,
+          keepNodes: true,
+          ...(f['--force'] === true ? { force: true } : {}),
+          ...(f['--stop-nodes'] === true || f['--no-keep-nodes'] === true
+            ? { stopNodesDeprecated: true }
+            : {}),
+          ...selectorFromFlags(f),
+        };
       };
+      return { domain, run: async (parsed) => runGatewayCommand(domain(parsed)) };
     },
   }),
   defineCommand({
@@ -2564,6 +2590,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'Missing node name for gateway nodes add',
       extra: (token, all) => `gateway nodes add accepts one node name: ${all[0] ?? ''}, ${token}`,
     },
+    unknownFlagError: unknownFor('gateway nodes add'),
     load: async () => {
       const { runGatewayNodesCommand } = await import('./commands/gateway/gateway-nodes-command');
       return {
@@ -2590,6 +2617,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       extra: (token, all) =>
         `gateway nodes remove accepts one node name: ${all[0] ?? ''}, ${token}`,
     },
+    unknownFlagError: unknownFor('gateway nodes remove'),
     load: async () => {
       const { runGatewayNodesCommand } = await import('./commands/gateway/gateway-nodes-command');
       return {
@@ -2620,16 +2648,15 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     positionalErrors: { extra: (token) => `Unknown argument for node start: ${token}` },
     load: async () => {
       const { runNodeCommand } = await import('./commands/node-command');
-      return {
-        run: async (parsed) => {
-          const f = parsed.flags;
-          return runNodeCommand({
-            kind: 'start',
-            daemon: f['--daemon'] === true,
-            ...(f['--config'] !== undefined ? { configPath: f['--config'] } : {}),
-          });
-        },
+      const domain = (parsed: ParsedCommand<CommandSpecBase>): NodeCommand => {
+        const f = parsed.flags;
+        return {
+          kind: 'start',
+          daemon: f['--daemon'] === true,
+          ...(f['--config'] !== undefined ? { configPath: f['--config'] } : {}),
+        };
       };
+      return { domain, run: async (parsed) => runNodeCommand(domain(parsed)) };
     },
   }),
   defineCommand({
@@ -2690,6 +2717,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     flags: ['--force', '--data-dir'],
     positional: '[<name>]',
     positionalErrors: { extra: () => 'node restart accepts at most one name' },
+    unknownFlagError: unknownFor('node restart'),
     load: async () => {
       const { runNodeCommand } = await import('./commands/node-command');
       return {
@@ -3237,6 +3265,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     ],
     positional: '<member> <content...>',
     positionalErrors: { missing: 'agent send requires <member> <content...>' },
+    unknownFlagError: unknownFor('agent send'),
     validate: (p) => {
       const targeting = targetingError(p.globals);
       if (targeting !== null) return targeting;
@@ -3394,6 +3423,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     flags: ['--json', '--allow-auto-create', '--connect', '--connect-token', '--ca', '--node'],
     positional: '<to> <content...>',
     positionalErrors: { missing: 'agent dispatch requires <to> <content...>' },
+    unknownFlagError: unknownFor('agent dispatch'),
     validate: (p) => {
       const targeting = targetingError(p.globals);
       if (targeting !== null) return targeting;
@@ -3771,6 +3801,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     flags: ['--json', '--mention', '--connect', '--connect-token', '--ca', '--node'],
     positional: '<team_id> <content...>',
     positionalErrors: { missing: 'team post requires <team_id> <content...>' },
+    unknownFlagError: unknownFor('team post'),
     validate: (p) => {
       const targeting = targetingError(p.globals);
       if (targeting !== null) return targeting;
@@ -4105,6 +4136,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'federation join requires <url|node-id>',
       extra: () => 'federation join takes exactly one <url|node-id>',
     },
+    unknownFlagError: unknownFor('federation join'),
     load: async () => {
       const { runFederationCommand } = await import('./commands/federation');
       const { printCommandResult, resolveCommandContext } = await import('./command-support');
@@ -4253,6 +4285,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       missing: 'federation peer remove requires <label|node-id> (label = <nodeId>:<teamId>)',
       extra: () => 'federation peer remove takes exactly one <label|node-id>',
     },
+    unknownFlagError: unknownFor('federation peer remove'),
     load: async () => {
       const { runFederationCommand } = await import('./commands/federation');
       const { printCommandResult, resolveCommandContext } = await import('./command-support');
@@ -4475,6 +4508,11 @@ function gatewayPortOverride(command: string): {
 /** 选择器互斥文案（现 gatewaySelectorError）。 */
 function selectorExclusiveError(command: string): string {
   return `gateway ${command} accepts only one of --instance, --port, --all`;
+}
+
+/** 未知 flag 文案（现态 parser 默认口径：Unknown argument for <label>: X）。 */
+function unknownFor(label: string): (token: string) => string {
+  return (token) => `Unknown argument for ${label}: ${token}`;
 }
 
 /** agent/team/federation targeting 校验（现 extractTargetFlags 口径：--connect 或 --node）。 */

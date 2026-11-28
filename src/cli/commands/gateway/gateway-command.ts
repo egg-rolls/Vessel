@@ -3900,10 +3900,3 @@ export async function runGatewayCommand(
       return uninstallServiceCommand(deps);
   }
 }
-
-/** 前台 `start`/`restart` 是否由 cli.ts 处理（其余进一次性注册表） */
-export function isForegroundGatewayCommand(
-  command: GatewayCommand,
-): command is Extract<GatewayCommand, { kind: 'start' | 'restart' }> {
-  return (command.kind === 'start' || command.kind === 'restart') && command.daemon === false;
-}

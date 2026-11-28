@@ -734,11 +734,6 @@ async function nodeReloadCommand(
   return failed ? 1 : 0;
 }
 
-/** 前台 `node start` 由 cli.ts 接进 serve 管线；其余进一次性注册表。 */
-export function isForegroundNodeCommand(command: NodeCommand): boolean {
-  return command.kind === 'start' && command.daemon === false;
-}
-
 /**
  * `node token [--print] [--json] [--node <id>]`（0.56）。
  *

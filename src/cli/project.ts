@@ -21,12 +21,11 @@ import {
   COMMAND_SCHEMA,
   type CommandContext,
   type CommandSpec,
-  type CommandSpecBase,
   FLAG_DEFS,
   type FlagSpec,
   type FlagValueKind,
   flagDef,
-  type ParsedCommand,
+  type ParsedCommandBase,
   PURE_GROUP_SUMMARIES,
 } from './command-spec';
 import type { CompletionCommand, CompletionSubcommand } from './completion-spec';
@@ -62,10 +61,7 @@ export type CliFlag = string;
 export interface DispatchEntry {
   readonly name: string;
   readonly match: (parsed: { readonly path: readonly string[] }) => boolean;
-  readonly run: (
-    parsed: ParsedCommand<CommandSpecBase>,
-    ctx: CommandContext,
-  ) => Promise<number | undefined>;
+  readonly run: (parsed: ParsedCommandBase, ctx: CommandContext) => Promise<number | undefined>;
 }
 
 /** 顺序 = schema 数组顺序（命中即停语义保持；entry surface 在入口处理，不进分派）。 */
