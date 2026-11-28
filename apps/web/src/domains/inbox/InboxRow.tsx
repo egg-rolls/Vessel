@@ -42,7 +42,7 @@ export function InboxRow({
   client,
 }: {
   entry: AgentInboxEntry;
-  /** 网关客户端（bash 作业卡的 log tail 按需读 jobs.log）；缺省 = 不渲染作业卡日志键。 */
+  /** 网关客户端（running 异步作业占位卡的渲染门槛）；缺省 = 退回通用卡。 */
   client?: GatewayClient;
   /** 卡头身份（human / agent:<name> / 短 id）；undefined = 不渲染身份槽。 */
   identity?: string;
@@ -66,7 +66,7 @@ export function InboxRow({
   // （沉底 / 不可消费）；done/failed 已返回 = 同步消息，走下方通用卡路径（计数 / 展开
   // peek / 认领全复用，q-bash-inbox-integrate 用户裁定）。无 client 时一律退回通用卡。
   if (entry.async_job?.status === 'running' && client !== undefined) {
-    return <AsyncJobCard entry={entry} client={client} />;
+    return <AsyncJobCard entry={entry} />;
   }
   const human = entry.from === HUMAN_SOURCE;
   // 已返回的异步作业（done/failed）不是 human 源也可认领：服务端 claim 对它放行

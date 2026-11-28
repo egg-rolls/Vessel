@@ -1082,10 +1082,8 @@ export const messages = {
   'inbox.asyncJob.running': '运行中',
   'inbox.asyncJob.done': '已完成',
   'inbox.asyncJob.failed': '失败',
-  'inbox.asyncJob.logShow': '查看日志',
-  'inbox.asyncJob.logHide': '收起日志',
-  'inbox.asyncJob.logLoading': '正在读取日志…',
-  'inbox.asyncJob.logEmpty': '（日志为空）',
+  'inbox.asyncJob.input': '输入',
+  'inbox.asyncJob.output': '输出',
 
   // Teams（跨节点）
   'teams.title': '团队',
