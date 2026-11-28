@@ -944,10 +944,12 @@ export function PendingStrip({
     if (pending !== undefined) onDismissPending?.(pending);
   };
 
-  // 空列表整块不渲染（不占高度、不留空壳）。bash 作业占位行也算有内容。
+  // 计数口径（q-bash-inbox-integrate）：bash 作业卡也是收件箱公民 —— 「收件箱 · N」
+  // 含沉底作业行（view.total 只算通用排队行，jobRows 与它同一份 claimed/sent 过滤，
+  // 不重不漏）。空判定同口径：两者皆空才整块不渲染。
   if (view.total === 0 && jobRows.length === 0) return null;
 
-  const label = t('chat.pending.title', { count: view.total });
+  const label = t('chat.pending.title', { count: view.total + jobRows.length });
 
   /**
    * 取消：服务端条目走 `agents.recall`（真删）；**服务端真的没收下的** pending 才是纯
@@ -1164,11 +1166,23 @@ export function PendingStrip({
               </div>
               {/* 异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派
                   （bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
-                  结果正文由模型 inbox read 取走（单一真相源）。 */}
+                  结果正文由模型 inbox read 取走（单一真相源）。
+                  用户侧收口（q-bash-inbox-integrate）：done/failed 给「我已处理」
+                  （handleClaim → agents.claim，与消息卡同路径）；running 不可认领 ⇒ 无键。 */}
               {jobRows.length > 0 && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {jobRows.map((entry) => (
-                    <AsyncJobCard key={entry.message_id} entry={entry} client={client} />
+                    <AsyncJobCard
+                      key={entry.message_id}
+                      entry={entry}
+                      client={client}
+                      {...(entry.async_job?.status !== 'running'
+                        ? {
+                            onClaim: () => void handleClaim(entry.message_id),
+                            claimBusy: cancelling.has(entry.message_id),
+                          }
+                        : {})}
+                    />
                   ))}
                 </div>
               )}
