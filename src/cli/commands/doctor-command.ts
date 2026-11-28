@@ -38,7 +38,6 @@ import {
 } from '../../data/data-paths';
 import { loadNodeRegistry } from '../../gateway/node-registry';
 import { resolveGatewayToken } from '../../gateway/transport-factory';
-import { guardListenerInheritance } from '../../shared/socket-inherit-guard.js';
 // 0.56.1：Web 控制台产物缺失要在 doctor 就能看见（`gateway start` 的硬前置）。
 // 0.57：产物「落后于源码」同理 —— 它是「界面一直是旧的」最常见的真实原因。
 import {
@@ -59,6 +58,7 @@ import { assertUniqueFeishuAppIds, type FeishuTenantConfig } from '../../plugin/
 import { declarativePluginEntries } from '../../plugin/plugin-config';
 import { PluginLoader } from '../../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../../plugin/plugin-selection';
+import { guardListenerInheritance } from '../../shared/socket-inherit-guard.js';
 import { readPackageVersion } from '../../shared/version';
 import type { DoctorCommandArgs } from '../args';
 import { type ControlPlaneTarget, resolveControlPlaneTarget } from '../control-plane-target';

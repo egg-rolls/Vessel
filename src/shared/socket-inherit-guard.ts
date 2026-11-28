@@ -82,8 +82,10 @@ function loadWin32(): Win32FFI | null {
     // bun 1.3.9 类型口径与运行时差异：FFIType.ptr 运行时接受 number（实证），
     // 类型却只列 bigint|TypedArray|Pointer（bigint 运行时反而抛错）——按实证口径转型。
     cached = {
-      SetHandleInformation: k32.symbols.SetHandleInformation as unknown as Win32FFI['SetHandleInformation'],
-      GetHandleInformation: k32.symbols.GetHandleInformation as unknown as Win32FFI['GetHandleInformation'],
+      SetHandleInformation: k32.symbols
+        .SetHandleInformation as unknown as Win32FFI['SetHandleInformation'],
+      GetHandleInformation: k32.symbols
+        .GetHandleInformation as unknown as Win32FFI['GetHandleInformation'],
       GetCurrentProcessId: k32.symbols.GetCurrentProcessId,
       NtQuerySystemInformation: ntdll.symbols
         .NtQuerySystemInformation as unknown as Win32FFI['NtQuerySystemInformation'],
