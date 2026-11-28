@@ -34,6 +34,8 @@ import { registerLinkEnhancer, unregisterLinkEnhancers } from '../../components/
 import type { AtomicCardProps, AtomicScheme } from '../../components/ui/RichComposer';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { PluginListItem } from '../../gateway/types';
+// 块 P0：插件 link 贡献同时映射进块注册表（同一张表；叶模块，无 domains 循环）。
+import { registerBlockType, unregisterBlockTypes } from '../chat/block-registry';
 import { disposeEmbedModule, loadPluginEmbed } from './embed-loader';
 import { disposePluginHost, usePluginHost, usePluginSurface } from './host-factory';
 import { type PluginComposerItem, pluginEmbedAssetUrl } from './plugin-contributions';
@@ -138,10 +140,25 @@ function ComposerPluginBridge({
       }
       if (item.scheme === undefined) continue;
       if (item.slot === 'link') {
+        const LinkCard = exported as ComponentType<ComposerLinkCardProps>;
         registerLinkEnhancer(item.scheme, {
           pluginId,
-          component: exported as ComponentType<ComposerLinkCardProps>,
+          component: LinkCard,
           host,
+        });
+        // 块 P0：同一贡献映射进块注册表（x:<pluginId>:<scheme>，同一张表治理）。
+        // 正文内渲染仍走 link-enhancers 查表（Markdown link 命中即插件卡）；这里
+        // lift 恒 []（inline 块不是消息级信封，不剥正文），只登记类型身份，
+        // 供热更新/禁用统一注销与后续 P1 消费。不另造第二套注册链。
+        registerBlockType<{ href: string; text: string }>({
+          type: `x:${pluginId}:${item.scheme}`,
+          surface: 'inline',
+          order: 100,
+          owner: pluginId,
+          lift: () => [],
+          component: ({ payload }) => (
+            <LinkCard href={payload.href} text={payload.text} host={host} />
+          ),
         });
         continue;
       }
@@ -167,6 +184,7 @@ function ComposerPluginBridge({
     return () => {
       onRegister(pluginId, null);
       unregisterLinkEnhancers(pluginId);
+      unregisterBlockTypes(pluginId);
     };
   }, [module, surfaceReady, items, host, onRegister, pluginId]);
 

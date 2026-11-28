@@ -20,6 +20,7 @@
  */
 import { create } from 'zustand';
 import type { MessageRef } from '../gateway/types';
+import { isHighSurrogate } from '../text';
 
 /** 结构上兼容 `domains/team/mention` 的 `MentionChip`（stores 不反向依赖 domains）。 */
 export interface ComposerChip {
@@ -157,13 +158,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isHighSurrogate(code: number): boolean {
-  return code >= 0xd800 && code <= 0xdbff;
-}
-
 /**
  * 按 UTF-8 字节截断（宽字符按 2/3 字节估）；不劈开代理对，保证恢复出来的前缀是完整字符。
  * 只求上限，不追求编码器级精确 —— 差几十字节没有意义。
+ * 代理对判定走宿主共享 isHighSurrogate（块 P0）；字节预算口径与字符口径的
+ * truncateSnippet 是两件事，不合并。
  */
 function truncateDraftText(text: string): string {
   let bytes = 0;

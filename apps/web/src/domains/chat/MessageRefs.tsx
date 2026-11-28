@@ -1,6 +1,8 @@
 // biome-ignore-all lint/a11y/noSvgWithoutTitle: decorative icons are marked aria-hidden
 import type { ImageDelivery, MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
+import { occurrenceKeys } from '../../text';
+import { RefIcon } from './RefIcon';
 
 /**
  * 附件引用的一行 chip（输入框上方 / 已发消息上方共用）。
@@ -28,45 +30,7 @@ export function refKindLabel(ref: MessageRef): string {
   }
 }
 
-/** 种类图标：内联 SVG，颜色继承 currentColor（与 DomainIcon 同一口径）。 */
-function RefIcon({ kind }: { kind: MessageRef['kind'] }) {
-  const common = {
-    width: 13,
-    height: 13,
-    viewBox: '0 0 20 20',
-    fill: 'none',
-    stroke: 'currentColor',
-    strokeWidth: 1.5,
-    strokeLinecap: 'round' as const,
-    strokeLinejoin: 'round' as const,
-    'aria-hidden': true,
-    focusable: 'false' as const,
-  };
-  if (kind === 'image') {
-    return (
-      <svg {...common}>
-        <rect x="3" y="4" width="14" height="12" rx="2" />
-        <circle cx="7.5" cy="8" r="1.3" />
-        <path d="M4 14.5 8.5 10l3 3 2-2 2.5 2.5" />
-      </svg>
-    );
-  }
-  if (kind === 'document') {
-    return (
-      <svg {...common}>
-        <path d="M5 3.5h6.5L15.5 8v8.5H5z" />
-        <path d="M11.5 3.5V8h4" />
-        <path d="M7.5 11h5M7.5 13.5h3.5" />
-      </svg>
-    );
-  }
-  return (
-    <svg {...common}>
-      <path d="M5 3.5h6.5L15.5 8v8.5H5z" />
-      <path d="M11.5 3.5V8h4" />
-    </svg>
-  );
-}
+/** 种类图标：宿主唯一实现在 RefIcon.tsx（块 P0 收编，chip 13px 默认）。 */
 
 /**
  * 图片投递状态的文案（0.56）。
@@ -175,16 +139,14 @@ export function MessageRefs({
   className?: string;
 }) {
   if (refs === undefined || refs.length === 0) return null;
-  // key 用「同一路径的第几次引用」：在渲染前建表，既不用数组下标，也不会因为
-  // 同一路径被引用多次而撞 key（列表本身不排序、不重排）。
-  const occurrence = new Map<string, number>();
+  // key 用「同一路径的第几次引用」（宿主唯一实现 occurrenceKeys）：在渲染前建表，
+  // 既不用数组下标，也不会因为同一路径被引用多次而撞 key（列表本身不排序、不重排）。
+  const keys = occurrenceKeys(refs.map((ref) => ref.path));
   // 图片引用在 `refs` 里的有序位次 → 投递状态（服务端按 image 项同序下发）。
   let imageIndex = 0;
   return (
     <ul className={`msg-refs ${className}`.trim()} aria-label={t('chat.refs.label')}>
       {refs.map((ref, index) => {
-        const seen = occurrence.get(ref.path) ?? 0;
-        occurrence.set(ref.path, seen + 1);
         const name = refDisplayName(ref);
         const delivery =
           ref.kind === 'image' && imageDelivery !== undefined
@@ -192,7 +154,7 @@ export function MessageRefs({
             : undefined;
         const deliveryText = delivery === undefined ? undefined : imageDeliveryLabel(delivery);
         return (
-          <li key={`${ref.path}#${seen}`} className="msg-ref" title={ref.path}>
+          <li key={keys[index] ?? `${ref.path}#${index}`} className="msg-ref" title={ref.path}>
             <span className="msg-ref-icon" aria-hidden="true">
               <RefIcon kind={ref.kind} />
             </span>

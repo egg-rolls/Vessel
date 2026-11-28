@@ -32,6 +32,7 @@
  * @module web/chat/quote-ref
  */
 import type { ComposerQuote } from '../../stores/composerDraftStore';
+import { truncateSnippet } from '../../text';
 
 /** 摘要上限（字符）：引用是「指向哪一句」，不是转载全文。 */
 export const QUOTE_SNIPPET_MAX = 120;
@@ -42,12 +43,8 @@ const QUOTE_HEADER = '[引用消息';
 /** 折叠空白后的前 N 字摘要；不劈开代理对，截断带 …。空正文 → 空串。 */
 export function quoteSnippetOf(content: string): string {
   const flat = content.replace(/\s+/g, ' ').trim();
-  if (flat.length <= QUOTE_SNIPPET_MAX) return flat;
-  let cut = QUOTE_SNIPPET_MAX;
-  // 不劈开代理对（emoji 等）：与 composerDraftStore.truncateDraftText 同一口径。
-  const code = flat.charCodeAt(cut - 1);
-  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-  return `${flat.slice(0, cut)}…`;
+  // 字符口径截断的宿主唯一实现（块 P0 收编；代理对保护在内）。
+  return truncateSnippet(flat, QUOTE_SNIPPET_MAX);
 }
 
 /**

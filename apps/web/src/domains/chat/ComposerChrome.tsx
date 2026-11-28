@@ -25,6 +25,7 @@ import { Button, cn, Icon } from '../../components/ui';
 import { formatTokenCount } from '../../format';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
+import { occurrenceKeys } from '../../text';
 import { AttachDialog } from './AttachDialog';
 import { type ComposerAttachBinding, ComposerAttachButton } from './ComposerAttach';
 import { composerIconControlClass, composerPrimaryIconTone } from './composer-controls';
@@ -59,12 +60,10 @@ function refKindMarker(kind: MessageRef['kind']): string {
 export function refsToAttachments(refs: readonly MessageRef[]): ComposerAttachment[] {
   // id 带「同一路径的第几次」：同一路径可以引用两次，删除必须回写到那一条的下标，
   // 只靠 path 反查会永远删到第一条（渲染侧的 key 也是同一口径，见 MessageRefs）。
-  const occurrence = new Map<string, number>();
-  return refs.map((ref) => {
-    const seen = occurrence.get(ref.path) ?? 0;
-    occurrence.set(ref.path, seen + 1);
+  const keys = occurrenceKeys(refs.map((ref) => ref.path));
+  return refs.map((ref, index) => {
     return {
-      id: `${ref.path}#${seen}`,
+      id: keys[index] ?? `${ref.path}#${index}`,
       label: refDisplayName(ref),
       kind: refKindMarker(ref.kind),
       note: refKindLabel(ref),
@@ -94,25 +93,23 @@ export function refsToAttachmentsFiltered(
   refs: readonly MessageRef[],
   inlineCounts: ReadonlyMap<string, number>,
 ): ComposerAttachment[] {
-  const occurrence = new Map<string, number>();
+  const keys = occurrenceKeys(refs.map((ref) => ref.path));
   const remaining = new Map(inlineCounts);
   const items: ComposerAttachment[] = [];
-  for (const ref of refs) {
-    const seen = occurrence.get(ref.path) ?? 0;
-    occurrence.set(ref.path, seen + 1);
+  refs.forEach((ref, index) => {
     const left = remaining.get(ref.path) ?? 0;
     if (left > 0) {
       remaining.set(ref.path, left - 1);
-      continue;
+      return;
     }
     items.push({
-      id: `${ref.path}#${seen}`,
+      id: keys[index] ?? `${ref.path}#${index}`,
       label: refDisplayName(ref),
       kind: refKindMarker(ref.kind),
       note: refKindLabel(ref),
       description: ref.path,
     });
-  }
+  });
   return items;
 }
 
