@@ -949,16 +949,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(agentControl !== undefined
       ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
       : {}),
-    // R-1（q-restart-tool）：vessel op=rpc 走的是本 localDispatcher（vesselRpcPort），
-    // gateway.restart 必须在这里同样注入，否则设计主入口 not_supported——
-    // cli.ts 的网络 gatewayOptions 只是另一路。惰性包装：gatewayRestart 定义在
-    // 装配后段，dispatch 发生时早已初始化（TDZ 无虞）。additive 只补 restart；
-    // selfRestart/shutdown/reload 的本地面缺口另议，不在本批扩面。
-    restart: async (input) => gatewayRestart(input),
-    // P2 收集器（ADR-107）：feature 贡献的 RPC deps 统一展开（本批：attachments
-    // 三键 / jobs / kanban；restart 随后迁入）。键冲突 fail-closed 在收集器内。
-    // R-6 的 kanban 可变对象由 kanban feature 单点持有（dispatcher 与 result
-    // 同一引用），cli applyKanban 热应用原地改即两路活生效。
+    // P2 收集器（ADR-107）：feature 贡献的 RPC deps 统一展开（第一批四 feature：
+    // attachments 三键 / jobs / kanban / restart）。键冲突 fail-closed 在收集器内。
+    // R-1 的 restart 与 R-6 的 kanban 由各自 feature 单点声明，两表面共消费——
+    // 「忘接一路」结构上不可能。selfRestart/shutdown/reload 的本地面缺口另议。
     ...collectedFeatures.dispatcher,
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
