@@ -13,8 +13,8 @@ import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
 import { BlockView, MessageBlocks } from './block-views';
 import { isIndexUserMessage } from './conversation-index';
-import { InlineText } from './InlineText';
 import { liftBlocks } from './lift-blocks';
+import { MessageContentSurface } from './MessageContentSurface';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
 import { isCardInputMessage, type TranscriptItem } from './transcript-items';
 
@@ -137,8 +137,10 @@ const TranscriptMessage = memo(function TranscriptMessage({
     }
     // 块提升（块 P0）：一次 liftBlocks 收编 quote / session-ref / image / file 解析；
     // 不是信封时 blocks 为空、body = 原文（零回归）。顺序由注册表 order 决定。
-    // file 内联数据（token 卡 + 剩余 refs）经 inline 进气泡内 InlineText（D3）。
-    const { blocks, body, inline } = liftBlocks(message, { messages: quoteTargets });
+    // 块区 + 正文经 MessageContentSurface 统一渲染（P2）：file 内联数据（token 卡 +
+    // 剩余 refs）进气泡内 InlineText（D3），气泡 + 折叠由 wrapBody 包。
+    const lifted = liftBlocks(message, { messages: quoteTargets });
+    const { blocks } = lifted;
     const actions: MessageAction[] = [];
     // 工具图片注入（media view 等）：整条消息成卡（注册表 image 块），替代
     // 「[tool image]…」文本 dump；原始注记收进卡内折叠区（组件内部不动）。
@@ -177,16 +179,17 @@ const TranscriptMessage = memo(function TranscriptMessage({
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
         {/* 块按注册表顺序在气泡上方：先「回复哪一句」（quote），再会话引用卡。
             文件 chip 已进气泡内（InlineText：token 原位 + 剩余 refs 尾部）。
-            不改正文，也不影响 copy / edit。 */}
-        <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-        {/* 空气泡判据：正文非空 ∨ 有剩余 refs（尾部 chip 行也要有气泡承载）。 */}
-        {(body.length > 0 || (inline?.refs.length ?? 0) > 0) && (
-          <div className="msg-bubble">
-            <MessageFold>
-              <InlineText text={body} match={inline} />
-            </MessageFold>
-          </div>
-        )}
+            不改正文，也不影响 copy / edit。表面统一渲染（P2 MessageContentSurface）。 */}
+        <MessageContentSurface
+          lifted={lifted}
+          messageRole="user"
+          render={{ onJumpQuote }}
+          wrapBody={(node) => (
+            <div className="msg-bubble">
+              <MessageFold>{node}</MessageFold>
+            </div>
+          )}
+        />
         {hasMeta || actions.length > 0 ? (
           <MessageActions className="justify-end" actions={actions} meta={meta} />
         ) : null}
@@ -197,7 +200,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const calls = message.tool_calls ?? [];
   // 块提升（块 P0）：AI 回复也可以带信封引用用户消息（双向同形）；session-ref
   // 信封同样提升成卡。一次 liftBlocks，未知正文原样渲染（零回归）。
-  const { blocks, body } = liftBlocks(message, { messages: quoteTargets });
+  const lifted = liftBlocks(message, { messages: quoteTargets });
+  const { blocks, body } = lifted;
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
   // q-msg-visibility：思考过程 toggle / minimal 档关闭时不渲（与 live 同一判定）。
   const reasoning = showReasoning ? historyReasoning(message) : undefined;
@@ -271,10 +275,14 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const isRunEnd = calls.length === 0;
   return (
     <div className="msg-assistant group relative max-w-full">
-      {/* 块在最前：这条回复「针对哪一句」先于正文（注册表顺序）。 */}
-      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      {/* 助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
-      {body && <Markdown className="msg-text" text={body} />}
+      {/* 块在最前：这条回复「针对哪一句」先于正文（注册表顺序）。表面统一渲染（P2）：
+          助手正文无底色气泡包裹 ⇒ 不折（与 live 的 `AssistantText` 同一口径）。 */}
+      <MessageContentSurface
+        lifted={lifted}
+        messageRole="assistant"
+        render={{ onJumpQuote }}
+        bodyClassName="msg-text"
+      />
       {meta !== undefined || actions.length > 0 ? (
         <MessageActions
           className={isRunEnd ? 'mt-1' : undefined}

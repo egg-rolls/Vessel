@@ -7,11 +7,10 @@
  * **内容插槽 = 消息侧同一管线，零新解析器**（设计稿 §2.1）：锚行剥掉后，剩余
  * content + refs + image_delivery 组成伪消息 `{role:'user',content,refs,image_delivery}`
  * 过 liftBlocks（在 tool-media lift 内完成，本组件纯展示）—— token 认 file-token.ts
- * （matchFileTokens 按 occurrence 配 ref + 投递状态），fence 认 vessel-block.ts，
- * 块渲染认 block-registry（MessageBlocks）。剩余 body 按 role:'user' 走 InlineText
- * （与用户气泡同形：token 原位 chip，**delivery 三态 chip 经 matchFileTokens 继承**，
- * 可见性对等）；Markdown body 渲染器属 P2 MessageContentSurface 按 role 分档，
- * 本批不引入第二套正文渲染。
+ * （matchFileTokens 按 occurrence 配 ref + 投递状态），fence 认 vessel-block.ts
+ * （table/code 同路进插槽块区，P2 泛化）。块区 + 剩余正文经 MessageContentSurface
+ * 统一渲染（role:'user' ⇒ InlineText，与用户气泡同形：token 原位 chip，**delivery
+ * 三态 chip 经 matchFileTokens 继承**，可见性对等）。
  *
  * 表面 = StreamCard（与 ToolCard / AsyncJobCard 同基座）：卡头 title = 工具名
  * （锚行 `from tool X`，裁示②），meta = 条数 + 时刻；展开体 = 插槽。
@@ -20,9 +19,8 @@
  */
 import { formatClock } from '../../format';
 import { t } from '../../i18n';
-import { MessageBlocks } from './block-views';
-import { InlineText } from './InlineText';
 import type { LiftBlocksResult } from './lift-blocks';
+import { MessageContentSurface } from './MessageContentSurface';
 import { StreamCard } from './StreamCard';
 
 export function ToolResultCard({
@@ -50,10 +48,7 @@ export function ToolResultCard({
       defaultOpen
       ariaLabel={t('chat.toolMedia.group')}
     >
-      <MessageBlocks blocks={slot.blocks} />
-      {(slot.body.length > 0 || (slot.inline?.refs.length ?? 0) > 0) && (
-        <InlineText text={slot.body} match={slot.inline} />
-      )}
+      <MessageContentSurface lifted={slot} messageRole="user" />
     </StreamCard>
   );
 }
