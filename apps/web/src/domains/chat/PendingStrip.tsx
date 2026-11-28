@@ -174,11 +174,15 @@ function withEntryStatus(
  * **写操作按来源分档**：human 源三颗（收回编辑 / 取消排队 / 我已处理），非 human 源一颗
  * 「取消 hold 留档」（`onUnhold`，`canUnhold` 判定：非 human + 当前 held）。判定留在这一个
  * 地方，展开后的每一条与组头走同一条路径，不会出现「组头能撤、组内不能」这种分裂。
+ * 例外（q-bash-inbox-integrate）：**已返回的异步作业**（done/failed，`claimable`）不是
+ * human 源也给「我已处理」—— 服务端 claim 对它放行（running 才跳过），用户侧收口与
+ * 同步消息同语义；取消 / 编辑仍只给 human（作业结果没有「收回输入框」的语义）。
  */
 function PendingRow({
   item,
   identity,
   human,
+  claimable = false,
   label,
   onCancel,
   onEdit,
@@ -193,6 +197,8 @@ function PendingRow({
   identity?: string;
   /** 是不是 human 源（只有它是真删，才有三颗写键）。 */
   human: boolean;
+  /** 非 human 但可认领（已返回的异步作业条目）：只解锁「我已处理」那一颗。 */
+  claimable?: boolean;
   /**
    * 卡头文案覆盖（`QueuedNotice` 的 `label`）；缺省「等待中」。
    *
@@ -223,8 +229,8 @@ function PendingRow({
   entering?: boolean;
 }) {
   // 写操作按来源分档：human 源三颗，非 human 源只有 unhold 那一颗（它的 recall 不是删除，
-  // 而是把消息退回可读 unread）。`undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗
-  // 键」，不画空槽）。
+  // 而是把消息退回可读 unread）；已返回的异步作业（claimable）额外给 claim 那一颗。
+  // `undefined` = 没给（`QueuedNotice` 把缺省当成「不给这颗键」，不画空槽）。
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <QueuedNotice
@@ -233,7 +239,7 @@ function PendingRow({
         entering={entering}
         onCancel={human ? onCancel : undefined}
         onEdit={human ? onEdit : undefined}
-        onClaim={human ? onClaim : undefined}
+        onClaim={human || claimable ? onClaim : undefined}
         onUnhold={onUnhold}
         onRetry={human ? onRetry : undefined}
         {...(label !== undefined ? { label } : {})}
@@ -552,8 +558,10 @@ export function PendingStrip({
         (entry) =>
           !claimed.has(entry.message_id) &&
           !sent.has(entry.message_id) &&
-          // bash 作业占位走专属沉底卡（jobRows），不进通用排队分组（q-async-bash-viz）。
-          entry.async_job === undefined,
+          // 只有**仍在跑**的异步作业占位走专属沉底卡（jobRows）；done/failed 已返回，
+          // 就是同步消息 —— 进通用行路径，计数 / 认领 / 折叠全复用（q-bash-inbox-integrate，
+          // 用户裁定：完成态异步卡功能 = 同步卡，不另造一套）。
+          entry.async_job?.status !== 'running',
       )
       .map((entry) => ({
         entry: toEntry(entry),
@@ -568,14 +576,15 @@ export function PendingStrip({
     return [...serverRows, ...clientRows];
   }, [entries, pendings, sentMessageIds, cancelling]);
 
-  // bash 作业占位行（q-async-bash-viz）：沉底专属卡，running 科技蓝 / done 绿 / failed 红。
+  // 仍在跑的异步作业占位行（q-async-bash-viz）：沉底专属卡，科技蓝脉冲。
   // 与通用排队行同一份 claimed/sent 过滤（一条消息只有一行），但不参与同源折叠分组。
+  // done/failed 已分流回通用行（rows）—— 这里只剩 running，天然不可认领。
   const jobRows = useMemo(() => {
     const claimed = claimedEntryIds(pendings, entries);
     const sent = new Set(sentMessageIds);
     return entries.filter(
       (entry) =>
-        entry.async_job !== undefined &&
+        entry.async_job?.status === 'running' &&
         !claimed.has(entry.message_id) &&
         !sent.has(entry.message_id),
     );
@@ -1121,6 +1130,7 @@ export function PendingStrip({
                             identity={identityOf(head.entry, senderName)}
                             entering={isEntering(head.entry.message_id)}
                             human={head.entry.from === HUMAN_SOURCE}
+                            claimable={head.entry.async_job !== undefined}
                             {...(labelOf(head) !== undefined ? { label: labelOf(head) } : {})}
                             onCancel={cancelRow}
                             onEdit={editOf(head)}
@@ -1143,6 +1153,7 @@ export function PendingStrip({
                                     identity={identityOf(row.entry, senderName)}
                                     entering={isEntering(row.entry.message_id)}
                                     human={row.entry.from === HUMAN_SOURCE}
+                                    claimable={row.entry.async_job !== undefined}
                                     {...(labelOf(row) !== undefined ? { label: labelOf(row) } : {})}
                                     onCancel={cancelRow}
                                     onEdit={editOf(row)}
@@ -1164,25 +1175,13 @@ export function PendingStrip({
                   </ul>
                 </div>
               </div>
-              {/* 异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按 kind 分派
-                  （bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
-                  结果正文由模型 inbox read 取走（单一真相源）。
-                  用户侧收口（q-bash-inbox-integrate）：done/failed 给「我已处理」
-                  （handleClaim → agents.claim，与消息卡同路径）；running 不可认领 ⇒ 无键。 */}
+              {/* 仍在跑的异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按
+                  kind 分派（bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
+                  running 不可消费 ⇒ 无认领键；done/failed 已走上方通用行路径（同步卡功能）。 */}
               {jobRows.length > 0 && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {jobRows.map((entry) => (
-                    <AsyncJobCard
-                      key={entry.message_id}
-                      entry={entry}
-                      client={client}
-                      {...(entry.async_job?.status !== 'running'
-                        ? {
-                            onClaim: () => void handleClaim(entry.message_id),
-                            claimBusy: cancelling.has(entry.message_id),
-                          }
-                        : {})}
-                    />
+                    <AsyncJobCard key={entry.message_id} entry={entry} client={client} />
                   ))}
                 </div>
               )}
