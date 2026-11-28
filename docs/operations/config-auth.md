@@ -2,7 +2,7 @@
 title: WebUI 登录（auth 块）
 kind: current
 triggers: [auth, 登录, password, TOTP, 恢复码, 引导码, bootstrap, github_oauth, gitee_oauth, microsoft_oauth, 口令, argon2id, 会话, cookie, CSRF, credentials.json, lockout]
-paths: [packages/config/src/auth.ts, packages/config/src/auth-strategies/registry.ts, packages/config/src/auth-strategies/password.ts, packages/serve/src/auth/routes.ts]
+paths: [packages/config/src/auth.ts, packages/config/src/auth-strategies/registry.ts, packages/config/src/auth-strategies/password.ts, packages/config/src/auth-strategies/github.ts, packages/config/src/auth-strategies/gitee.ts, packages/config/src/auth-strategies/microsoft.ts, packages/config/src/auth-strategies/shapes.ts, packages/config/src/auth-strategies/avatar-ref.ts, packages/config/src/auth-strategies/match.ts, packages/config/src/auth-strategies/oauth-exchange.ts, packages/config/src/auth-strategies/index.ts, packages/config/src/auth-strategies/types.ts, packages/serve/src/auth/routes.ts]
 ---
 
 # WebUI 登录（auth 块）
