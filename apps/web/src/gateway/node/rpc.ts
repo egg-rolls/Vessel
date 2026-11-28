@@ -82,7 +82,17 @@ export abstract class RpcClient extends ProtocolClient {
         }
         details = body?.error?.details;
       } catch {
-        // 非 JSON 错误体：保留 HTTP 状态
+        // 非 JSON 错误体：保留 HTTP 状态。
+        // q-error-e3（§3.8 B 桶）：审计降级——结构化降级日志（既有 [vessel] console 通道），
+        // 有界（仅错误体解析失败时一条），不吞 HTTP 状态。
+        console.warn('[vessel] degradation.used', {
+          component: 'web.rpc.error-body',
+          from: 'json-error-body',
+          to: 'http-status-only',
+          reason: 'non-JSON error body; HTTP status preserved',
+          status: res.status,
+          path: label ?? path,
+        });
       }
       const error = new GatewayHttpError(code, message, res.status, details);
       // 0.59：401 / Origin 被拒**不许静默** —— 记进全局「被拒」状态（顶部提示 + 重新登录

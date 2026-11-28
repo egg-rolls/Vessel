@@ -826,6 +826,11 @@ export interface CreateMemberInput {
    * 身份渲染沿用 create 路径裁定：调用方写的开场任务，按正文渲染，不标 input_name。
    */
   startup_prompt?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 create 填；透传进 deliverStartupPrompt → admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** 批量创建（条目并行，逐条结果） */
@@ -1183,6 +1188,12 @@ export interface DispatchInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 wake 边计数 key。 */
   batch_key?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 由 agents.dispatch handler / TeamService.post 从 ctx.request_id + ctx.method 构建；
+   * 透传进 admit → run.started.triggered_by（E2 同款 additive，缺省逐字节不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** dispatch 结果：queued 表示已入队；notified 表示 wake 投递成功；rejected 是明确拒绝 */
@@ -1249,6 +1260,11 @@ export interface SessionCreateInput {
   /** conversation（缺省）/ both（同时做文件回滚；agent 层只透传） */
   mode?: 'conversation' | 'both';
   files?: { ref: string; paths: string[] };
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 sessions.create 填；透传进 admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /**
@@ -1301,6 +1317,11 @@ export interface SessionRestartResult {
 export interface SessionActivateInput {
   session_id: string;
   startup_prompt?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 sessions.activate 填；透传进 admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 export interface SessionActivateResult {
@@ -2409,6 +2430,11 @@ export interface TeamPostInput {
    * 形状由 serve 的 `teams.post` handler 严格校验，这里再归一一次（丢弃坏条目）。
    */
   refs?: MessageRef[];
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * teams.post handler 从 ctx 构建；随 @ 投递透传进 dispatch → admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 export interface TeamPostResult {

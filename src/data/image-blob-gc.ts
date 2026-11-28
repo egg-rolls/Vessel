@@ -83,7 +83,7 @@ async function scanSessionTextFiles(dir: string, out: Set<string>): Promise<void
   const names = await readdir(dir).catch(() => [] as string[]);
   for (const name of names) {
     if (!TEXT_FILES.includes(name)) continue;
-    const text = await readFile(join(dir, name), 'utf8').catch(() => undefined);
+    const text = await readFile(join(dir, name), 'utf8').catch(() => undefined); // benign: GC 读探针——读不出跳过。
     if (text === undefined) continue;
     shasIn(text, out);
   }
@@ -113,7 +113,7 @@ export async function collectBlobReferences(input: {
       if (entry.name.endsWith('.info.json')) continue;
       // 会话壳：`refs.sha256` 的出处。按**文本**扫而不是 `JSON.parse`：壳损坏 / 旧形状
       // 时也要能收到引用（解析失败就丢引用 = 删在用图）。
-      const text = await readFile(full, 'utf8').catch(() => undefined);
+      const text = await readFile(full, 'utf8').catch(() => undefined); // benign: GC 读探针——读不出跳过。
       if (text === undefined) continue;
       scan.shells += 1;
       shasIn(text, referenced);
@@ -318,7 +318,7 @@ export function startImageBlobGc(options: ImageBlobGcScheduleOptions): ImageBlob
 
   const timer = schedule(() => {
     if (stopped) return;
-    void runOnce().catch(() => undefined);
+    void runOnce().catch(() => undefined); // benign: 定时 GC 防未处理拒绝；失败下轮重试。
   }, intervalHours * 3_600_000);
   timer.unref?.();
 
@@ -326,7 +326,7 @@ export function startImageBlobGc(options: ImageBlobGcScheduleOptions): ImageBlob
   // 但必须在第一趟真删之前把「将删 N / 共 M」报出来 —— 这是给人看的唯一一次机会。
   const firstPass = setTimeout(() => {
     if (stopped) return;
-    void runOnce(true).catch(() => undefined);
+    void runOnce(true).catch(() => undefined); // benign: 同上（force 趟）。
   }, 0);
   firstPass.unref?.();
 

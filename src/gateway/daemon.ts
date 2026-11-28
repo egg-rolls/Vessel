@@ -199,6 +199,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
         };
       }
       if (entry.state === 'stale') {
+        // benign: stale 状态清理尽力而为——残留由下次对账/retention 兜底。
         await cleanupGatewayStateEntry(options.dataDir, entry).catch(() => undefined);
       }
     }
@@ -220,6 +221,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   const execPath = options.execPath ?? process.execPath;
   const entryPath = options.entryPath ?? process.argv[1];
   if (!entryPath) {
+    // benign: 提前返回路径关闭日志句柄，失败不掩盖 spawn_failed 结果。
     await handle.close().catch(() => undefined);
     return {
       ok: false,
@@ -266,6 +268,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
       env: daemonEnv,
     });
   } catch (error) {
+    // benign: spawn 失败关闭日志句柄，失败不掩盖 spawn_failed 结果。
     await handle.close().catch(() => undefined);
     return {
       ok: false,
@@ -280,10 +283,12 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   while (Date.now() < deadline) {
     const record = await readGatewayPidRecord(options.dataDir, instance, stateKind);
     if (record && record.pid === child.pid && isProcessAlive(record.pid)) {
+      // benign: 确认启动后关闭日志句柄，失败不掩盖成功结果。
       await handle.close().catch(() => undefined);
       return { ok: true, record, logPath };
     }
     if (child.exitCode !== null) {
+      // benign: 子进程退出路径关闭日志句柄，失败不掩盖失败结果。
       await handle.close().catch(() => undefined);
       await rollbackSpawnedChildren(options.dataDir, instance, stateKind, spawnedSince);
       const tail = await tailLog(logPath);
@@ -303,6 +308,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   } catch {
     // 已经退出
   }
+  // benign: 超时路径关闭日志句柄，失败不掩盖对账结果。
   await handle.close().catch(() => undefined);
 
   // 超时后对账：PID 文件已出现且进程仍活 → 视为已启动但未确认，留给用户查看。

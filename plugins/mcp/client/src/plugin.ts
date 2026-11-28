@@ -204,7 +204,7 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     }
 
     const previous = entry.connection;
-    if (previous) await previous.close().catch(() => {});
+    if (previous) await previous.close().catch(() => {}); // benign: 旧连接关闭尽力而为。
 
     const connection = new McpServerConnection(entry.config, events, tenantId);
     entry.connection = connection;

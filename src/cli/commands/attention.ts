@@ -651,7 +651,7 @@ async function runConfiguredNode(
   } catch (error) {
     return rpcFailure(error);
   } finally {
-    await target?.close().catch(() => undefined);
+    await target?.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 }
 
@@ -683,7 +683,7 @@ async function listNodeOutcome(
   } catch (error) {
     return { node, ok: false, error: describeError(error) };
   } finally {
-    await target?.close().catch(() => undefined);
+    await target?.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 }
 
@@ -877,7 +877,7 @@ export async function attentionCommand(
             stderr: [offline.note, outcome.stderr].filter((line) => line !== '').join('\n'),
           };
         } finally {
-          await offline.target.close().catch(() => undefined);
+          await offline.target.close().catch(() => undefined); // benign: 探针客户端关闭。
         }
       }
       return { exitCode: 1, stdout: '', stderr: resolved.error };
@@ -888,7 +888,7 @@ export async function attentionCommand(
     } catch (error) {
       return rpcFailure(error);
     } finally {
-      await resolved.target.close().catch(() => undefined);
+      await resolved.target.close().catch(() => undefined); // benign: 探针客户端关闭。
     }
   } catch (error) {
     return rpcFailure(error);

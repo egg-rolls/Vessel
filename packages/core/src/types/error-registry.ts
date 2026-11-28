@@ -98,7 +98,7 @@ export interface ErrorCodeMeta {
   phase?: ErrorPhase;
   /** 领域码 → 冻结码的**唯一**映射口；冻结码登记自身；无映射 = 兜底 internal */
   rpcCode?: FrozenRpcCode;
-  /** i18n 修复指引键（§3.9，E3 期覆盖；本期只留字段） */
+  /** i18n 修复指引键（§3.9；q-error-e3 起每稳定码全覆盖，缺省按 `error.hint.<code>` 派生） */
   hintKey?: string;
   /** 引入批次（码稳定性审计用）；不可考的存量码标 'pre-E1' */
   since: string;
@@ -316,9 +316,16 @@ const ENTRIES: Readonly<Record<string, Omit<ErrorCodeMeta, 'code'>>> = {
   checkpoint_failed: meta('run', 'internal', true, { phase: 'checkpoint', since: 'pre-E1' }),
 };
 
-/** 单一 code 注册表（键 = 稳定码；只读） */
+/** 单一 code 注册表（键 = 稳定码；只读）。
+ * q-error-e3（§3.9）：hintKey 每稳定码全覆盖——未显式登记的按 `error.hint.<code>`
+ * 派生（与 E2 node_drain_* 六码显式键逐字同约定）；四段 i18n 全文在 CLI/web 目录。 */
 export const ERROR_REGISTRY: Readonly<Record<string, ErrorCodeMeta>> = Object.freeze(
-  Object.fromEntries(Object.entries(ENTRIES).map(([code, m]) => [code, { code, ...m }])),
+  Object.fromEntries(
+    Object.entries(ENTRIES).map(([code, m]) => [
+      code,
+      { code, ...m, hintKey: m.hintKey ?? `error.hint.${code}` },
+    ]),
+  ),
 );
 
 /** 查表（纯函数）；未注册返回 undefined，调用方兜底必须标 classified_by:'registry-miss'。 */

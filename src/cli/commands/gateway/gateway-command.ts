@@ -564,7 +564,7 @@ async function localNodeStatusViews(
   env: Record<string, string | undefined>,
   gatewayDataDir: string,
 ): Promise<LocalNodeStatusView[]> {
-  const load = await loadNodeRegistry(gatewayDataDir).catch(() => null);
+  const load = await loadNodeRegistry(gatewayDataDir).catch(() => null); // benign: registry 探针——读不出按无注册。
   if (load === null) return [];
   const entries: NodeRegistryEntry[] =
     load.kind === 'ready'
@@ -679,7 +679,7 @@ async function liveNodeSurvivors(options: {
   }
   const survivors: LiveNodeSurvivor[] = [];
   for (const entry of entries) {
-    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null);
+    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
     if (record === null || !isProcessAlive(record.pid)) continue;
     if (
       entry.node_id !== undefined &&
@@ -709,7 +709,7 @@ async function adoptNodeTarget(
   if (target.record === undefined || !(await isPlatformRecord(target.record))) return target;
   const listen = nodeListenFromConfig(config);
   const token = resolveGatewayToken(config, process.env) ?? '';
-  await target.close().catch(() => undefined);
+  await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   const client = createHttpRpcClient({
     baseUrl: listen.url,
     token,
@@ -919,7 +919,7 @@ export async function prepareForegroundGatewayStart(
   }
   if (entry !== undefined && entry.state === 'stale') {
     // 只有确认 stale 才条件清理；文件被别人改过则不动。
-    await cleanupGatewayStateEntry(dataDir, entry).catch(() => undefined);
+    await cleanupGatewayStateEntry(dataDir, entry).catch(() => undefined); // benign: stale 清理尽力而为——残留由对账兜底。
   }
 
   const duplicate = duplicateExplicitNodeId(snapshot.entries, instance, config);
@@ -1225,10 +1225,13 @@ export async function stopGateway(
       // （`supervisor.stop({ keep: true })`）。非 handoff 停止先清掉残留 marker，
       // 避免一次陈旧 marker 把「真停」变成假停。
       if (stateKind === 'platform') {
+        // q-error-e3 批15（A，lead 裁定②③）：marker 写/清失败不再吞错——进外层
+        // stopFailed 错误路径（fail-loud）：写失败仍发终止信号=keep-nodes 静默降级真停；
+        // 清失败残留陈旧 marker 会把下次真停变假停。生命周期完整性优先。
         if (keepForHandoff) {
-          await writeHandoffMarker(context.dataDir, entry.instance, pid).catch(() => undefined);
+          await writeHandoffMarker(context.dataDir, entry.instance, pid);
         } else {
-          await clearHandoffMarker(context.dataDir, entry.instance).catch(() => undefined);
+          await clearHandoffMarker(context.dataDir, entry.instance);
         }
       }
       // 用户裁定 #5：force = 显式非正常退出 —— 快照 + 强杀 + 审计，跳过优雅等待。
@@ -1471,7 +1474,7 @@ export async function stopGateway(
     // 0.60：这个平台上如果正在重建 Web 产物，它现在也没了宿主（Windows 上宿主连
     // 一句话都来不及说）—— 由**停止方**代打一行 `web.build.interrupted`，并顺手把
     // 构建树杀掉，不留孤儿。宿主自己说过的（记录已是终态）这里一句都不说。
-    const interruptedBuild = await interruptBuildOfStoppedHost(pid, 'stop').catch(() => undefined);
+    const interruptedBuild = await interruptBuildOfStoppedHost(pid, 'stop').catch(() => undefined); // benign: 构建中断尽力而为——残留构建由产物校验兜底。
     if (interruptedBuild !== undefined) {
       printErr(
         ui.warn(
@@ -1545,7 +1548,7 @@ async function reportChildLifecycle(options: {
     );
   }
 
-  const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined);
+  const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册。
   // 隐式单节点（无 nodes.json）与平台共用 dataDir，但也可能被独立拉起 —— 同样要交代。
   const entries =
     registry?.kind === 'ready'
@@ -1553,7 +1556,7 @@ async function reportChildLifecycle(options: {
       : [{ name: 'default', data_dir: context.dataDir, auto_start: true, config_path: undefined }];
   let running = 0;
   for (const entry of entries) {
-    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null);
+    const record = await readGatewayPidRecord(entry.data_dir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
     const alive = record !== null && isProcessAlive(record.pid);
     if (alive && record !== null) {
       running += 1;
@@ -1583,7 +1586,7 @@ async function reportChildLifecycle(options: {
     context.config.hub?.dataDir !== undefined
       ? path.resolve(expandHome(context.config.hub.dataDir))
       : path.join(context.dataDir, 'hub');
-  const hub = await readHubLockFile(hubDataDir).catch(() => null);
+  const hub = await readHubLockFile(hubDataDir).catch(() => null); // benign: hub 锁探针——读不出按无 hub。
   const hubAlive = hub !== null && isProcessAlive(hub.pid);
   if (hubAlive && hub !== null) {
     running += 1;
@@ -1849,7 +1852,7 @@ async function printSuperviseState(
   instance: string,
   print: (line: string) => void,
 ): Promise<void> {
-  const snapshot = await readWatchdogSnapshot(dataDir, instance).catch(() => null);
+  const snapshot = await readWatchdogSnapshot(dataDir, instance).catch(() => null); // benign: 看门狗快照探针——读不出按无快照。
   if (snapshot === null) return;
   print(ui.kv(t('gateway.status.supervise'), superviseLine(snapshot.config), 12));
   for (const node of snapshot.nodes) {
@@ -2212,7 +2215,7 @@ async function gatewayStatusRpc(
     try {
       views.push(await collectRpcView(target, target.instance ?? 'default'));
     } finally {
-      await target.close().catch(() => undefined);
+      await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
     }
   } else {
     for (const instance of instances) {
@@ -2230,7 +2233,7 @@ async function gatewayStatusRpc(
       try {
         views.push(await collectRpcView(target, instance));
       } finally {
-        await target.close().catch(() => undefined);
+        await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
       }
     }
   }
@@ -2834,7 +2837,7 @@ async function preparePlatformStart(options: {
     };
   }
   if (entry !== undefined && entry.state === 'stale') {
-    await cleanupGatewayStateEntry(options.dataDir, entry).catch(() => undefined);
+    await cleanupGatewayStateEntry(options.dataDir, entry).catch(() => undefined); // benign: stale 清理尽力而为——残留由对账兜底。
   }
   // CONTRACT §4.6（FROZEN r4）：同实例重复启动仍由
   // `platform-<instance>.lock` 拦截；不同实例各有 PID/锁，不新增全局拒绝。
@@ -3582,7 +3585,7 @@ export async function runPlatformGatewayForeground(
         const result = await runShutdownStep(
           platformShutdownEmit,
           'platform.supervisor.stop',
-          async () => await supervisor?.stop({ keep: true }).catch(() => undefined),
+          async () => await supervisor?.stop({ keep: true }).catch(() => undefined), // benign: 关停链各步隔离——失败已逐条报告，不阻断其余步骤。
         );
         if (result !== undefined) {
           print(ui.info(t('gateway.stopKeptNodes', { count: result.kept?.nodes ?? 0 })));
@@ -3597,19 +3600,19 @@ export async function runPlatformGatewayForeground(
         await runShutdownStep(
           platformShutdownEmit,
           'platform.supervisor.stop',
-          async () => await supervisor?.stop().catch(() => undefined),
+          async () => await supervisor?.stop().catch(() => undefined), // benign: 关停链各步隔离。
         );
         // 池 S20：非 handoff 停止 terminate owned（adopt/external 永不杀，S7）；node 先停再停 engine。
         await runShutdownStep(
           platformShutdownEmit,
           'platform.pool.stop',
-          async () => await poolSupervisor?.stop().catch(() => undefined),
+          async () => await poolSupervisor?.stop().catch(() => undefined), // benign: 关停链各步隔离。
         );
       }
       await runShutdownStep(
         platformShutdownEmit,
         'platform.gateway.stop',
-        async () => await platformGateway?.stop().catch(() => undefined),
+        async () => await platformGateway?.stop().catch(() => undefined), // benign: 关停链各步隔离。
       );
       platformGateway = undefined;
     };
@@ -3676,11 +3679,11 @@ export async function runPlatformGatewayForeground(
         // 锁必须显式释放；pid 经既有 process.once('exit') 条件清理（writeForegroundGatewayPid）。
         shutdown: {
           handle: async () => {
-            await performPlatformShutdown().catch(() => undefined);
+            await performPlatformShutdown().catch(() => undefined); // benign: 关停链各步隔离（强杀兜底）。
             await runShutdownStep(
               platformShutdownEmit,
               'platform.lock.release',
-              async () => await lock.release().catch(() => undefined),
+              async () => await lock.release().catch(() => undefined), // benign: 锁释放尽力而为——残留由 stale TTL 兜底。
             );
             process.exit(0);
           },
@@ -3735,8 +3738,8 @@ export async function runPlatformGatewayForeground(
             errorMessage(error),
         ),
       );
-      await supervisor.stop().catch(() => undefined);
-      await platformGateway?.stop().catch(() => undefined);
+      await supervisor.stop().catch(() => undefined); // benign: 关停链各步隔离。
+      await platformGateway?.stop().catch(() => undefined); // benign: 关停链各步隔离。
       platformGateway = undefined;
       return 1;
     }
@@ -3773,7 +3776,7 @@ export async function runPlatformGatewayForeground(
           );
         }
       })
-      .catch(() => undefined);
+      .catch(() => undefined); // benign: 节点启动失败原因已逐条打过；此处防未处理拒绝。
     // 0.52 handoff 可见性：`adopted` / `external` = 本平台没有 spawn 它，是 adopt 来的
     // （`gateway restart` 保活的 node 走 `adopted`；手工/外部启动的走 `external`）。
     // 不新增字段，复用 supervisor 既有状态机。
@@ -3844,11 +3847,11 @@ export async function runPlatformGatewayForeground(
   } finally {
     // 失败路径也必须释放平台实例锁；PID 只在全部就绪后写入。
     // handoff 命中后这里也绝不能回滚子进程（否则前面的 keep 白做）。
-    await supervisor?.stop(handoffKept ? { keep: true } : undefined).catch(() => undefined);
+    await supervisor?.stop(handoffKept ? { keep: true } : undefined).catch(() => undefined); // benign: 关停链各步隔离。
     // 池 S20：失败路径同口径 terminate owned；handoff 命中绝不杀（stop 幂等，成功路径已停过）。
-    if (!handoffKept) await poolSupervisor?.stop().catch(() => undefined);
-    await platformGateway?.stop().catch(() => undefined);
-    await lock.release().catch(() => undefined);
+    if (!handoffKept) await poolSupervisor?.stop().catch(() => undefined); // benign: 关停链各步隔离。
+    await platformGateway?.stop().catch(() => undefined); // benign: 关停链各步隔离。
+    await lock.release().catch(() => undefined); // benign: 锁释放尽力而为——stale TTL 兜底。
   }
 }
 

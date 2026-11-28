@@ -175,7 +175,7 @@ async function stopLocalFleet(input: {
       children.push({ instance: instance ?? DEFAULT_GATEWAY_INSTANCE, child });
     }
   }
-  const registry = await loadNodeRegistry(dataDir).catch(() => undefined);
+  const registry = await loadNodeRegistry(dataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册。
   const poolDir = poolDirFor(config);
   const poolFiles = await listPoolEngineFiles(poolDir);
 
@@ -421,7 +421,7 @@ async function stopRemoteFleet(input: {
     printErr(ui.err(t('stop.remote.timeout', { timeout: input.timeoutMs })));
     return 1;
   } finally {
-    await client.close().catch(() => undefined);
+    await client.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 }
 

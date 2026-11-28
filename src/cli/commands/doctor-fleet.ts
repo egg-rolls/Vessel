@@ -346,10 +346,10 @@ function peersCheck(input: FleetChecksInput): FleetCheck | undefined {
  */
 async function nodeHealthCheck(input: FleetChecksInput): Promise<FleetCheck> {
   const { config, dataDir } = input;
-  let record = await readGatewayPidRecord(dataDir).catch(() => null);
+  let record = await readGatewayPidRecord(dataDir).catch(() => null); // benign: pid record 探针——读不出按无记录。
   let family = 'node';
   if (record === null) {
-    record = await readGatewayPidRecord(dataDir, undefined, 'platform').catch(() => null);
+    record = await readGatewayPidRecord(dataDir, undefined, 'platform').catch(() => null); // benign: 同上。
     family = 'platform';
   }
   if (record === null) {

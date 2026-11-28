@@ -36,6 +36,10 @@ const METADATA_KEYS = [
   'iteration',
   'message_count',
   'finish_reason',
+  // q-error-e3（§3.10）：错误关联键 additive——只收 envelope 的 error_id/error_code，
+  // 不纳入 stack/details 全文（体积纪律；stack 仅 trace/日志脱敏后全文档可见）。
+  'error_id',
+  'error_code',
 ] as const;
 /**
  * `metadata` 档的 usage 白名单。
@@ -262,6 +266,7 @@ export class FileTraceRecorder implements TraceRecorder {
     if (event.type.startsWith('trace.') || event.type.startsWith('replay.')) return;
     this.append(event);
     if (this.flushOnTerminal && TERMINAL_EVENTS.has(event.type)) {
+      // benign:  fire-and-forget 防未处理拒绝；写失败已在 flush 内 emitWriteFailure 可见。
       void this.flush(event.run_id).catch(() => {});
     }
   }

@@ -174,7 +174,7 @@ export function TeamMessageRow({
   const copyFederationAddress = () => {
     if (!federationFrom) return;
     try {
-      void navigator.clipboard?.writeText(federationFrom).catch(() => undefined);
+      void navigator.clipboard?.writeText(federationFrom).catch(() => undefined); // benign: 剪贴板尽力而为（邻注：仍给出回复指引）。
     } catch {
       // clipboard 不可用（非安全上下文 / 权限拒绝）：仍给出回复指引。
     }

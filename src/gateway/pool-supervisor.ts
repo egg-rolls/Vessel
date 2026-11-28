@@ -460,7 +460,7 @@ export async function sweepDisabledPool(options: PoolSweepOptions): Promise<Pool
   const stateNames = entries.filter((name) => name.endsWith('.json'));
   if (stateNames.length === 0) {
     // 无 engine 状态：清遗留 routing（池已禁用，routing 不应再发布任何 engine）。
-    await unlink(routingPath).catch(() => undefined);
+    await unlink(routingPath).catch(() => undefined); // benign: routing 文件清理尽力而为——残留由下次对账兜底。
     return result;
   }
   const manifest = await readRoutingIds(routingPath);
@@ -474,7 +474,7 @@ export async function sweepDisabledPool(options: PoolSweepOptions): Promise<Pool
         return;
       }
       if (!isProcessAlive(state.pid) || isBeforeBoot(state.started_at)) {
-        await unlink(path.join(enginesDir, name)).catch(() => undefined);
+        await unlink(path.join(enginesDir, name)).catch(() => undefined); // benign: engine 残留清理尽力而为。
         result.cleared += 1;
         logger.info('pool sweep: engine state cleared (pid dead)', { id, pid: state.pid });
         return;
@@ -490,7 +490,7 @@ export async function sweepDisabledPool(options: PoolSweepOptions): Promise<Pool
       // owned（本 gateway 谱系上一纪元）→ terminate（terminateMember 同口径）。
       const dead = await terminateSweptEngine(enginesDir, state, runCommand, now, logger);
       if (dead) {
-        await unlink(path.join(enginesDir, name)).catch(() => undefined);
+        await unlink(path.join(enginesDir, name)).catch(() => undefined); // benign: engine 残留清理尽力而为。
         result.terminated += 1;
         logger.info('pool sweep: owned engine terminated (pool disabled)', { id, pid: state.pid });
       } else {
@@ -504,7 +504,7 @@ export async function sweepDisabledPool(options: PoolSweepOptions): Promise<Pool
   // 无 engine 状态残留 → 清遗留 routing；有 external 残留 → 留置（保守）。
   const remaining = await readdir(enginesDir).catch(() => [] as string[]);
   if (!remaining.some((name) => name.endsWith('.json'))) {
-    await unlink(routingPath).catch(() => undefined);
+    await unlink(routingPath).catch(() => undefined); // benign: routing 文件清理尽力而为——残留由下次对账兜底。
   }
   return result;
 }
@@ -538,7 +538,7 @@ async function terminateSweptEngine(
   let link: ControlLink | undefined;
   try {
     link = await dialControl(state.port, state.control_token, AUTH_TIMEOUT_MS);
-    await link.request('plugin.deactivate', {}, DEACTIVATE_TIMEOUT_MS).catch(() => undefined);
+    await link.request('plugin.deactivate', {}, DEACTIVATE_TIMEOUT_MS).catch(() => undefined); // benign: deactivate 尽力而为——控制不可达走宽限/强杀（邻注）。
   } catch {
     // 控制不可达 → 直接走宽限 / 强杀（engine 可能已在自死）。
   }
@@ -587,7 +587,7 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
 
   /** pid 死 / 归属终止后清状态文件（S7）；形状不过的文件不删（保守）。 */
   async function unlinkStateFile(id: string): Promise<void> {
-    await unlink(path.join(enginesDir, `${id}.json`)).catch(() => undefined);
+    await unlink(path.join(enginesDir, `${id}.json`)).catch(() => undefined); // benign: engine 记录清理尽力而为。
   }
 
   /** 上一纪元 routing = 监督 manifest（见模块 doc）；读失败 → 空集合（全 external，保守）。 */
@@ -846,12 +846,12 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
         env: buildEngineEnv(id),
       });
     } catch (error) {
-      await handle.close().catch(() => undefined);
+      await handle.close().catch(() => undefined); // benign: 句柄清理，失败不掩盖结果。
       logger.error('pool engine spawn failed', { id, message: errorMessage(error) });
       scheduleRespawn(member);
       return;
     }
-    await handle.close().catch(() => undefined);
+    await handle.close().catch(() => undefined); // benign: 句柄清理，失败不掩盖结果。
     child.unref?.();
     member.pid = child.pid;
     member.spawn = child;
@@ -962,7 +962,7 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
       if (member.link === undefined || member.link.closed) {
         member.link = await dialControl(member.port, member.controlToken, AUTH_TIMEOUT_MS, () =>
           onLinkClosed(member),
-        ).catch(() => undefined);
+        ).catch(() => undefined); // benign: dial 探针——不可达按 undefined → markDraining('control_unreachable')（状态可见）。
       }
       const link = member.link;
       if (link === undefined || link.closed) {
@@ -1096,7 +1096,7 @@ export function createPoolSupervisor(options: PoolSupervisorOptions): PoolSuperv
     }
     const link = member.link;
     if (link !== undefined && !link.closed) {
-      await link.request('plugin.deactivate', {}, DEACTIVATE_TIMEOUT_MS).catch(() => undefined);
+      await link.request('plugin.deactivate', {}, DEACTIVATE_TIMEOUT_MS).catch(() => undefined); // benign: deactivate 尽力而为——控制不可达走宽限/强杀（邻注）。
     }
     if (await waitUntilDead(member.pid, STOP_GRACE_MS, now)) {
       await unlinkStateFile(member.id);

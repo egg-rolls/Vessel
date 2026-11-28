@@ -70,14 +70,15 @@ export async function loadStartupFacts(ctx: ReplContext): Promise<StartupFacts> 
   const feishu = ctx.feishu;
 
   const [mcpServers, interruptedRuns, feishuStatus] = await Promise.all([
+    // benign: 启动提示探针——任一失败按「无该项」（函数 doc），不阻断 REPL 启动。
     ctx.mcp ? ctx.mcp.list().catch(() => null) : Promise.resolve(null),
     ctx.runs
-      ? ctx.runs.list({ status: 'interrupted', limit: 20 }).catch(() => null)
+      ? ctx.runs.list({ status: 'interrupted', limit: 20 }).catch(() => null) // benign: 同上。
       : Promise.resolve(null),
     feishu
       ? Promise.resolve()
           .then(() => feishu.status())
-          .catch(() => null)
+          .catch(() => null) // benign: 同上。
       : Promise.resolve(null),
   ]);
 

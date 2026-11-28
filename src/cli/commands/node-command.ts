@@ -292,7 +292,7 @@ async function resolveStopCredentialForTarget(context: ResolvedNodeContext): Pro
   let configOwnDataDir = resolveDataDir(context.config, env);
   if (cliDataDir !== undefined) {
     const envOwn = { ...env, VESSEL_DATA_DIR: undefined, [DATA_DIR_CLI_MARKER_ENV]: undefined };
-    const ownLoaded = await loadConfig({ env: envOwn }).catch(() => undefined);
+    const ownLoaded = await loadConfig({ env: envOwn }).catch(() => undefined); // benign: 配置探针——读不出回落当前配置解析。
     configOwnDataDir =
       ownLoaded !== undefined
         ? resolveDataDir(ownLoaded.config, envOwn)
@@ -372,7 +372,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
 
   if (record === undefined || !isProcessAlive(record.pid)) {
     if (entry !== undefined && entry.state === 'stale') {
-      await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
+      await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined); // benign: stale 清理尽力而为——残留由对账兜底。
     }
     printErr(ui.err(t('node.notRunning')));
     return 1;
@@ -471,7 +471,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     });
     if (wait.dead) {
       if (entry !== undefined) {
-        await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
+        await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined); // benign: stale 清理尽力而为——残留由对账兜底。
       }
       print(ui.ok(t('node.stopped', { pid: record.pid })));
       return 0;
@@ -598,7 +598,7 @@ async function confirmNodeStopped(
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) {
       if (entry !== undefined) {
-        await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined);
+        await cleanupGatewayStateEntry(context.dataDir, entry).catch(() => undefined); // benign: stale 清理尽力而为——残留由对账兜底。
       }
       print(ui.ok(t('node.stopped', { pid })));
       return 0;
@@ -628,7 +628,7 @@ export async function nodeRestartCommand(
   // 名称解析（node name / dataDir 别名）：给 name → 本舰队 registry 找该 node 的 dataDir。
   if (name !== undefined && name.trim() !== '') {
     const trimmed = name.trim();
-    const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined);
+    const registry = await loadNodeRegistry(context.dataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册。
     const node =
       registry?.kind === 'ready'
         ? registry.registry.nodes.find((item) => item.name === trimmed)

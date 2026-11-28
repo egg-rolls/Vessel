@@ -773,11 +773,11 @@ async function readHeadsOnDisk(sessionDir: string): Promise<TimelineHeads | unde
   const manifest = await readCrcNdjsonFile<ManifestLineLike>(
     join(sessionDir, TIMELINE_LAYOUT.timelineManifest),
     validateManifestLine,
-  ).catch(() => undefined);
+  ).catch(() => undefined); // benign: manifest 读探针——读不出回落整份扫描（派生目录）。
 
   let walHead = 0;
   let hasTimeline = false;
-  const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined);
+  const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined); // benign: 索引探针——读不出回落整份读（保守）。
   if (snapshot !== undefined) {
     walHead = snapshot.session.last_seq;
     hasTimeline = true;
@@ -1969,7 +1969,7 @@ export function createTimelineRunEventsPort(options: {
     }
     for (const name of names) {
       const sessionDir = join(options.sessionsDir, name);
-      const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined);
+      const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined); // benign: 索引探针——读不出回落整份读（保守）。
       if (snapshot === undefined) continue;
       scanned += 1;
       // 目录名是 `encodeURIComponent(session_id)`；解码失败就跳过（不是本模块该修的数据）。
@@ -1987,7 +1987,7 @@ export function createTimelineRunEventsPort(options: {
   }
 
   async function resolveRunSession(runId: string): Promise<string | undefined> {
-    const fast = await options.resolveSession?.(runId).catch(() => undefined);
+    const fast = await options.resolveSession?.(runId).catch(() => undefined); // benign: 快路径探针——失败回落索引（下方 buildIndex）。
     if (fast !== undefined) return fast;
     if (index === undefined) index = await buildIndex();
     const hit = index.runs.get(runId);
@@ -2065,7 +2065,7 @@ export function createTimelineRunEventsPort(options: {
    */
   async function readRunEvents(sessionId: string, runId: string): Promise<TimelineRunEvent[]> {
     const sessionDir = sessionDirOf(options.sessionsDir, sessionId);
-    const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined);
+    const snapshot = await loadIndexSnapshot(sessionDir).catch(() => undefined); // benign: 索引探针——读不出回落整份读（保守）。
     const ranges: SeqRange[] | undefined = snapshot?.runs.get(runId);
     if (ranges !== undefined && ranges.length > 0) {
       try {

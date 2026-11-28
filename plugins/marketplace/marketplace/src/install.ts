@@ -726,7 +726,7 @@ async function installLocked(
     try {
       await moveDir(staging, target.dir);
     } catch (error) {
-      if (backup !== undefined) await rename(backup, target.dir).catch(() => {});
+      if (backup !== undefined) await rename(backup, target.dir).catch(() => {}); // benign: 错误路径恢复备份尽力而为——原始错误重抛（install_failed/config_write_failed/remove_failed 可见）。
       throw new MarketplaceError(
         'install_failed',
         `could not place the plugin directory (${errorCodeOf(error) ?? messageOf(error)})`,
@@ -746,8 +746,8 @@ async function installLocked(
         defaultNames: await defaultNamesFor(context),
       });
     } catch (error) {
-      await rm(target.dir, { recursive: true, force: true }).catch(() => {});
-      if (backup !== undefined) await rename(backup, target.dir).catch(() => {});
+      await rm(target.dir, { recursive: true, force: true }).catch(() => {}); // benign: 错误路径清理尽力而为——原始错误重抛。
+      if (backup !== undefined) await rename(backup, target.dir).catch(() => {}); // benign: 错误路径恢复备份尽力而为——原始错误重抛（install_failed/config_write_failed/remove_failed 可见）。
       throw error instanceof MarketplaceError
         ? error
         : new MarketplaceError('config_write_failed', messageOf(error));
@@ -770,7 +770,7 @@ async function installLocked(
       warnings: allWarnings,
     };
   } finally {
-    await rm(temporaryDir, { recursive: true, force: true }).catch(() => {});
+    await rm(temporaryDir, { recursive: true, force: true }).catch(() => {}); // benign: 临时目录清理尽力而为。
   }
 }
 
@@ -811,7 +811,7 @@ export async function removePlugin(context: InstallContext, id: string): Promise
     try {
       config = await removePluginConfig(context.configPath, id);
     } catch (error) {
-      await rename(backup, target.dir).catch(() => {});
+      await rename(backup, target.dir).catch(() => {}); // benign: 错误路径恢复备份尽力而为——原始错误重抛（install_failed/config_write_failed/remove_failed 可见）。
       throw error instanceof MarketplaceError
         ? error
         : new MarketplaceError('remove_failed', messageOf(error));
@@ -820,12 +820,12 @@ export async function removePlugin(context: InstallContext, id: string): Promise
     try {
       await rm(backup, { recursive: true, force: true });
     } catch (error) {
-      await rename(backup, target.dir).catch(() => {});
+      await rename(backup, target.dir).catch(() => {}); // benign: 错误路径恢复备份尽力而为——原始错误重抛（install_failed/config_write_failed/remove_failed 可见）。
       await upsertPluginConfig({
         configPath: context.configPath,
         name: id,
         defaultNames: context.defaultPluginNames,
-      }).catch(() => {});
+      }).catch(() => {}); // benign: 错误路径恢复配置尽力而为——remove_failed 重抛可见。
       throw new MarketplaceError(
         'remove_failed',
         `could not delete the plugin directory (${errorCodeOf(error) ?? messageOf(error)})`,

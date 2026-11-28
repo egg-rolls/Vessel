@@ -25,6 +25,8 @@ export interface ReadTraceOptions {
   types?: string[];
   /** 前缀匹配；与 types 互斥 */
   type_prefix?: string;
+  /** 精确匹配 envelope `data.error_id`（q-error-e3 additive，E2 决策 H 候补） */
+  error_id?: string;
   /** 默认 50，最大 500 */
   limit?: number;
 }
@@ -115,7 +117,8 @@ export async function readRunTrace(traceDir: string, runId: string): Promise<Run
  * - 损坏行跳过；
  * - `since_seq` 只对带 seq 的事件生效；
  * - 结果按 `(seq ?? ts)` 升序，`limit` 默认 50 / 最大 500；
- * - `types` 与 `type_prefix` 同时给出 → 抛 `invalid_params`。
+ * - `types` 与 `type_prefix` 同时给出 → 抛 `invalid_params`；
+ * - `error_id` 精确匹配 envelope `data.error_id`（q-error-e3 additive）。
  */
 export async function readTraceEvents(
   traceDir: string,
@@ -142,6 +145,14 @@ export async function readTraceEvents(
       if (options.types !== undefined && !options.types.includes(event.type)) continue;
       if (options.type_prefix !== undefined && !event.type.startsWith(options.type_prefix)) {
         continue;
+      }
+      if (options.error_id !== undefined) {
+        const data = event.data;
+        const eventErrorId =
+          typeof data === 'object' && data !== null && !Array.isArray(data)
+            ? (data as Record<string, unknown>).error_id
+            : undefined;
+        if (eventErrorId !== options.error_id) continue;
       }
       matched.push(event);
     }

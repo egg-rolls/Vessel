@@ -25,6 +25,10 @@ export interface MetricsSnapshot {
   };
   duration_ms: { total: number; max: number; avg: number };
   updated_at: number;
+  /** errors_total{code,category}（q-error-e3 §3.10 additive）；缺省 = 无带稳定码的错误事件 */
+  errors?: Array<{ code: string; category: string; count: number }>;
+  /** degradations_total{component}（q-error-e3 §3.10 additive）；缺省 = 无降级事件 */
+  degradations?: Array<{ component: string; count: number }>;
 }
 
 /** gateway 注入面；缺省 = metrics 端点关闭 */
@@ -60,6 +64,33 @@ function toOptionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+/**
+ * q-error-e3：errors/degradations 计数数组归一化——非法条目丢弃，
+ * 空/缺失 → undefined（wire 省略，缺省快照逐字节不变）。
+ */
+function toErrorCounts(value: unknown): MetricsSnapshot['errors'] {
+  if (!Array.isArray(value)) return undefined;
+  const out: NonNullable<MetricsSnapshot['errors']> = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.code !== 'string' || entry.code.length === 0) continue;
+    if (typeof entry.category !== 'string') continue;
+    out.push({ code: entry.code, category: entry.category, count: toCount(entry.count) });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function toDegradationCounts(value: unknown): MetricsSnapshot['degradations'] {
+  if (!Array.isArray(value)) return undefined;
+  const out: NonNullable<MetricsSnapshot['degradations']> = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    if (typeof entry.component !== 'string' || entry.component.length === 0) continue;
+    out.push({ component: entry.component, count: toCount(entry.count) });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /** 归一化 provider 返回值：缺字段按 0，非法条目丢弃，绝不抛给调用方。 */
 export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
   const root = isRecord(input) ? input : {};
@@ -70,6 +101,8 @@ export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
   const cacheRead = toOptionalCount(llm.cache_read_tokens);
   const cacheCreation = toOptionalCount(llm.cache_creation_tokens);
   const totalCost = toOptionalNumber(llm.total_cost);
+  const errors = toErrorCounts(root.errors);
+  const degradations = toDegradationCounts(root.degradations);
   return {
     runs: {
       started: toCount(runs.started),
@@ -97,5 +130,8 @@ export function normalizeMetricsSnapshot(input: unknown): MetricsSnapshot {
       avg: toNumber(duration.avg),
     },
     updated_at: toCount(root.updated_at),
+    // q-error-e3：缺省即省略（无错误/降级事件时 wire 形状逐字节不变）。
+    ...(errors !== undefined ? { errors } : {}),
+    ...(degradations !== undefined ? { degradations } : {}),
   };
 }

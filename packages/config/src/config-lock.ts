@@ -151,10 +151,12 @@ async function reclaimStale(lockPath: string, staleMs: number): Promise<boolean>
   try {
     await handle.writeFile(JSON.stringify(guard), 'utf8');
   } catch (error) {
+    // benign: 错误路径关闭/清理 guard，失败不掩盖原始错误（重抛）。
     await handle.close().catch(() => {});
     await unlink(guardPath).catch(() => {});
     throw error;
   }
+  // benign: guard 写完关闭句柄，失败不掩盖已写入结果。
   await handle.close().catch(() => {});
 
   try {
@@ -183,6 +185,7 @@ async function releaseGuard(guardPath: string, token: string): Promise<void> {
     return;
   }
   if (info === undefined || info.token !== token) return;
+  // benign: 释放 guard 尽力而为——残留由 stale 判定兜底。
   await unlink(guardPath).catch(() => {});
 }
 
@@ -246,6 +249,7 @@ async function acquireLock(
     try {
       await handle.writeFile(body, 'utf8');
     } catch (error) {
+      // benign: 错误路径关闭句柄，失败不掩盖原始错误（重抛）。
       await handle.close().catch(() => {});
       // 写入失败不能留下一个空的“已持有”锁。
       await unlink(lockPath).catch(() => {});

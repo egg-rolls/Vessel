@@ -185,6 +185,45 @@ export function changedConfigKeys(current: VesselConfig, next: VesselConfig): st
 }
 
 /**
+ * q-error-e3（§3.8，D8）：inert 域 = 变化但**既无热 applier 又不在 RESTART_FIELDS**
+ * 的顶层块（如 observability/ui/limits）。行为修复（补进 restart 清单或加热 applier）
+ * 归 hardening；本期只报告。node 块按残差比较（tls/token/port/allowedOrigins 已有归属）。
+ */
+const COVERED_TOP_BLOCKS = new Set([
+  'provider',
+  'models',
+  'federation',
+  'kanban',
+  'autoPrune',
+  'agent',
+]);
+
+function nodeResidual(config: VesselConfig): unknown {
+  const node = config.node;
+  if (node === undefined) return undefined;
+  const { tls, token, tokenEnv, tokens, port, allowedOrigins, ...rest } = node;
+  return rest;
+}
+
+export function diffInertFields(current: VesselConfig, next: VesselConfig): string[] {
+  const left = current as unknown as Record<string, unknown>;
+  const right = next as unknown as Record<string, unknown>;
+  const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
+  const inert: string[] = [];
+  for (const key of keys) {
+    if (COVERED_TOP_BLOCKS.has(key)) continue;
+    if (key === 'node') {
+      if (stableValue(nodeResidual(current)) !== stableValue(nodeResidual(next))) {
+        inert.push('node.*');
+      }
+      continue;
+    }
+    if (stableValue(left[key]) !== stableValue(right[key])) inert.push(key);
+  }
+  return inert;
+}
+
+/**
  * 判断 allowed_origins 是否变化。CORS 列表与顺序无关；缺省与空数组等价。
  */
 export function allowedOriginsChanged(current: VesselConfig, next: VesselConfig): boolean {
@@ -246,6 +285,11 @@ export function createGatewayReloadRunner(
     const reloaded: string[] = [];
     const requiresRestart: string[] = [];
     const summaries: Record<string, string[]> = {};
+    // q-error-e3（D8）：三域报告收集器；有字段变化即随响应附 field_report（lead 裁定）。
+    const appliedReport: Array<{ field: string; reason: string }> = [];
+    const restartReport: Array<{ field: string; reason: string }> = [];
+    const inertReport: Array<{ field: string; reason: string }> = [];
+    let sawFieldChange = false;
 
     for (const scope of requested) {
       // 未知 scope 是请求错误，不是执行失败：在隔离之外显式抛出（契约 §1：不静默忽略）。
@@ -260,6 +304,10 @@ export function createGatewayReloadRunner(
           options.refreshPlugins();
           reloaded.push('plugins');
           summaries.plugins = [];
+          appliedReport.push({
+            field: 'plugins',
+            reason: 'plugin scan cache invalidated; installed plugins and active runs untouched',
+          });
           continue;
         }
 
@@ -293,6 +341,16 @@ export function createGatewayReloadRunner(
             if (modelTo !== undefined && options.applyProviderModel !== undefined) {
               const lines = await options.applyProviderModel(modelFrom, modelTo, next);
               if (Array.isArray(lines)) modelLines.push(...lines);
+              appliedReport.push({
+                field:
+                  providerChanged && modelsChanged
+                    ? 'provider+models'
+                    : providerChanged
+                      ? 'provider'
+                      : 'models',
+                reason:
+                  'hot-applied: node default model rebuilt; live bodies keep construction snapshot until next body',
+              });
             } else {
               if (providerChanged) restartFields.push('provider');
               if (modelsChanged) restartFields.push('models');
@@ -307,6 +365,10 @@ export function createGatewayReloadRunner(
             if (options.applyFederation !== undefined) {
               const lines = await options.applyFederation(next);
               if (Array.isArray(lines)) federationLines.push(...lines);
+              appliedReport.push({
+                field: 'federation',
+                reason: 'hot-applied: inbound/outbound peers updated in place',
+              });
             } else {
               restartFields.push('federation');
             }
@@ -319,6 +381,10 @@ export function createGatewayReloadRunner(
             if (options.applyKanban !== undefined) {
               const lines = await options.applyKanban(next);
               if (Array.isArray(lines)) kanbanLines.push(...lines);
+              appliedReport.push({
+                field: 'kanban',
+                reason: 'hot-applied: boardPath re-resolved into kanban deps',
+              });
             } else {
               restartFields.push('kanban');
             }
@@ -331,6 +397,10 @@ export function createGatewayReloadRunner(
             if (options.applyAutoPrune !== undefined) {
               const lines = await options.applyAutoPrune(next);
               if (Array.isArray(lines)) autoPruneLines.push(...lines);
+              appliedReport.push({
+                field: 'autoPrune',
+                reason: 'hot-applied: live config reference fed to scheduler + reschedule',
+              });
             } else {
               restartFields.push('autoPrune');
             }
@@ -346,11 +416,41 @@ export function createGatewayReloadRunner(
                 allowedOrigins: next.node?.allowedOrigins ?? [],
               });
               reloaded.push('config');
+              appliedReport.push({
+                field: 'node.allowedOrigins',
+                reason: 'hot-applied via gateway.reconfigure',
+              });
             }
           } else {
             reloaded.push('config');
           }
           requiresRestart.push(...restartFields);
+          // q-error-e3（D8）：三域报告——applied/requires_restart/inert + 每域 reason。
+          appliedReport.push({ field: 'config', reason: 'config reloaded from disk' });
+          for (const field of restartFields) {
+            restartReport.push({ field, reason: 'no hot applier; takes effect after restart' });
+          }
+          const inertFields = diffInertFields(current, next);
+          for (const field of inertFields) {
+            inertReport.push({
+              field,
+              reason:
+                'changed but neither hot-applied nor declared requires_restart (hardening gap); restart loads it from disk',
+            });
+          }
+          // lead 红线⑤裁定：有字段变化即出现（三域全列）；空 diff 缺省响应省略。
+          if (
+            restartFields.length > 0 ||
+            providerChanged ||
+            modelsChanged ||
+            federationChanged ||
+            kanbanChanged ||
+            autoPruneChanged ||
+            allowedOriginsChanged(current, next) ||
+            inertFields.length > 0
+          ) {
+            sawFieldChange = true;
+          }
           summaries.config = [
             ...restartFields.map((field) => `config: ${field} requires restart`),
             ...modelLines,
@@ -365,6 +465,7 @@ export function createGatewayReloadRunner(
         const lines = await applier();
         reloaded.push(scope);
         summaries[scope] = Array.isArray(lines) ? [...lines] : [];
+        appliedReport.push({ field: scope, reason: `hot-applied via ${scope} applier` });
       } catch (error) {
         summaries[scope] = [
           `${scope}: reload failed (${error instanceof Error ? error.message : String(error)})`,
@@ -372,14 +473,27 @@ export function createGatewayReloadRunner(
       }
     }
 
-    return { reloaded, requires_restart: requiresRestart, summaries };
+    // q-error-e3（D8 + lead 红线⑤裁定）：有字段变化即附 field_report；空 diff 省略。
+    const fieldReport = sawFieldChange
+      ? { applied: appliedReport, requires_restart: restartReport, inert: inertReport }
+      : undefined;
+    return {
+      reloaded,
+      requires_restart: requiresRestart,
+      summaries,
+      ...(fieldReport !== undefined ? { field_report: fieldReport } : {}),
+    };
   };
 
   return {
     reloadWithSummaries,
     async reload(scopes) {
       const outcome = await reloadWithSummaries(scopes);
-      return { reloaded: outcome.reloaded, requires_restart: outcome.requires_restart };
+      return {
+        reloaded: outcome.reloaded,
+        requires_restart: outcome.requires_restart,
+        ...(outcome.field_report !== undefined ? { field_report: outcome.field_report } : {}),
+      };
     },
     registeredScopes() {
       return Object.keys(appliers);

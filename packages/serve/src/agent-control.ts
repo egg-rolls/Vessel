@@ -125,6 +125,11 @@ export interface AgentCreateLikeInput {
    * 非空时创建提交后立即作为首条 user message 投递并触发首轮 run；缺省 = 创建后 idle。
    */
   startup_prompt?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 create 填；app 适配器透传进 deliverStartupPrompt → admit。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** CREATE-0.39：种子方式；缺省 copy，compact 必须显式。 */
@@ -166,6 +171,11 @@ export interface AgentDispatchLikeInput {
   /** CREATE-0.39：resume 失败后是否自动创建。 */
   allow_auto_create?: boolean;
   from?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * dispatch 恒 work-only；app 适配器透传进 admit（E2 同款 additive）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** `agents.update` 的单个条目。 */
@@ -301,6 +311,11 @@ export interface SessionCreateLikeInput {
    * `projection_mode_unavailable` / `projection_mode_not_allowed`。
    */
   projection_mode?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 sessions.create 填；透传进 admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** `sessions.create` 的结果（CONTRACT-0.39 §2.3）；无来源时省略 source / seed / counts。 */
@@ -337,6 +352,11 @@ export interface SessionRestartLikeResult {
 export interface SessionActivateLikeInput {
   session_id: string;
   startup_prompt?: string;
+  /**
+   * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只带 startup_prompt 的 sessions.activate 填；透传进 admit（缺省不变）。
+   */
+  triggered_by?: RunTrigger;
 }
 
 export interface SessionActivateLikeResult {

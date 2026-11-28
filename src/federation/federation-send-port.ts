@@ -400,7 +400,7 @@ export function createFederationSendPort(
         const result = await deliverFederationMessage(runtime, message, io);
         if (result.status !== 'rejected') {
           // 投递成功 = 该 peer 可达 → 顺手补投其积压（重连补投）。
-          void outbox.flushPeer(message.to).catch(() => undefined);
+          void outbox.flushPeer(message.to).catch(() => undefined); // benign: 顺手补投尽力而为——积压留 outbox，下次重试。
           return { status: 'queued', message_id: result.message_id };
         }
         // 策略类拒绝（disabled / unknown_node / not_allowed）重试无意义 → 旧口径。

@@ -41,7 +41,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.restart':
     'fleet cold restart (stops nodes; default waits for runs to finish); for platform code updates prefer vessel gateway restart (keeps nodes, runs uninterrupted); [name] targets an instance or registered node (default: whole fleet); --force propagates to stop; --self reserves a self-restart (returns immediately; orchestrator restarts after the triggering run finishes; --prompt carries the continuation)',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
-  'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
+  'help.cmd.errors':
+    'recent run/tool errors (diagnostics in errorLevel: all; --id drill-down / --run by seq)',
   'help.cmd.rpcList':
     'list RPC methods with params/result schema summaries (--node targets via platform proxy)',
   'help.cmd.kanbanList':
@@ -111,7 +112,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.tracePrune': 'prune trace (dry-run by default)',
   'help.cmd.mock': 'mock mode (no API calls)',
   'help.cmd.doctor':
-    'local config/environment + fleet self-check (env hygiene, locks, ports, peers, node; --deep queries the gateway)',
+    'local config/environment + fleet self-check (env hygiene, locks, ports, peers, node; --deep queries the gateway; --errors error audit)',
   'help.cmd.logsTail': 'tail gateway logs',
   'help.cmd.dataDir': 'override the global data directory',
   'help.cmd.resumeRunList': 'list resumable interrupted runs',
@@ -605,6 +606,21 @@ export const en: Record<MessageKey, string> = {
   'errors.level': 'Level',
   'errors.empty': 'No recent errors.',
   'errors.recent': 'Recent errors ({count})',
+  // q-error-e3 (§3.9): --id/--run drill-down labels
+  'errors.mutuallyExclusive': '--id and --run are mutually exclusive; pass only one.',
+  'errors.idNotFound': 'No error event found for error_id={id}.',
+  'errors.drillTitle': 'Error drill-down',
+  'errors.runTitle': 'Run error events (by seq)',
+  'errors.runEmpty': 'No error events for this run.',
+  'errors.operation': 'Operation',
+  'errors.at': 'At',
+  'errors.cause': 'Cause chain',
+  'errors.details': 'Details',
+  'errors.hintWhat': 'What happened',
+  'errors.hintWhy': 'Why',
+  'errors.hintFix': 'How to fix',
+  'errors.hintVerify': 'Where to look',
+  'errors.unknownCode': 'Unregistered code: raw info only, no fabricated guidance.',
 
   // ── hub (S5) ──
   'help.section.hubService': 'Hub service',
@@ -880,4 +896,530 @@ export const en: Record<MessageKey, string> = {
   'permissionShow.memberNotFound': 'member not found (this fleet only): {id}',
   'permissionShow.notAvailable':
     'permissions.show is not available on this gateway (requires a newer serve build)',
+  // ── q-error-e3 (§3.9): four-section hints per stable code (what/why/fix/verify) ──
+  'error.hint.unauthorized.what': 'The RPC request was rejected by the gateway (unauthenticated).',
+  'error.hint.unauthorized.why':
+    'The token is missing, expired, or does not match the target node.',
+  'error.hint.unauthorized.fix':
+    'Check the connection token: vessel token list for fingerprints, vessel node token for its source; pass the right --connect-token with --connect.',
+  'error.hint.unauthorized.verify':
+    'vessel errors --id <error_id> for details; vessel logs tail for gateway logs.',
+  'error.hint.forbidden.what': 'The request was rejected by the permission policy.',
+  'error.hint.forbidden.why':
+    'The token permission level is insufficient for this method (read/write/admin).',
+  'error.hint.forbidden.fix':
+    'Use a token with sufficient permission, or adjust the method permission requirement; check gateway.token config for local loopback.',
+  'error.hint.forbidden.verify': 'vessel errors --id <error_id>; vessel doctor.',
+  'error.hint.not_found.what': 'The target resource does not exist.',
+  'error.hint.not_found.why': 'The id is wrong or the resource was deleted.',
+  'error.hint.not_found.fix':
+    'Verify the id with the matching list command (e.g. vessel agents, vessel kanban list); pick from details.candidates when present.',
+  'error.hint.not_found.verify': 'vessel errors --id <error_id> for details.candidates.',
+  'error.hint.invalid_params.what': 'RPC parameters failed validation.',
+  'error.hint.invalid_params.why':
+    'A required field is missing, a type is wrong, or mutually exclusive fields were both given.',
+  'error.hint.invalid_params.fix':
+    'Check the parameter schema with vessel rpc list <method> and fix the parameters accordingly.',
+  'error.hint.invalid_params.verify':
+    'vessel errors --id <error_id> for field-level reasons in details.',
+  'error.hint.data_locked.what': 'The data is locked by another process.',
+  'error.hint.data_locked.why': 'Another gateway/node instance holds the lock on the same dataDir.',
+  'error.hint.data_locked.fix':
+    'Inspect processes with vessel ps / vessel gateway ps; stop the duplicate with vessel gateway stop, or use a different dataDir.',
+  'error.hint.data_locked.verify': 'vessel doctor (lock check).',
+  'error.hint.quota_exceeded.what': 'Quota exceeded.',
+  'error.hint.quota_exceeded.why': 'A platform/team quota cap was reached.',
+  'error.hint.quota_exceeded.fix':
+    'Check the quota config or ask the platform admin to raise the cap; reduce request frequency.',
+  'error.hint.quota_exceeded.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.conflict.what': 'State conflict; the request was rejected.',
+  'error.hint.conflict.why':
+    'Concurrent modification or an unmet precondition (e.g. a run is already active).',
+  'error.hint.conflict.fix':
+    'Refresh state and retry; for run conflicts check the active run with vessel status.',
+  'error.hint.conflict.verify': 'vessel errors --id <error_id>; vessel status.',
+  'error.hint.internal.what': 'Gateway internal error.',
+  'error.hint.internal.why': 'An unclassified server-side exception.',
+  'error.hint.internal.fix':
+    'Check gateway logs with vessel logs tail; run vessel doctor --errors for registry drift; report if it persists.',
+  'error.hint.internal.verify': 'vessel errors --id <error_id> for the cause chain.',
+  'error.hint.not_supported.what': 'The gateway does not support this capability.',
+  'error.hint.not_supported.why': 'The target build is too old or the capability is not wired.',
+  'error.hint.not_supported.fix':
+    'Upgrade the target node/gateway to a version with this method; check available methods with vessel rpc list.',
+  'error.hint.not_supported.verify': 'vessel errors --id <error_id> for details.method.',
+  'error.hint.expired.what': 'The credential or session has expired.',
+  'error.hint.expired.why': 'The token/session is past its TTL.',
+  'error.hint.expired.fix': 'Re-authenticate or rotate the token (vessel token rotate); reconnect.',
+  'error.hint.expired.verify': 'vessel errors --id <error_id>.',
+  'error.hint.run_ended.what': 'The run has ended and can no longer be operated on.',
+  'error.hint.run_ended.why': 'The run completed/failed/was cancelled and no longer accepts input.',
+  'error.hint.run_ended.fix':
+    'Start a new run (runs.start), or resume a resumable run (vessel --resume-run).',
+  'error.hint.run_ended.verify': "vessel errors --run <run_id> for that run's events.",
+  'error.hint.session_not_found.what': 'The session does not exist.',
+  'error.hint.session_not_found.why':
+    'The session_id is wrong, or the session was deleted / lives in another dataDir.',
+  'error.hint.session_not_found.fix':
+    'List sessions with vessel --resume and pick one; verify dataDir/tenant match.',
+  'error.hint.session_not_found.verify': 'vessel errors --id <error_id>.',
+  'error.hint.compact_unavailable.what': 'Session compaction is unavailable.',
+  'error.hint.compact_unavailable.why':
+    'The session store does not support compact, or the session state is insufficient.',
+  'error.hint.compact_unavailable.fix':
+    'Upgrade to a timeline-capable version; or start a new session.',
+  'error.hint.compact_unavailable.verify': 'vessel errors --id <error_id>; vessel doctor.',
+  'error.hint.gateway_restarting.what':
+    'The gateway is restarting; the request is temporarily rejected.',
+  'error.hint.gateway_restarting.why': 'The node is in a restart/drain window.',
+  'error.hint.gateway_restarting.fix':
+    'Retry shortly (retryable); watch restart progress with vessel node status.',
+  'error.hint.gateway_restarting.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.no_active_run.what': 'There is no active run.',
+  'error.hint.no_active_run.why': 'The operation requires an active run, but none exists.',
+  'error.hint.no_active_run.fix': 'Start a run first; check run state with vessel status.',
+  'error.hint.no_active_run.verify': 'vessel errors --id <error_id>.',
+  'error.hint.run_mismatch.what': 'Run mismatch.',
+  'error.hint.run_mismatch.why': 'The requested run_id does not match the currently active run.',
+  'error.hint.run_mismatch.fix':
+    'Verify the run_id (vessel status / runs.list) and operate on the right run.',
+  'error.hint.run_mismatch.verify': 'vessel errors --run <run_id>.',
+  'error.hint.marker_failed.what': 'Writing the run marker failed.',
+  'error.hint.marker_failed.why': 'Run store write anomaly (disk/permission).',
+  'error.hint.marker_failed.fix': 'Check dataDir disk space and permissions; vessel doctor.',
+  'error.hint.marker_failed.verify': 'vessel errors --id <error_id> for the cause chain.',
+  'error.hint.restart_reserve_failed.what': 'Restart reservation failed.',
+  'error.hint.restart_reserve_failed.why':
+    'The restart slot is taken or the state does not allow it.',
+  'error.hint.restart_reserve_failed.fix':
+    'Check node state with vessel node status; retry shortly or vessel gateway restart.',
+  'error.hint.restart_reserve_failed.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.legacy_session_unsupported.what': 'Legacy session format is not supported.',
+  'error.hint.legacy_session_unsupported.why':
+    'The session predates timeline; the current read path does not support it.',
+  'error.hint.legacy_session_unsupported.fix':
+    'Start a new session; old data stays in dataDir but cannot be read via this path.',
+  'error.hint.legacy_session_unsupported.verify': 'vessel errors --id <error_id>; vessel doctor.',
+  'error.hint.timeline_unavailable.what': 'The timeline is unavailable.',
+  'error.hint.timeline_unavailable.why': 'The timeline store is not wired or the read failed.',
+  'error.hint.timeline_unavailable.fix':
+    'Verify dataDir uses the root layout (vessel doctor); upgrade/restart the gateway.',
+  'error.hint.timeline_unavailable.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.method_not_found.what': 'Unknown RPC method.',
+  'error.hint.method_not_found.why':
+    'The method name is wrong or the target gateway does not have it.',
+  'error.hint.method_not_found.fix':
+    'Check available methods and spelling with vessel rpc list; upgrade the target for new methods.',
+  'error.hint.method_not_found.verify': 'vessel errors --id <error_id> for details.method.',
+  'error.hint.run_already_running.what':
+    'A run is already active; the duplicate start was rejected.',
+  'error.hint.run_already_running.why': 'The same session already has an active run.',
+  'error.hint.run_already_running.fix':
+    'Wait for the current run to finish, or cancel it with vessel stop, then start again.',
+  'error.hint.run_already_running.verify': 'vessel status; vessel errors --id <error_id>.',
+  'error.hint.run_not_found.what': 'The run does not exist.',
+  'error.hint.run_not_found.why': 'The run_id is wrong or the run record was cleaned up.',
+  'error.hint.run_not_found.fix': 'Verify the run_id (runs.list / vessel status).',
+  'error.hint.run_not_found.verify': 'vessel errors --id <error_id>.',
+  'error.hint.run_not_resumable.what': 'The run cannot be resumed.',
+  'error.hint.run_not_resumable.why':
+    'The run state does not meet resume conditions (not interrupted, or already ended).',
+  'error.hint.run_not_resumable.fix':
+    'Start a new run; list resumable sessions with vessel --resume.',
+  'error.hint.run_not_resumable.verify': 'vessel errors --id <error_id>.',
+  'error.hint.run_store_required.what': 'A run store is required.',
+  'error.hint.run_store_required.why':
+    'The operation needs a durable run store, but none is wired.',
+  'error.hint.run_store_required.fix':
+    'Check the run store configuration (dataDir layout); upgrade the gateway.',
+  'error.hint.run_store_required.verify': 'vessel doctor; vessel errors --id <error_id>.',
+  'error.hint.agent_not_found.what': 'The agent does not exist.',
+  'error.hint.agent_not_found.why': 'The member id is wrong or the member was closed.',
+  'error.hint.agent_not_found.fix':
+    'List members with vessel agents and pick one; choose from details.candidates when present.',
+  'error.hint.agent_not_found.verify': 'vessel errors --id <error_id> for details.candidates.',
+  'error.hint.session_corrupt.what': 'Session data is corrupt.',
+  'error.hint.session_corrupt.why': 'The session file is damaged or has an invalid format.',
+  'error.hint.session_corrupt.fix':
+    'Back up, then start a new session; do not hand-edit session files.',
+  'error.hint.session_corrupt.verify':
+    'vessel errors --id <error_id> for the cause chain; vessel logs tail.',
+  'error.hint.atomic_write_failed.what': 'Atomic write failed.',
+  'error.hint.atomic_write_failed.why':
+    'Disk full, insufficient permissions, or the file is locked.',
+  'error.hint.atomic_write_failed.fix':
+    'Check dataDir disk space and permissions; retry (retryable).',
+  'error.hint.atomic_write_failed.verify': 'vessel doctor; vessel errors --id <error_id>.',
+  'error.hint.limit_blocked.what': 'Blocked by a limit.',
+  'error.hint.limit_blocked.why': 'A run iteration/token limit was reached.',
+  'error.hint.limit_blocked.fix':
+    'Adjust the limit configuration or split the task; check the current limit value.',
+  'error.hint.limit_blocked.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.empty_response_exhausted.what': 'Empty-response retries exhausted.',
+  'error.hint.empty_response_exhausted.why':
+    'The model returned empty content several times in a row.',
+  'error.hint.empty_response_exhausted.fix':
+    'Test connectivity with vessel model test; switch model (vessel model set-default) or review the prompt.',
+  'error.hint.empty_response_exhausted.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.pii_unknown_handle.what': 'Unknown PII placeholder.',
+  'error.hint.pii_unknown_handle.why': 'The handle does not exist or was never issued.',
+  'error.hint.pii_unknown_handle.fix':
+    "Verify the handle comes from this session's redacted output; never guess handles.",
+  'error.hint.pii_unknown_handle.verify': 'vessel errors --id <error_id>.',
+  'error.hint.pii_expired_handle.what': 'The PII placeholder has expired.',
+  'error.hint.pii_expired_handle.why': 'The handle is past its TTL.',
+  'error.hint.pii_expired_handle.fix': 'Re-fetch the redacted content to obtain a fresh handle.',
+  'error.hint.pii_expired_handle.verify': 'vessel errors --id <error_id>.',
+  'error.hint.pii_invalidated_handle.what': 'The PII placeholder was invalidated.',
+  'error.hint.pii_invalidated_handle.why':
+    'The original value changed or the session ended; the handle is void.',
+  'error.hint.pii_invalidated_handle.fix':
+    'Re-fetch the redacted content to obtain a fresh handle.',
+  'error.hint.pii_invalidated_handle.verify': 'vessel errors --id <error_id>.',
+  'error.hint.pii_reveal_denied.what': 'PII reveal was denied.',
+  'error.hint.pii_reveal_denied.why': 'Human approval was not granted or policy forbids it.',
+  'error.hint.pii_reveal_denied.fix': 'Request human approval and retry; do not bypass.',
+  'error.hint.pii_reveal_denied.verify': 'vessel errors --id <error_id>; permission logs.',
+  'error.hint.invalid_input.what': 'Invalid agent input.',
+  'error.hint.invalid_input.why': 'A request field is missing or malformed.',
+  'error.hint.invalid_input.fix':
+    'Check the parameter schema with vessel rpc list <method> and fix the input.',
+  'error.hint.invalid_input.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.unknown_member.what': 'Unknown member.',
+  'error.hint.unknown_member.why': 'The member id is not on this team roster.',
+  'error.hint.unknown_member.fix':
+    'Verify the id with vessel agents; pick from details.candidates when present.',
+  'error.hint.unknown_member.verify': 'vessel errors --id <error_id> for details.candidates.',
+  'error.hint.member_closed.what': 'The member is closed.',
+  'error.hint.member_closed.why': 'The target member was released and no longer accepts messages.',
+  'error.hint.member_closed.fix':
+    'Send to an active member instead, or recreate the member (agents.create/hire).',
+  'error.hint.member_closed.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.member_stale.what': 'Member state is stale.',
+  'error.hint.member_stale.why': 'The referenced member snapshot is no longer current.',
+  'error.hint.member_stale.fix': 'Refresh the member list (vessel agents) and retry.',
+  'error.hint.member_stale.verify': 'vessel errors --id <error_id>.',
+  'error.hint.member_not_visible.what': 'The member is not visible.',
+  'error.hint.member_not_visible.why':
+    'The member is private and outside your visibility (the wire does not leak existence).',
+  'error.hint.member_not_visible.fix':
+    'Verify the member id and visibility; use a team-visible member or ask the owner to adjust visibility.',
+  'error.hint.member_not_visible.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.no_parent.what': 'No parent agent.',
+  'error.hint.no_parent.why':
+    'The operation requires a parent (e.g. hire), but this member has none.',
+  'error.hint.no_parent.fix':
+    'Operate from a member context that has a parent, or use create instead.',
+  'error.hint.no_parent.verify': 'vessel errors --id <error_id>.',
+  'error.hint.spawn_failed.what': 'Agent startup failed.',
+  'error.hint.spawn_failed.why':
+    'Startup prompt delivery or body initialization failed during create/activate (the record is not rolled back).',
+  'error.hint.spawn_failed.fix':
+    'Check the cause chain with vessel errors --id <error_id> to find the root cause; fix it, then retry creation or send a message to the member.',
+  'error.hint.spawn_failed.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.team_full.what': 'The team is full.',
+  'error.hint.team_full.why': 'The member count reached the team cap.',
+  'error.hint.team_full.fix':
+    'Close members no longer needed (agents.close) to free slots, or adjust the team size configuration.',
+  'error.hint.team_full.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.team_frozen.what': 'The team is frozen.',
+  'error.hint.team_frozen.why': 'The team is in a frozen state and accepts no new operations.',
+  'error.hint.team_frozen.fix': 'Check the team state; unfreeze it or use another team.',
+  'error.hint.team_frozen.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.invalid_state_transition.what': 'Invalid state transition.',
+  'error.hint.invalid_state_transition.why':
+    'The requested operation is incompatible with the current member/team state.',
+  'error.hint.invalid_state_transition.fix':
+    'Refresh state (vessel agents) and choose an operation valid for the current state.',
+  'error.hint.invalid_state_transition.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.budget_exceeded.what': 'Conversation budget exceeded.',
+  'error.hint.budget_exceeded.why':
+    'One of hops/turns/tokens/wall-clock hit the teams[].budget cap.',
+  'error.hint.budget_exceeded.fix':
+    'Adjust teams[].budget (maxHops/maxTurns/maxTokens/maxWallClockSeconds) or split the task.',
+  'error.hint.budget_exceeded.verify':
+    'vessel errors --id <error_id> for the dimension in details.',
+  'error.hint.budget_unavailable.what': 'The budget store is unavailable.',
+  'error.hint.budget_unavailable.why': 'Budget counter store read/write failed.',
+  'error.hint.budget_unavailable.fix': 'Check dataDir disk and permissions; vessel doctor; retry.',
+  'error.hint.budget_unavailable.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.conversation_team_mismatch.what': 'Conversation/team mismatch.',
+  'error.hint.conversation_team_mismatch.why':
+    'The conversation belongs to another team and cannot be reused across teams.',
+  'error.hint.conversation_team_mismatch.fix':
+    'Operate within the owning team, or start a new conversation.',
+  'error.hint.conversation_team_mismatch.verify': 'vessel errors --id <error_id>.',
+  'error.hint.body_limit.what': 'Body count limit reached.',
+  'error.hint.body_limit.why':
+    'Each agent allows at most 1 live body; creating another while one is live is rejected.',
+  'error.hint.body_limit.fix':
+    'Wait for the current body to finish or close it before creating; do not create bodies for the same agent concurrently.',
+  'error.hint.body_limit.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.node_draining.what': 'The node is draining.',
+  'error.hint.node_draining.why':
+    'The node entered a drain window and temporarily accepts no new work.',
+  'error.hint.node_draining.fix':
+    'Retry shortly (retryable); watch drain progress with vessel node status.',
+  'error.hint.node_draining.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.node_drain_no_record.what': 'Drain skipped: no node record found.',
+  'error.hint.node_drain_no_record.why':
+    'gateway.pid is missing or the pid mismatches; the node may have crashed or been started outside the supervisor.',
+  'error.hint.node_drain_no_record.fix':
+    'Check the node log to confirm process state; manually stop any leftover process and restart the node if needed.',
+  'error.hint.node_drain_no_record.verify':
+    'vessel errors --id <error_id>; node log (vessel logs tail).',
+  'error.hint.node_drain_unauthorized.what': 'Drain skipped: stop credential rejected.',
+  'error.hint.node_drain_unauthorized.why':
+    'The stop credential was rejected (401) and the anonymous loopback fallback also failed.',
+  'error.hint.node_drain_unauthorized.fix':
+    'Verify gateway.token / VESSEL_NODE_TOKEN matches the target node config.',
+  'error.hint.node_drain_unauthorized.verify': 'vessel errors --id <error_id>; vessel node token.',
+  'error.hint.node_drain_method_not_found.what': 'Drain skipped: target lacks the shutdown method.',
+  'error.hint.node_drain_method_not_found.why':
+    'The target gateway build does not expose gateway.shutdown.',
+  'error.hint.node_drain_method_not_found.fix': 'Upgrade the node, or stop it manually.',
+  'error.hint.node_drain_method_not_found.verify':
+    'vessel errors --id <error_id>; vessel rpc list.',
+  'error.hint.node_drain_network.what': 'Drain skipped: node unreachable.',
+  'error.hint.node_drain_network.why':
+    'Connection refused/timeout; the node gateway cannot be reached.',
+  'error.hint.node_drain_network.fix': 'Check the node process and the host:port in gateway.pid.',
+  'error.hint.node_drain_network.verify': 'vessel errors --id <error_id>; vessel node status.',
+  'error.hint.node_drain_timeout.what': 'Drain skipped: node did not exit within the stop timeout.',
+  'error.hint.node_drain_timeout.why': 'Active runs may still be draining.',
+  'error.hint.node_drain_timeout.fix':
+    'Inspect active runs with runs.list; wait for drain to finish or force-stop.',
+  'error.hint.node_drain_timeout.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.node_drain_quiesce_timeout.what':
+    'Drain skipped: node did not exit within the post-quiesce window.',
+  'error.hint.node_drain_quiesce_timeout.why':
+    'The node quiesced but did not exit in time and was force-killed.',
+  'error.hint.node_drain_quiesce_timeout.fix': 'Check whether shutdown hooks block exit.',
+  'error.hint.node_drain_quiesce_timeout.verify': 'vessel errors --id <error_id>; node log.',
+  'error.hint.team_not_found.what': 'The team does not exist.',
+  'error.hint.team_not_found.why': 'The team_id is wrong or the team was deleted.',
+  'error.hint.team_not_found.fix':
+    'Verify the team_id (teams.list); pick from details.candidates when present.',
+  'error.hint.team_not_found.verify': 'vessel errors --id <error_id> for details.candidates.',
+  'error.hint.team_conversation_not_found.what': 'The team conversation does not exist.',
+  'error.hint.team_conversation_not_found.why':
+    'The conversation id is wrong or does not belong to this team.',
+  'error.hint.team_conversation_not_found.fix':
+    'Verify the conversation id and team ownership; create a new team conversation.',
+  'error.hint.team_conversation_not_found.verify': 'vessel errors --id <error_id>.',
+  'error.hint.team_log_write_failed.what': 'Team log write failed.',
+  'error.hint.team_log_write_failed.why': 'Team log store write anomaly (disk/permission).',
+  'error.hint.team_log_write_failed.fix': 'Check dataDir disk space and permissions; retry.',
+  'error.hint.team_log_write_failed.verify':
+    'vessel errors --id <error_id> for the cause chain; vessel doctor.',
+  'error.hint.team_binding_requires_name.what': 'Team binding requires a name.',
+  'error.hint.team_binding_requires_name.why':
+    'The binding operation is missing the required name field.',
+  'error.hint.team_binding_requires_name.fix': 'Provide the name field and retry.',
+  'error.hint.team_binding_requires_name.verify':
+    'vessel errors --id <error_id>; vessel rpc list <method>.',
+  'error.hint.team_already_in_team.what': 'The member is already in the team.',
+  'error.hint.team_already_in_team.why': 'Duplicate join of the same team.',
+  'error.hint.team_already_in_team.fix': "No need to join again; check the member's current team.",
+  'error.hint.team_already_in_team.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.team_not_member.what': 'Not a team member.',
+  'error.hint.team_not_member.why':
+    'The operation requires membership, but the caller is not on the roster.',
+  'error.hint.team_not_member.fix':
+    'Join the team first (teams.join), or use a member with permission.',
+  'error.hint.team_not_member.verify': 'vessel errors --id <error_id>.',
+  'error.hint.team_private_member.what': 'The target is a private member.',
+  'error.hint.team_private_member.why':
+    'Private members are outside team visibility; team operations cannot reach them.',
+  'error.hint.team_private_member.fix':
+    'Ask the owner to adjust visibility, or use a team-visible member.',
+  'error.hint.team_private_member.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.team_no_team.what': 'No team context.',
+  'error.hint.team_no_team.why':
+    'The operation requires a team, but this member is not bound to one.',
+  'error.hint.team_no_team.fix': 'Create or join a team first.',
+  'error.hint.team_no_team.verify': 'vessel errors --id <error_id>.',
+  'error.hint.team_self_mention.what': 'Cannot @ yourself.',
+  'error.hint.team_self_mention.why': 'The message mentions its own sender, forming a self-loop.',
+  'error.hint.team_self_mention.fix': 'Mention a different member.',
+  'error.hint.team_self_mention.verify': 'vessel errors --id <error_id>.',
+  'error.hint.team_owner_not_rosterable.what': 'The owner cannot be rostered.',
+  'error.hint.team_owner_not_rosterable.why':
+    'The team owner identity cannot be added to the roster as a regular member.',
+  'error.hint.team_owner_not_rosterable.fix': 'Use a non-owner member for this operation.',
+  'error.hint.team_owner_not_rosterable.verify': 'vessel errors --id <error_id>.',
+  'error.hint.team_not_empty.what': 'The team is not empty.',
+  'error.hint.team_not_empty.why': 'Delete/archive requires an empty team, but members remain.',
+  'error.hint.team_not_empty.fix':
+    'Close/remove all members first (agents.close), then delete the team.',
+  'error.hint.team_not_empty.verify': 'vessel agents; vessel errors --id <error_id>.',
+  'error.hint.team_archived.what': 'The team is archived.',
+  'error.hint.team_archived.why': 'Archived teams are read-only and accept no new operations.',
+  'error.hint.team_archived.fix': 'Use an active team; contact an admin to restore if needed.',
+  'error.hint.team_archived.verify': 'vessel errors --id <error_id>.',
+  'error.hint.not_visible.what': 'The resource is not visible.',
+  'error.hint.not_visible.why':
+    'The resource is private or outside your visibility (the wire does not leak existence).',
+  'error.hint.not_visible.fix': 'Verify the id and visibility; ask the owner to adjust visibility.',
+  'error.hint.not_visible.verify': 'vessel errors --id <error_id>.',
+  'error.hint.message_not_found.what': 'The message does not exist.',
+  'error.hint.message_not_found.why': 'The message_id is wrong or the message was cleaned up.',
+  'error.hint.message_not_found.fix': 'Verify the message_id (inbox / team log).',
+  'error.hint.message_not_found.verify': 'vessel errors --id <error_id>.',
+  'error.hint.cursor_out_of_window.what': 'Cursor out of window.',
+  'error.hint.cursor_out_of_window.why':
+    'The paging cursor points to events beyond the retention window.',
+  'error.hint.cursor_out_of_window.fix':
+    'Re-fetch a cursor inside the window (list again without since).',
+  'error.hint.cursor_out_of_window.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.timeline_write_failed.what': 'Timeline write failed.',
+  'error.hint.timeline_write_failed.why':
+    'Event persistence anomaly (disk/permission/store corruption).',
+  'error.hint.timeline_write_failed.fix':
+    'Check dataDir disk space and permissions; vessel doctor; report if it persists.',
+  'error.hint.timeline_write_failed.verify':
+    'vessel errors --id <error_id> for the cause chain; vessel logs tail.',
+  'error.hint.timeline_record_too_large.what': 'Timeline record too large.',
+  'error.hint.timeline_record_too_large.why': 'A single event exceeds the store size cap.',
+  'error.hint.timeline_record_too_large.fix':
+    'Reduce the content producing the event (e.g. truncate tool output); do not hand-edit the store.',
+  'error.hint.timeline_record_too_large.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.timeline_event_type_excluded.what': 'Event type excluded.',
+  'error.hint.timeline_event_type_excluded.why':
+    'The event type is not on the timeline inclusion whitelist.',
+  'error.hint.timeline_event_type_excluded.fix':
+    'No action if the filter is intended; review a whitelist change if inclusion is truly needed.',
+  'error.hint.timeline_event_type_excluded.verify':
+    'vessel errors --id <error_id> for details.type.',
+  'error.hint.timeline_writer_closed.what': 'The timeline writer is closed.',
+  'error.hint.timeline_writer_closed.why':
+    'A write arrived after the store writer closed (usually a shutdown race).',
+  'error.hint.timeline_writer_closed.fix':
+    'Restart the gateway to restore the writer; report if frequent.',
+  'error.hint.timeline_writer_closed.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.timeline_index_invalid.what': 'Timeline index invalid.',
+  'error.hint.timeline_index_invalid.why': 'The index file is corrupt or inconsistent with events.',
+  'error.hint.timeline_index_invalid.fix':
+    'Check the store with vessel doctor; rebuild the index via the ops procedure if needed — do not hand-edit.',
+  'error.hint.timeline_index_invalid.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.timeline_archive_failed.what': 'Timeline archive failed.',
+  'error.hint.timeline_archive_failed.why': 'Archive/compaction storage operation anomaly.',
+  'error.hint.timeline_archive_failed.fix':
+    'Check disk space and permissions; retry; report if it persists.',
+  'error.hint.timeline_archive_failed.verify': 'vessel errors --id <error_id> for the cause chain.',
+  'error.hint.unknown_ref.what': 'Unknown model reference.',
+  'error.hint.unknown_ref.why': 'The provider/model reference is not in the model registry.',
+  'error.hint.unknown_ref.fix':
+    'List available refs with vessel model list; set the right default with vessel model set-default; pick from details.candidates when present.',
+  'error.hint.unknown_ref.verify':
+    'vessel errors --id <error_id> for details.candidates; vessel doctor.',
+  'error.hint.provider_auth.what': 'Model provider authentication failed.',
+  'error.hint.provider_auth.why': 'The API key is missing, invalid, or expired.',
+  'error.hint.provider_auth.fix':
+    'Configure credentials with vessel model credential set; verify the env var named by provider.apiKeyEnv has a value.',
+  'error.hint.provider_auth.verify': 'vessel model test; vessel errors --id <error_id>.',
+  'error.hint.provider_rate_limit.what': 'Provider rate limit.',
+  'error.hint.provider_rate_limit.why': 'Request frequency exceeded the provider rate limit.',
+  'error.hint.provider_rate_limit.fix':
+    'Retry shortly (retryable, automatic backoff); reduce concurrency or raise the limit if persistent.',
+  'error.hint.provider_rate_limit.verify': 'vessel errors --id <error_id>; vessel logs tail.',
+  'error.hint.provider_quota_exceeded.what': 'Provider quota exhausted.',
+  'error.hint.provider_quota_exceeded.why': 'Account quota/balance is used up.',
+  'error.hint.provider_quota_exceeded.fix':
+    'Top up or raise the provider quota; switch model (vessel model set-default).',
+  'error.hint.provider_quota_exceeded.verify': 'vessel model test; vessel errors --id <error_id>.',
+  'error.hint.provider_timeout.what': 'Provider request timed out.',
+  'error.hint.provider_timeout.why': 'The model response exceeded the timeout threshold.',
+  'error.hint.provider_timeout.fix':
+    'Retry (retryable); check the network or switch model if persistent.',
+  'error.hint.provider_timeout.verify': 'vessel model test; vessel errors --id <error_id>.',
+  'error.hint.provider_context_overflow.what': 'Context overflow.',
+  'error.hint.provider_context_overflow.why': 'The prompt exceeds the model context window.',
+  'error.hint.provider_context_overflow.fix':
+    'Compact the session or start a new one; switch to a larger-context model.',
+  'error.hint.provider_context_overflow.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.provider_unavailable.what': 'Provider unavailable.',
+  'error.hint.provider_unavailable.why':
+    'The provider service is temporarily unavailable (5xx/maintenance).',
+  'error.hint.provider_unavailable.fix': 'Retry shortly (retryable); switch model if persistent.',
+  'error.hint.provider_unavailable.verify': 'vessel model test; vessel errors --id <error_id>.',
+  'error.hint.provider_http_error.what': 'Provider HTTP error.',
+  'error.hint.provider_http_error.why': 'The provider returned an unexpected HTTP status.',
+  'error.hint.provider_http_error.fix':
+    'Check http_status and cause with vessel errors --id <error_id>; verify baseUrl and credentials.',
+  'error.hint.provider_http_error.verify': 'vessel model test; vessel logs tail.',
+  'error.hint.provider_network.what': 'Provider network error.',
+  'error.hint.provider_network.why': 'Network-layer failure (DNS/connection/TLS).',
+  'error.hint.provider_network.fix':
+    'Check network and proxy; verify provider.baseUrl; retry (retryable).',
+  'error.hint.provider_network.verify': 'vessel model test; vessel errors --id <error_id>.',
+  'error.hint.provider_error.what': 'Other provider error.',
+  'error.hint.provider_error.why': 'A provider error not covered by the subclasses above.',
+  'error.hint.provider_error.fix':
+    'Inspect the cause chain with vessel errors --id <error_id>; report if needed.',
+  'error.hint.provider_error.verify': 'vessel logs tail; vessel model test.',
+  'error.hint.tool_timeout.what': 'Tool call timed out.',
+  'error.hint.tool_timeout.why': 'Tool execution exceeded the timeout threshold.',
+  'error.hint.tool_timeout.fix':
+    'Retry (retryable); split long tasks or inspect the tool implementation.',
+  'error.hint.tool_timeout.verify':
+    'vessel errors --id <error_id> for tool_name; vessel logs tail.',
+  'error.hint.tool_not_found.what': 'The tool does not exist.',
+  'error.hint.tool_not_found.why': 'The tool name is wrong or the tool is not wired.',
+  'error.hint.tool_not_found.fix':
+    'Verify the tool name and wiring (tools config); pick from details.candidates when present.',
+  'error.hint.tool_not_found.verify': 'vessel errors --id <error_id> for details.candidates.',
+  'error.hint.tool_invalid_arguments.what': 'Invalid tool arguments.',
+  'error.hint.tool_invalid_arguments.why': 'Arguments do not match the tool schema.',
+  'error.hint.tool_invalid_arguments.fix': 'Fix the arguments per the tool schema and retry.',
+  'error.hint.tool_invalid_arguments.verify': 'vessel errors --id <error_id> for details.',
+  'error.hint.tool_blocked.what': 'Tool call blocked.',
+  'error.hint.tool_blocked.why': 'The permission policy forbids this tool call.',
+  'error.hint.tool_blocked.fix':
+    'Check permission.neverAutoApprove / tool whitelist config; adjust the policy if it should be allowed.',
+  'error.hint.tool_blocked.verify': 'vessel errors --id <error_id>; permission logs.',
+  'error.hint.tool_error.what': 'Tool execution error.',
+  'error.hint.tool_error.why': 'An internal tool exception.',
+  'error.hint.tool_error.fix':
+    'Inspect the cause chain with vessel errors --id <error_id>; fix the tool or input and retry.',
+  'error.hint.tool_error.verify': 'vessel logs tail; vessel errors --run <run_id>.',
+  'error.hint.permission_timeout.what': 'Permission approval timed out.',
+  'error.hint.permission_timeout.why': 'Unattended approval exceeded the wait window.',
+  'error.hint.permission_timeout.fix':
+    'Adjust teams[].permission.unattended / denyAfterSeconds; or approve promptly.',
+  'error.hint.permission_timeout.verify': 'vessel errors --id <error_id>; permission logs.',
+  'error.hint.permission_cancelled.what': 'Permission approval was cancelled.',
+  'error.hint.permission_cancelled.why': 'The approval request was actively cancelled.',
+  'error.hint.permission_cancelled.fix': 'Re-issue the operation and approve it.',
+  'error.hint.permission_cancelled.verify': 'vessel errors --id <error_id>.',
+  'error.hint.permission_denied.what': 'Permission denied.',
+  'error.hint.permission_denied.why': 'The approver denied it or policy says deny.',
+  'error.hint.permission_denied.fix':
+    'Check the denial reason; adjust the operation or policy and retry — do not bypass.',
+  'error.hint.permission_denied.verify': 'vessel errors --id <error_id>; permission logs.',
+  'error.hint.permission_error.what': 'Permission system error.',
+  'error.hint.permission_error.why': 'Internal anomaly in approval/policy execution.',
+  'error.hint.permission_error.fix':
+    'Inspect the cause chain with vessel errors --id <error_id>; vessel doctor; report if persistent.',
+  'error.hint.permission_error.verify': 'vessel logs tail; permission logs.',
+  'error.hint.config_error.what': 'Configuration error.',
+  'error.hint.config_error.why': 'Config validation failed or loading anomaly.',
+  'error.hint.config_error.fix':
+    'Fix the config at the reported path (locate with vessel doctor); hot-reload with vessel gateway reload.',
+  'error.hint.config_error.verify': 'vessel doctor; vessel errors --id <error_id>.',
+  'error.hint.gateway_error.what': 'Gateway error.',
+  'error.hint.gateway_error.why': 'An unclassified gateway-layer anomaly.',
+  'error.hint.gateway_error.fix':
+    'Check gateway logs with vessel logs tail; vessel doctor --errors; vessel gateway restart if needed.',
+  'error.hint.gateway_error.verify': 'vessel errors --id <error_id> for the cause chain.',
+  'error.hint.internal_error.what': 'Internal error.',
+  'error.hint.internal_error.why': 'An unclassified internal anomaly.',
+  'error.hint.internal_error.fix':
+    'Inspect the cause chain with vessel errors --id <error_id>; vessel doctor --errors for drift; report.',
+  'error.hint.internal_error.verify': 'vessel logs tail.',
+  'error.hint.checkpoint_failed.what': 'Checkpoint write failed.',
+  'error.hint.checkpoint_failed.why': 'Run checkpoint persistence anomaly.',
+  'error.hint.checkpoint_failed.fix':
+    'Check dataDir disk and permissions; retry (retryable); report if persistent.',
+  'error.hint.checkpoint_failed.verify': 'vessel errors --id <error_id>; vessel doctor.',
 };

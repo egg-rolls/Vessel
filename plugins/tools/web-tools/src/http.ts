@@ -185,7 +185,7 @@ async function readBodyLimited(
     if (!value) continue;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
+      await reader.cancel().catch(() => undefined); // benign: 超限取消流，失败不掩盖原始错误。
       throw new WebFetchError('too_large', `响应体超过 ${maxBytes} 字节上限`, { url });
     }
     chunks.push(value);

@@ -27,6 +27,16 @@ export type ReloadScope = (typeof RELOAD_SCOPES)[number];
 export interface GatewayReloadResult {
   reloaded: string[];
   requires_restart: string[];
+  /**
+   * q-error-e3（§3.8 additive，D8 + lead 红线⑤裁定）：三域清单 + 每域 reason。
+   * **有字段变化即出现**（三域全列）；空 diff 缺省响应省略（旧字段逐字节不变）。
+   * inert 行为修复归 hardening，本期只报告。
+   */
+  field_report?: {
+    applied: Array<{ field: string; reason: string }>;
+    requires_restart: Array<{ field: string; reason: string }>;
+    inert: Array<{ field: string; reason: string }>;
+  };
 }
 
 /** `gateway.shutdown` 结果：只表示「退出序列已受理」，不表示进程已退出。 */
@@ -144,6 +154,37 @@ export function createAdminMethods(deps: AdminMethodsDeps): RpcMethodDefinition[
         properties: {
           reloaded: stringListSchema,
           requires_restart: stringListSchema,
+          // q-error-e3（D8）：additive，不进 required；有字段变化即出现（空 diff 省略）。
+          field_report: {
+            type: 'object',
+            required: ['applied', 'requires_restart', 'inert'],
+            properties: {
+              applied: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['field', 'reason'],
+                  properties: { field: { type: 'string' }, reason: { type: 'string' } },
+                },
+              },
+              requires_restart: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['field', 'reason'],
+                  properties: { field: { type: 'string' }, reason: { type: 'string' } },
+                },
+              },
+              inert: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  required: ['field', 'reason'],
+                  properties: { field: { type: 'string' }, reason: { type: 'string' } },
+                },
+              },
+            },
+          },
         },
       },
       handler: async (params) => {

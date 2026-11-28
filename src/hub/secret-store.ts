@@ -250,7 +250,7 @@ export function createFileSecretStore(options: { dataDir: string }): SecretStore
       fn(entries);
       await saveEnvelope({ v: 1, entries });
     });
-    queue = task.catch(() => {});
+    queue = task.catch(() => {}); // benign: 串行链尾防未处理拒绝；调用方拿到的 task 仍 reject（错误可见）。
     return task;
   }
 
@@ -365,7 +365,7 @@ function createDpapiSecretStore(dataDir: string, run: RunCommand): SecretStore {
       fn(next);
       await save(next);
     });
-    queue = task.catch(() => {});
+    queue = task.catch(() => {}); // benign: 串行链尾防未处理拒绝；调用方拿到的 task 仍 reject（错误可见）。
     return task;
   }
 

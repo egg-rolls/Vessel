@@ -105,12 +105,14 @@ async function readChunk(
   if (deadline !== null) waitMs = Math.min(waitMs, deadline - Date.now());
   if (!Number.isFinite(waitMs)) return reader.read();
   if (waitMs <= 0) {
+    // benign: 超时取消流，失败不掩盖 ProxyFailure 504（重抛）。
     void reader.cancel().catch(() => {});
     throw new ProxyFailure(504, 'timeout', 'Plugin HTTP request timed out.');
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
+      // benign: 超时取消流，失败不掩盖 ProxyFailure 504（reject 可见）。
       void reader.cancel().catch(() => {});
       reject(new ProxyFailure(504, 'timeout', 'Plugin HTTP request timed out.'));
     }, waitMs);
@@ -140,6 +142,7 @@ async function readLimitedBody(
       if (value === undefined) continue;
       total += value.byteLength;
       if (maxBytes !== null && total > maxBytes) {
+        // benign: 超限取消流，失败不掩盖 ProxyFailure 413（重抛）。
         void reader.cancel().catch(() => {});
         throw new ProxyFailure(
           413,
@@ -228,6 +231,7 @@ function streamBody(
       }
     },
     cancel(reason) {
+      // benign: 下游取消尽力传导，失败不抛。
       void reader.cancel(reason).catch(() => {});
     },
   });

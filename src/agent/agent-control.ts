@@ -194,6 +194,8 @@ export function createAgentControl(
           ...(input.keep_messages !== undefined ? { keep_messages: input.keep_messages } : {}),
           // q-hire-prompt：可选启动任务，原样透传（形状校验在 service 逐条做）。
           ...(input.startup_prompt !== undefined ? { startup_prompt: input.startup_prompt } : {}),
+          // q-error-e3 §3.7：RPC correlation 透传（缺省不写键）。
+          ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
         })),
       });
       return mapLifecycle(batch.results, (status) => ({
@@ -341,6 +343,7 @@ export function createAgentControl(
             ...(input.allow_auto_create !== undefined
               ? { allow_auto_create: input.allow_auto_create }
               : {}),
+            ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
           }),
         ),
       );

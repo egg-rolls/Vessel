@@ -202,7 +202,7 @@ function makeHandle(lockPath: string, info: SessionLockInfo): SessionLock {
 async function publish(lockPath: string, content: string): Promise<void> {
   await writeFile(lockPath, content, { flag: 'wx', mode: 0o600 });
   // Windows 不支持 mode；尽力 chmod。
-  await chmod(lockPath, 0o600).catch(() => undefined);
+  await chmod(lockPath, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask），writeFile 已设 mode。
 }
 
 /** 回收 stale 锁；返回是否已回收。 */
@@ -224,7 +224,7 @@ async function reclaimStale(params: {
       .then((info) => now() - info.mtimeMs > SESSION_LOCK_RECLAIM_GUARD_STALE_MS)
       .catch(() => true);
     if (!stale) return 'busy';
-    await unlink(guardPath).catch(() => {});
+    await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
     try {
       guard = await open(guardPath, 'wx');
     } catch (retryError) {
@@ -244,8 +244,8 @@ async function reclaimStale(params: {
     });
     return 'reclaimed';
   } finally {
-    await guard.close().catch(() => {});
-    await unlink(guardPath).catch(() => {});
+    await guard.close().catch(() => {}); // benign: guard 句柄关闭，失败不掩盖结果。
+    await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
   }
 }
 

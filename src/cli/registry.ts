@@ -509,6 +509,8 @@ export const cliCommands: readonly CliCommand[] = [
         await errorsCommand({
           json: command.json,
           ...(command.limit !== undefined ? { limit: command.limit } : {}),
+          ...(command.id !== undefined ? { id: command.id } : {}),
+          ...(command.run !== undefined ? { run: command.run } : {}),
           connectUrl: args.connectArg,
           connectToken: args.connectTokenArg,
           caFile: args.caArg,

@@ -263,7 +263,7 @@ export function startConfigWatch(options: ConfigWatchOptions): ConfigWatchHandle
           options.logger?.info('config.watch.verify_changed', { path: target });
           await trigger();
         }
-      })().catch(() => {});
+      })().catch(() => {}); // benign: verify 复查防未处理拒绝；trigger 管线（runOnce）自报失败。
     }, verifyDelayMs);
   };
 

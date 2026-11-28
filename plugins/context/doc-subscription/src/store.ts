@@ -425,6 +425,7 @@ export class SubscriptionStore {
     const key = state.session_id;
     const previous = this.chains.get(key) ?? Promise.resolve();
     const next = previous
+      // benign: 串行链续接——前次失败经调用方 promise 可见（save 注释：调用方决定是否吞掉）。
       .catch(() => {})
       .then(async () => {
         await this.write(state);
@@ -457,6 +458,7 @@ export class SubscriptionStore {
     const previous = this.chains.get(sessionId) ?? Promise.resolve();
     let updated: SessionSubscriptionState = emptyState(sessionId);
     const next = previous
+      // benign: 串行链续接——前次失败经调用方 promise 可见（save 注释：调用方决定是否吞掉）。
       .catch(() => {})
       .then(async () => {
         const current = await this.load(sessionId);
@@ -570,6 +572,7 @@ export class SubscriptionStore {
     const previous = this.chains.get(newSessionId) ?? Promise.resolve();
     let adopted: SessionSubscriptionState | undefined;
     const next = previous
+      // benign: 串行链续接——前次失败经调用方 promise 可见（save 注释：调用方决定是否吞掉）。
       .catch(() => {})
       .then(async () => {
         // 本 session 已有状态文件 ⇒ 非首访 / 已收养，不重复迁移。

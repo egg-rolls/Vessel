@@ -231,16 +231,21 @@ export async function writeGatewayPid(
   await writeFile(tmp, body, { mode: 0o600 });
   try {
     await chmod(tmp, 0o600);
-  } catch {}
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */
+  }
   try {
     await rename(tmp, filePath);
   } catch (error) {
+    // benign: rename 失败清理临时文件，失败不掩盖原始错误（重抛）。
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
   try {
     await chmod(filePath, 0o600);
-  } catch {}
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */
+  }
 }
 export type GatewayRecordState = 'running' | 'degraded' | 'stale' | 'unknown';
 export interface GatewayRecordClassification {
@@ -323,6 +328,7 @@ function createHealthProbe(fetchImpl?: typeof fetch): GatewayHealthProbe {
         ...(typeof node_id === 'string' && node_id !== '' ? { node_id } : {}),
       };
     } finally {
+      // benign: 探针客户端关闭，失败不掩盖探测结果。
       await client.close().catch(() => undefined);
     }
   };
@@ -430,6 +436,7 @@ export async function deleteRecordIfOwned(
   }
   const reclaimPath = `${filePath}.reclaim-${options.now ?? Date.now()}`;
   await rename(filePath, reclaimPath);
+  // benign: 回收站清理尽力而为——残留由 retention 清扫兜底。
   if (options.quarantine !== true) await unlink(reclaimPath).catch(() => undefined);
   return true;
 }
@@ -596,6 +603,7 @@ export async function collectGatewayState(
     for (const name of list) {
       if (!name.includes('.reclaim-')) continue;
       const target = path.join(dir, name);
+      // benign: retention 清扫探针——stat 失败跳过；删除失败下轮再收。
       const stat = await fs.promises.stat(target).catch(() => undefined);
       if (stat !== undefined && now - stat.mtimeMs > retentionMs)
         await unlink(target).catch(() => undefined);
@@ -762,6 +770,7 @@ export function deleteRecordIfOwnedSync(
 }
 /** 损坏文件过宽限后隔离（先复读 mtime，未变才 rename）。 */
 async function quarantineIfCorrupt(filePath: string, now: number, graceMs: number): Promise<void> {
+  // benign: mtime 探针——stat 失败不隔离（保守）。
   const stat = await fs.promises.stat(filePath).catch(() => undefined);
   if (stat !== undefined && now - stat.mtimeMs > graceMs) {
     await quarantineCorruptRecordIfUnchanged(filePath, stat.mtimeMs, { now });

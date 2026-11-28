@@ -854,6 +854,7 @@ export async function readFileWindow(
     }
     return buffer;
   } finally {
+    // benign: 读窗口句柄关闭，失败不掩盖读取结果。
     await handle.close().catch(() => {});
   }
 }
@@ -934,6 +935,7 @@ export async function readNdjsonTail(
 export async function listBlockFiles(blocksDir: string): Promise<string[]> {
   // 单 A 的核心指标：这个函数就是「每页一次 readdir」的那一次。
   blockEnumerationCounters.readdirCalls += 1;
+  // benign: 目录探针——读不出按空目录处理（调用方走兜底路径）。
   const entries = await readdir(blocksDir, { withFileTypes: true }).catch(() => undefined);
   if (entries === undefined) return [];
   return entries
@@ -960,6 +962,7 @@ export async function readAllBlocks(sessionDir: string): Promise<DecodedBlock[]>
   const names = await listBlockFiles(blocksDir);
   const out: DecodedBlock[] = [];
   for (const name of names) {
+    // benign: 整份读探针——读不出的块跳过（与恢复扫描同口径）。
     const buffer = await readFile(join(blocksDir, name)).catch(() => undefined);
     if (buffer === undefined) continue;
     const decode = decodeChunkBlock(buffer);
@@ -1204,6 +1207,7 @@ function readManifestForWatermark(parsed: unknown): TimelineManifestLine | undef
  */
 async function readTimelineHeadForWatermark(manifestPath: string): Promise<number | undefined> {
   // 没有主 manifest = 这个会话从没归档过（`timeline_head` 就是 0），不是「读不出来」。
+  // benign: 存在性探针——stat 失败按「没归档过」处理（语义见上注）。
   const exists = await stat(manifestPath).catch(() => undefined);
   if (exists === undefined) return 0;
   let firstBytes = WATERMARK_MANIFEST_FIRST_BYTES;
@@ -1242,7 +1246,7 @@ export async function resolveFactWatermark(
 ): Promise<FactWatermark> {
   const headValue = await readTimelineHeadForWatermark(
     join(sessionDir, TIMELINE_LAYOUT.timelineManifest),
-  ).catch(() => undefined);
+  ).catch(() => undefined); // benign: 答不准时回落 0（保守水位，语义见函数注释）。
   const head = headValue !== undefined && headValue > 0 ? headValue : 0;
   const archiveTail = evidence.archiveMaxSeq > 0 ? evidence.archiveMaxSeq : 0;
   if (head === 0) {
@@ -1347,6 +1351,7 @@ export async function hydrateRecordData(
 ): Promise<TimelineRecord> {
   if (!isTimelineBlobRef(record.data)) return record;
   const ref = record.data;
+  // benign: blob 读探针——读不出保留 ref 原样（调用方按 blob_missing 口径处理）。
   const buffer = await readFile(blobPath(sessionDir, record.seq)).catch(() => undefined);
   if (buffer === undefined) return record;
   if (buffer.length !== ref.bytes || crc32Hex(buffer) !== ref.crc32) return record;
@@ -1709,6 +1714,7 @@ async function lastFactSeqOf(path: string, size: number): Promise<number> {
 /** 归档副本（`timeline.ndjson`）最后一条记录的 seq（`0` = 没有归档）。 */
 async function lastArchivedSeqOf(sessionDir: string): Promise<number> {
   const path = join(sessionDir, TIMELINE_LAYOUT.timeline);
+  // benign: 存在性探针——stat 失败按「没有归档」处理（0）。
   const info = await stat(path).catch(() => undefined);
   if (info === undefined || info.size <= 0) return 0;
   const window = await readNdjsonTail(path, ARCHIVE_TAIL_FIRST_BYTES, ARCHIVE_TAIL_MAX_BYTES);
@@ -2075,6 +2081,7 @@ async function* iterateBlocksFrom(args: {
         `开了 ${String(state.opened)} 个块还没覆盖满窗口`,
       );
     }
+    // benign: 块读探针——读不出记 unverified 留痕（与整份读同口径「块不在」）。
     const buffer = await readFile(join(blocksDir, name)).catch(() => undefined);
     if (buffer === undefined) {
       // 文件读不出来（被删 / 权限）：与整份读同口径「这个块不在」，但记账上留痕。
@@ -2265,6 +2272,7 @@ async function locateRangeBlocks(
         ? new ManifestForwardReader(
             join(sessionDir, TIMELINE_LAYOUT.walManifest),
             anchor.manifestPosition,
+            // benign: 大小探针——stat 失败 size 缺省（reader 自行兜底）。
             (await stat(join(sessionDir, TIMELINE_LAYOUT.walManifest)).catch(() => undefined))
               ?.size,
           )
@@ -2333,6 +2341,7 @@ async function readTimelineRangeAttempt(
 
   const blocksDir = join(sessionDir, TIMELINE_LAYOUT.walBlocks);
   const walPath = join(sessionDir, TIMELINE_LAYOUT.walLog);
+  // benign: 大小探针——stat 失败按 0（tripline 判定走缺省口径）。
   const walSize = (await stat(walPath).catch(() => undefined))?.size ?? 0;
   const tripline = await checkArchiveTripline(sessionDir, walPath, walSize);
   const factBoundary = tripline.walLastSeq;

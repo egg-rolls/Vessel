@@ -582,7 +582,7 @@ export async function cleanStaleWebBuildDirs(): Promise<number> {
     const meta = await readBuildMeta(dir);
     if (meta === undefined) {
       // 这个根只有我们写：没有可用元数据的目录没有保留价值。
-      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined); // benign: 构建目录清理尽力而为——残留由下次构建覆盖。
       cleaned += 1;
       continue;
     }
@@ -591,12 +591,12 @@ export async function cleanStaleWebBuildDirs(): Promise<number> {
       const tooOld = now - meta.startedAt > BUILD_STALE_AFTER_MS;
       if (!dead && !tooOld) continue;
       // 构建进程已经不在了：产物是半截的，元数据也别留。
-      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined); // benign: 构建目录清理尽力而为——残留由下次构建覆盖。
       cleaned += 1;
       continue;
     }
     if (now - meta.startedAt > BUILD_LOG_RETENTION_MS) {
-      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined); // benign: 构建目录清理尽力而为——残留由下次构建覆盖。
     }
   }
   return cleaned;
@@ -1057,7 +1057,7 @@ function startBuild(
 ): Promise<void> {
   if (inFlightBuild !== undefined) return inFlightBuild;
   const task = runBuild(options, status, trigger)
-    .catch(() => undefined)
+    .catch(() => undefined) // benign: 构建失败已在 runBuild 内 writeBuildMeta/buildState phase:'failed' 可见；此处防未处理拒绝。
     .finally(() => {
       inFlightBuild = undefined;
       activeChild = undefined;

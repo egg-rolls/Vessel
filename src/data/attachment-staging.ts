@@ -171,17 +171,17 @@ export function createConfigAttachmentStager(options: AttachmentStagingOptions):
     const dir = stagingBucketDir(root, sha256);
     await mkdir(dir, { recursive: true, mode: 0o700 });
     const now = Date.now();
-    const existing = await stat(target).catch(() => undefined);
+    const existing = await stat(target).catch(() => undefined); // benign: 存在性探针——缺失走新建。
     if (existing !== undefined && existing.isFile()) {
       // 同 sha 重传：复用副本 + 刷新 mtime（TTL 续期）。
-      await utimes(target, new Date(now), new Date(now)).catch(() => undefined);
+      await utimes(target, new Date(now), new Date(now)).catch(() => undefined); // benign: 触活尽力而为——失败下轮 GC 按 mtime 保守判定。
     } else {
       try {
         await writeFile(target, request.bytes, { flag: 'wx', mode: 0o600 });
       } catch (error) {
         // 并发写同一份：别人先写好了，复用它（内容寻址下内容必然相同）。
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        await utimes(target, new Date(now), new Date(now)).catch(() => undefined);
+        await utimes(target, new Date(now), new Date(now)).catch(() => undefined); // benign: 触活尽力而为——失败下轮 GC 按 mtime 保守判定。
       }
     }
     return {
@@ -221,7 +221,7 @@ export function createConfigAttachmentPreviewer(
     if (evaluatePath(canonical, cachedBoundary) !== 'allow') {
       return { status: 'denied', ...(staging ? { staging: true } : {}) };
     }
-    const info = await stat(canonical).catch(() => undefined);
+    const info = await stat(canonical).catch(() => undefined); // benign: 存在性探针——缺失按 gone。
     if (info === undefined || !info.isFile()) {
       return { status: 'gone', ...(staging ? { staging: true } : {}) };
     }
@@ -235,7 +235,7 @@ export function createConfigAttachmentPreviewer(
     if (info.size > ATTACHMENT_PREVIEW_MAX_BYTES) {
       return { status: 'too_large', bytes: info.size, mime, ...stagingFields };
     }
-    const bytes = await readFile(canonical).catch(() => undefined);
+    const bytes = await readFile(canonical).catch(() => undefined); // benign: 读探针——失败按 gone（状态可见，非静默）。
     if (bytes === undefined) {
       return { status: 'gone', ...stagingFields };
     }
@@ -288,7 +288,7 @@ export async function collectStagingAttachments(
       const names = await readdir(dir).catch(() => [] as string[]);
       for (const name of names) {
         const file = path.join(dir, name);
-        const info = await stat(file).catch(() => undefined);
+        const info = await stat(file).catch(() => undefined); // benign: GC 探针——stat 失败跳过。
         if (info === undefined || !info.isFile()) continue;
         report.scanned += 1;
         if (options.referencedPaths?.has(file)) continue;
@@ -296,19 +296,19 @@ export async function collectStagingAttachments(
         report.reclaimed += 1;
         report.bytes += info.size;
         if (report.dryRun) continue;
-        await rm(file, { force: true }).catch(() => undefined);
+        await rm(file, { force: true }).catch(() => undefined); // benign: GC 尽力删除——残留下轮再收。
       }
       // 空目录顺手收掉（非空 / 并发写入时失败静默：下一趟再来）。
       if (!report.dryRun) {
         const left = await readdir(dir).catch(() => ['x']);
         if (left.length === 0)
-          await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+          await rm(dir, { recursive: true, force: true }).catch(() => undefined); // benign: GC 空桶清理尽力而为。
       }
     }
     if (!report.dryRun) {
       const left = await readdir(bucketDir).catch(() => ['x']);
       if (left.length === 0) {
-        await rm(bucketDir, { recursive: true, force: true }).catch(() => undefined);
+        await rm(bucketDir, { recursive: true, force: true }).catch(() => undefined); // benign: GC 桶清理尽力而为。
       }
     }
   }
@@ -357,12 +357,12 @@ export function startStagingGc(options: StagingGcScheduleOptions): StagingGcRunn
 
   const timer = schedule(() => {
     if (stopped) return;
-    void runOnce().catch(() => undefined);
+    void runOnce().catch(() => undefined); // benign: 定时 GC 防未处理拒绝；失败下轮重试。
   }, minutes * 60_000);
   timer.unref?.();
   const firstPass = setTimeout(() => {
     if (stopped) return;
-    void runOnce(true).catch(() => undefined);
+    void runOnce(true).catch(() => undefined); // benign: 同上（force 趟）。
   }, 0);
   firstPass.unref?.();
 

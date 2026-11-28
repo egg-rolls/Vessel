@@ -64,7 +64,7 @@ export async function writeConfigRoot(
   try {
     await rename(tmp, configPath);
   } catch (error) {
-    await unlink(tmp).catch(() => {});
+    await unlink(tmp).catch(() => {}); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
     try {
       await writeFile(configPath, body, { encoding: 'utf-8', mode: 0o600 });
     } catch {

@@ -286,11 +286,15 @@ export function RunFailureCard({
 }) {
   const meta = formatErrorMeta(failure.errorMeta);
   const hint = describeGatewayErrorText(failure.error);
+  // q-error-e3（§3.9）：candidates「你是不是想选 X」复用既有 hint 文本位。
+  const candidates = failure.errorMeta?.candidates;
+  const hasCandidates = candidates !== undefined && candidates.length > 0;
   const error =
     failure.error !== undefined && failure.error.trim().length > 0 ? failure.error : undefined;
   // 「能不能展开」仍然只由**可展示内容**决定（错误原文 / 人话提示 / 来源行）：状态 chip 与
   // run id 只是展开体里的排头两行，不能因为它们把没有错误原文的纯行头变成可展开卡。
-  const expanded = error !== undefined || hint !== null || failure.source === 'session';
+  const expanded =
+    error !== undefined || hint !== null || failure.source === 'session' || hasCandidates;
   // 0.52：错误文本分级。内部 reason 翻成人话；原文只在 debug 口径（与内部事件同一开关）下露出。
   const { config: configState } = useConfigStoreApi();
   const humanized = humanizeRunError(error);
@@ -319,6 +323,11 @@ export function RunFailureCard({
         <pre className="run-error-body text-2xs text-muted">{error}</pre>
       )}
       {hint !== null && <p className="run-error-hint">{hint}</p>}
+      {hasCandidates && (
+        <p className="run-error-hint">
+          {t('agents.error.candidates', { list: candidates.join(', ') })}
+        </p>
+      )}
       {failure.source === 'session' && (
         <p className="run-error-hint">{t('chat.run.failure.fromRecord')}</p>
       )}

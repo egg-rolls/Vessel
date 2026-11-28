@@ -143,7 +143,7 @@ class FeishuChannelImpl implements FeishuPlugin {
       this.started = true;
       this.setConnected(true);
     } catch (error) {
-      await this.runner.stop().catch(() => undefined);
+      await this.runner.stop().catch(() => undefined); // benign: 关停尽力而为——失败不阻断停止流程。
       this.runner = undefined;
       const message = this.sanitize(errorMessage(error));
       this.lastError = message;
@@ -245,7 +245,7 @@ class FeishuChannelImpl implements FeishuPlugin {
     if (this.config.ackReaction) {
       void this.transport
         .react?.({ messageId: message.messageId, emojiType: FEISHU_ACK_EMOJI })
-        .catch(() => undefined);
+        .catch(() => undefined); // benign: 👀 回执 fire-and-forget（P1-A4 D4：无权限/失败静默降级，不影响回复）。
     }
 
     this.publish('channel.feishu.message.received', message.chatId, {
@@ -257,6 +257,8 @@ class FeishuChannelImpl implements FeishuPlugin {
 
     const accepted = this.queues.enqueue(message.chatId, () => this.process(message, agentText));
     if (!accepted) {
+      // benign: busy 拒绝本身已发生（背压拒收非丢消息）；courtesy 通知 best-effort。
+      // q-error-e3 批15（lead 裁定⑥）：插件无结构化日志通道 → C（不引 core/不新建通道）。
       void this.reply(message, this.texts.busy).catch(() => undefined);
     }
   }

@@ -45,6 +45,7 @@ import {
   type RunRecordStore,
   RunResumeError,
   type RunStatus,
+  type RunTrigger,
   type RuntimePermissionConfig,
   type ScheduledTask,
   type Scheduler,
@@ -249,6 +250,23 @@ export type InboxSourceLabel =
   | typeof BASH_JOB_INBOX_SOURCE;
 
 /** inbox 条目的来源：只有「人对 ask 的答复」与普通人类消息在这里分家。 */
+/**
+ * q-error-e3 §3.7：raw create 输入里的 triggered_by 归一（只认 request_id+rpc_method
+ * 字符串形状；非法/缺省 → undefined，缺省路径逐字节不变）。
+ */
+function readRunTrigger(value: unknown): RunTrigger | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.request_id !== 'string' || typeof record.rpc_method !== 'string') {
+    return undefined;
+  }
+  return {
+    request_id: record.request_id,
+    rpc_method: record.rpc_method,
+    ...(typeof record.agent_id === 'string' ? { agent_id: record.agent_id } : {}),
+  };
+}
+
 function inboxSourceOf(message: AgentMessage): string {
   if (message.origin === 'ask_answer') return ASK_ANSWER_INBOX_SOURCE;
   // 0.55：后台作业的结果不是「谁说的话」，用固定标签而不是 from（from 就是收件人自己）
@@ -841,6 +859,7 @@ class ExecutionUnitRunHandle implements RunHandle {
       this.resolveResult = resolve;
       this.rejectResult = reject;
     });
+    // benign: 调用方可以不 await result；防未处理拒绝（拒绝经 resolveResult 消费侧可见）。
     void this.result.catch(() => {});
   }
 
@@ -1660,7 +1679,12 @@ export class AgentServiceImpl implements AgentService {
       // q-startup-source-fix：创建者 = spawnedBy（工具层声明）或 parentId
       // （contractor 的 parent 缺省 owner）；peer 无 parentId，人 RPC 缺省
       // owner=human ⇒ 未登记 ⇒ deliverStartupPrompt 回落 system。
-      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy ?? parentId);
+      await this.deliverStartupPrompt(
+        record,
+        startupPrompt,
+        spawnedBy ?? parentId,
+        readRunTrigger(input.triggered_by),
+      );
     }
     return this.statusFor(record);
   }
@@ -1679,13 +1703,15 @@ export class AgentServiceImpl implements AgentService {
    * 由生产者声明，不从 system 来源统一推断）。不标 input_name：身份由
    * from / source / from_name 承载，与正常 send 同一条推导路。
    *
-   * best-effort：失败只 warn，不回滚已提交的创建（与
+   * 失败不回滚已提交的创建，但 **fail-loud**（q-error-e3 §3.8 A 桶，与 E2 restart
+   * 同款）：error 级日志 + `agent.create.startup_failed` 结构化事件（与
    * `agent.session_create.startup_failed` 同口径）。
    */
   private async deliverStartupPrompt(
     record: MemberRecord,
     startupPrompt: string,
     creatorId?: string,
+    triggeredBy?: RunTrigger,
   ): Promise<void> {
     // 只认本机登记的创建者：保留 principal（human / system）、已失效的 id、
     // 未登记的外部地址一律回落 system —— 宁可保持现状，不冒认 agent。
@@ -1702,14 +1728,33 @@ export class AgentServiceImpl implements AgentService {
           from,
           channel: 'direct',
           conversation_id: generateConversationId(this.newId),
+          // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+          ...(triggeredBy !== undefined ? { triggered_by: triggeredBy } : {}),
           strict: false,
         },
         { startup: true },
       );
     } catch (error) {
-      this.logger.warn('agent.create.startup_failed', {
+      // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+      // 同款（裁定 F）：create 本身不回滚；startup prompt 投递失败必须 run 面可见
+      // （0.56 send-first 口径：绝不静默丢掉用户刚发的那句话）。
+      const startupError = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'agent.create.startup',
+        details: this.spawnFailureDetails(record, error),
+      });
+      this.logger.error('agent.create.startup_failed', {
         agent_id: record.id,
+        session_id: record.sessionId,
+        error_id: startupError.errorId,
+        code: 'spawn_failed',
         error: errorText(error),
+      });
+      this.emitForSession('agent.create.startup_failed', record, record.sessionId, {
+        error: errorText(error),
+        error_id: startupError.errorId,
+        code: 'spawn_failed',
+        operation: 'agent.create.startup',
       });
     }
   }
@@ -2010,7 +2055,12 @@ export class AgentServiceImpl implements AgentService {
     if (startupPrompt !== undefined) {
       // q-startup-source-fix：只认 spawnedBy —— seeded 路径的 record.parentId
       // 是**源**的 parent，不是本次创建的创建者，不能拿来兜底。
-      await this.deliverStartupPrompt(record, startupPrompt, spawnedBy);
+      await this.deliverStartupPrompt(
+        record,
+        startupPrompt,
+        spawnedBy,
+        readRunTrigger(input.triggered_by),
+      );
     }
     return this.statusFor(record);
   }
@@ -3126,6 +3176,7 @@ export class AgentServiceImpl implements AgentService {
       return true;
     }
     this.noticeDirty.add(record.id);
+    // benign: 补投递 fire-and-forget；投递失败内部 deliver_failed warn + redelivery 留队列重试。
     void this.dispatchInbox(record.id).catch(() => {});
     return true;
   }
@@ -4061,6 +4112,7 @@ export class AgentServiceImpl implements AgentService {
       this.retryHeldMessages(entry);
     }
     if (this.noticeDirty.has(agentId)) {
+      // benign: 闸后补投递 fire-and-forget；失败内部 deliver_failed warn + 留队列重试。
       void this.dispatchInbox(agentId).catch(() => {});
     }
   }
@@ -5132,6 +5184,7 @@ export class AgentServiceImpl implements AgentService {
     // 投不进去才发摘要唤醒（判据见 `dispatchInbox`）。这就是「多条 ⇒ 每轮抽一条队头」
     // 的链条：直投成功时 `noticeDirty` 保持点亮，下一轮收口再来一次，直到队列空。
     if (this.noticeDirty.has(handle.agentId)) {
+      // benign: run 收口补投递 fire-and-forget；失败内部 deliver_failed warn + 留队列重试。
       void this.dispatchInbox(handle.agentId).catch(() => {});
     }
   }
@@ -6216,6 +6269,7 @@ export class AgentServiceImpl implements AgentService {
     const next = previous.then(op, op);
     this.executionUnitOps.set(
       key,
+      // benign: 串行链尾防未处理拒绝；调用方拿到的 next 仍会 reject（错误可见）。
       next.catch(() => {}),
     );
     return next;
@@ -6380,6 +6434,8 @@ export class AgentServiceImpl implements AgentService {
         ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
         conversation_id: conversationId,
         ...(refs.length > 0 ? { refs } : {}),
+        // q-error-e3 §3.7：RPC correlation 透传（E2 同款 additive，缺省不变）。
+        ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
         strict: false,
       });
 
@@ -6743,6 +6799,7 @@ export class AgentServiceImpl implements AgentService {
       // activate 时 startup_prompt 是**人写的开场白**，一个字节都不标 —— 那份裁定
       // （按正文渲染）继续成立，只是不再覆盖 agent 写的交接书。
       const handoffName = allowActiveRun ? rotateHandoffInputName(epoch) : undefined;
+      const startupTrigger = readRunTrigger(raw.triggered_by);
       try {
         await this.admitInternal(
           {
@@ -6752,6 +6809,8 @@ export class AgentServiceImpl implements AgentService {
             from: SYSTEM_PRINCIPAL,
             channel: 'direct',
             conversation_id: generateConversationId(this.newId),
+            // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+            ...(startupTrigger !== undefined ? { triggered_by: startupTrigger } : {}),
             strict: false,
           },
           {
@@ -6760,9 +6819,26 @@ export class AgentServiceImpl implements AgentService {
           },
         );
       } catch (error) {
-        this.logger.warn('agent.session_create.startup_failed', {
+        // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+        // 同款（裁定 F）：session_create 本身不回滚；startup prompt 投递失败必须
+        // run 面可见——结构化失败事件 + error 级日志。
+        const startupError = new AgentError('spawn_failed', errorText(error), {
+          cause: error,
+          operation: 'agent.session_create.startup',
+          details: this.spawnFailureDetails(record, error),
+        });
+        this.logger.error('agent.session_create.startup_failed', {
           agent_id: record.id,
+          session_id: newSessionId,
+          error_id: startupError.errorId,
+          code: 'spawn_failed',
           error: errorText(error),
+        });
+        this.emitForSession('agent.session_create.startup_failed', record, newSessionId, {
+          error: errorText(error),
+          error_id: startupError.errorId,
+          code: 'spawn_failed',
+          operation: 'agent.session_create.startup',
         });
       }
     }
@@ -7192,6 +7268,7 @@ export class AgentServiceImpl implements AgentService {
       const startupPrompt =
         raw.startup_prompt === undefined ? undefined : readContent(raw, 'startup_prompt');
       if (startupPrompt !== undefined) {
+        const activateTrigger = readRunTrigger(raw.triggered_by);
         try {
           await this.admitInternal(
             {
@@ -7201,14 +7278,33 @@ export class AgentServiceImpl implements AgentService {
               from: SYSTEM_PRINCIPAL,
               channel: 'direct',
               conversation_id: generateConversationId(this.newId),
+              // q-error-e3 §3.7：RPC correlation（缺省不写键，逐字节不变）。
+              ...(activateTrigger !== undefined ? { triggered_by: activateTrigger } : {}),
               strict: false,
             },
             { startup: true },
           );
         } catch (error) {
-          this.logger.warn('agent.session_activate.startup_failed', {
+          // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+          // 同款（裁定 F）：activate 本身不回滚；startup prompt 投递失败必须 run 面
+          // 可见——结构化失败事件 + error 级日志。
+          const startupError = new AgentError('spawn_failed', errorText(error), {
+            cause: error,
+            operation: 'agent.session_activate.startup',
+            details: this.spawnFailureDetails(record, error),
+          });
+          this.logger.error('agent.session_activate.startup_failed', {
             agent_id: record.id,
+            session_id: sessionId,
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
             error: errorText(error),
+          });
+          this.emitForSession('agent.session_activate.startup_failed', record, sessionId, {
+            error: errorText(error),
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
+            operation: 'agent.session_activate.startup',
           });
         }
       }
@@ -7290,6 +7386,7 @@ export class AgentServiceImpl implements AgentService {
       return;
     }
     const entry = this.findEntry(record.id, sessionId);
+    // benign: 等 spawning 收口但不消费其错误（spawn 失败经 startup 失败事件可见；下方 active 判定照常）。
     if (entry?.spawning !== undefined) await entry.spawning.catch(() => {});
     if (entry?.active !== undefined) {
       throw new AgentError('conflict', `session_busy: ${sessionId}`);

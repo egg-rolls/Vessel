@@ -189,7 +189,7 @@ export async function stageUpdate(options: StageUpdateOptions): Promise<StageOut
 
     const actual = hash.digest('hex').toLowerCase();
     if (actual !== expected) {
-      await unlink(temp).catch(() => undefined);
+      await unlink(temp).catch(() => undefined); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
       return {
         staged: false,
         reason: `sha256 mismatch (expected ${expected}, got ${actual})`,
@@ -207,8 +207,8 @@ export async function stageUpdate(options: StageUpdateOptions): Promise<StageOut
     await writeFile(markerPath, JSON.stringify(staged, null, 2), { encoding: 'utf8', mode: 0o600 });
     return { staged: true, path: target, version: manifest.version, sha256: actual };
   } catch (error) {
-    await handle?.close().catch(() => undefined);
-    await unlink(temp).catch(() => undefined);
+    await handle?.close().catch(() => undefined); // benign: 错误路径句柄关闭，失败不掩盖原始错误。
+    await unlink(temp).catch(() => undefined); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
     return {
       staged: false,
       reason: error instanceof Error ? error.message : String(error),

@@ -224,7 +224,7 @@ export async function statusCommand(options: StatusCommandOptions = {}): Promise
     } catch (error) {
       attachError = error instanceof Error ? error.message : String(error);
     } finally {
-      await targetResult.target.close().catch(() => undefined);
+      await targetResult.target.close().catch(() => undefined); // benign: 探针客户端关闭。
     }
   } else if (explicitConnect) {
     return { exitCode: 1, stdout: '', stderr: targetResult.error };

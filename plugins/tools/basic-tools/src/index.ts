@@ -890,7 +890,7 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump 
   return {
     done,
     cancel: () => {
-      reader.cancel().catch(() => {});
+      reader.cancel().catch(() => {}); // benign: 管道强制关闭——已读内容仍可用（邻注）。
     },
   };
 }
@@ -2206,7 +2206,7 @@ function notifyAsyncBashStarted(job: AsyncBashJob): void {
   };
   try {
     const result = sink(start);
-    if (result instanceof Promise) result.catch(() => {});
+    if (result instanceof Promise) result.catch(() => {}); // benign: 占位插入失败不影响作业（邻注：完成时退回旧投递路径）。
   } catch {
     // 占位插入失败不影响作业本身（完成时 updateBashJob 找不到占位会退回旧投递路径）。
   }

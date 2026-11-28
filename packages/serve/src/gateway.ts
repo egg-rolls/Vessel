@@ -1625,6 +1625,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
    */
   let configProvider: string | undefined;
   let configModel: string | undefined;
+  /**
+   * q-error-e3（§3.8 B 桶，D9）：config 层读取失败 → 保留上一次值并标 stale。
+   * 降级事件**边沿触发**（fresh→stale 一次），避免 nodeInfo 高频调用下无界刷屏；
+   * 恢复成功即复位。通道 = logEvent 结构化行（E2 drain 证据同款，D7）。
+   */
+  let configCapabilitiesStale = false;
+  const markCapabilitiesStale = (reason: string): void => {
+    if (configCapabilitiesStale) return;
+    configCapabilitiesStale = true;
+    logEvent('warn', 'degradation.used', {
+      component: 'gateway.capabilities',
+      from: 'live',
+      to: 'stale',
+      reason,
+    });
+  };
   const refreshConfigCapabilities = (): void => {
     if (opts.config === undefined) return;
     const apply = (snapshot: ConfigSnapshotLike): void => {
@@ -1634,18 +1650,25 @@ export function startGateway(opts: GatewayOptions): Gateway {
         typeof provider?.name === 'string' && provider.name !== '' ? provider.name : undefined;
       configModel =
         typeof provider?.model === 'string' && provider.model !== '' ? provider.model : undefined;
+      configCapabilitiesStale = false;
     };
     try {
       const result = opts.config.snapshot(defaultTenantId);
       if (result instanceof Promise) {
-        void result.then(apply, () => {
-          // 读取失败保留上一次的值（槽可选，不影响 health 形状）。
+        void result.then(apply, (error: unknown) => {
+          // 读取失败保留上一次的值（槽可选，不影响 health 形状）+ 审计降级。
+          markCapabilitiesStale(
+            `config snapshot read failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
         });
       } else {
         apply(result);
       }
-    } catch {
-      // 同步抛错同样只保留旧值。
+    } catch (error) {
+      // 同步抛错同样只保留旧值 + 审计降级。
+      markCapabilitiesStale(
+        `config snapshot read threw: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   };
   refreshConfigCapabilities();
@@ -1702,6 +1725,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         // 可选槽：当前 config 的 provider/model（未注入 config 时不填）。
         ...(configProvider !== undefined ? { provider: configProvider } : {}),
         ...(configModel !== undefined ? { model: configModel } : {}),
+        // q-error-e3（D9 + lead 红线⑤裁定）：注入 config 时恒报 source——正常读
+        // 'config-layer'，读失败 'stale'（边沿触发降级事件保持）；'registry' 留 hardening。
+        ...(opts.config !== undefined
+          ? { source: configCapabilitiesStale ? ('stale' as const) : ('config-layer' as const) }
+          : {}),
         max_concurrency: 1,
         protocol: PROTOCOL_VERSION,
       },
@@ -3102,8 +3130,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
       try {
         const resolved = await opts.agent.resolve(ws.data.sessionId);
         ws.data.inboxAgentId = resolved?.id;
-      } catch {
-        // 降级不报错：归属解析失败只是少收 inbox 变更信号，会话内帧不受影响。
+      } catch (error) {
+        // q-error-e3（§3.8 B 桶）：可选 inbox 变更信号降级——会话内帧不受影响。
+        // 有界：每次 subscribe 失败一条（用户动作驱动）；结构化降级事件可观测。
+        logEvent('warn', 'degradation.used', {
+          component: 'gateway.ws_subscribe.inbox_agent',
+          from: 'inbox+session',
+          to: 'session-only',
+          reason: `inbox agent resolve failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
       }
     }
     ws.data.types = Array.isArray(params.types)

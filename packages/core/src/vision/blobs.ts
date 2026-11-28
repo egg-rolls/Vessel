@@ -203,6 +203,7 @@ export async function scanImageBlobs(root?: string): Promise<ImageBlobStats> {
     const names = await readdir(dir).catch(() => [] as string[]);
     for (const name of names) {
       const file = path.join(dir, name);
+      // benign: 统计探针——stat 失败跳过该文件，不影响其余统计（GC 输入尽力而为）。
       const info = await stat(file).catch(() => undefined);
       if (info === undefined || !info.isFile()) continue;
       const sha256 = name.split('.')[0] ?? '';
@@ -318,6 +319,7 @@ export async function collectImageBlobs(
     result.bytes += entry.bytes;
     live -= entry.bytes;
     if (options.dryRun === true) continue;
+    // benign: GC 尽力删除——失败仅意味着文件残留（下轮再收），不中断回收流程。
     await rm(entry.path, { force: true }).catch(() => undefined);
   }
   result.totalBytes = Math.max(live, 0);

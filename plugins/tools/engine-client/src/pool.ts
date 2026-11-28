@@ -401,7 +401,7 @@ export function createPoolTransport(options: PoolTransportOptions): PoolTranspor
       if (slot.breaker.state === 'open') return;
       if (slot.breaker.state === 'half-open' && slot.breaker.probeInFlight) return;
       // ping 双角色（解释 (a)）：data 连接心跳；half-open 时充当单探测。
-      void sendRequest(slot, 'ping', {}, HEARTBEAT_TIMEOUT_MS).catch(() => {});
+      void sendRequest(slot, 'ping', {}, HEARTBEAT_TIMEOUT_MS).catch(() => {}); // benign: 心跳探针——失败经 breaker 状态机收口。
     }, HEARTBEAT_INTERVAL_MS);
   }
 

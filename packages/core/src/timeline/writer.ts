@@ -674,6 +674,7 @@ export class TimelineWriter {
     this.clearIdleTimer();
     this.blocks.close();
     await this.holes.close();
+    // benign: 关闭路径尽力释放 WAL 句柄，失败不抛（数据已 flush）。
     await this.walHandle.close().catch(() => {});
   }
 
@@ -828,6 +829,7 @@ export class TimelineWriter {
     const incremental = await this.tryIncrementalRecovery();
     if (!incremental) await this.fullRecovery();
 
+    // benign: 大小探针——stat 失败按 0（恢复后重新计量）。
     const info = await stat(this.walPath).catch(() => undefined);
     this.walSize = info?.size ?? 0;
     this.walHandle = await open(this.walPath, 'a', 0o600);
@@ -1204,10 +1206,12 @@ export class TimelineWriter {
       this.options.beforeSync?.('manifest');
       await handle.sync();
     } catch (error) {
+      // benign: 错误路径关闭句柄，失败不掩盖原始错误（回滚后重抛）。
       await handle.close().catch(() => {});
       await this.rollbackTrailingAppend(this.manifestPath, start, buffer.length);
       throw error;
     }
+    // benign: 成功路径关闭句柄，失败不掩盖已 sync 的写入结果。
     await handle.close().catch(() => {});
   }
 
@@ -1223,6 +1227,7 @@ export class TimelineWriter {
     written: number,
   ): Promise<void> {
     if (start < 0) return;
+    // benign: 回滚判据探针——stat 读不出来就不截断（保守出口，见函数注释）。
     const size = (await stat(path).catch(() => undefined))?.size;
     if (size === undefined || size !== start + written) return;
     try {
@@ -1289,10 +1294,12 @@ export class TimelineWriter {
       this.options.beforeSync?.('blob');
       await handle.sync();
     } catch (error) {
+      // benign: blob 错误路径关闭/清理，失败不掩盖原始错误（重抛）。
       await handle?.close().catch(() => {});
       await unlink(path).catch(() => {});
       throw error;
     }
+    // benign: blob 成功路径关闭句柄，失败不掩盖已 sync 的写入结果。
     await handle.close().catch(() => {});
     await fsyncDirectory(dirname(path));
     return { blob: true, bytes: payload.length, crc32: crc32Hex(payload) };
@@ -1513,6 +1520,7 @@ export class TimelineWriter {
         try {
           await truncateHandle.truncate(before);
         } finally {
+          // benign: 回滚 truncate 句柄关闭，失败不掩盖回滚结果。
           await truncateHandle.close().catch(() => {});
         }
       } catch {
@@ -1662,6 +1670,7 @@ export class TimelineWriter {
     if (publish === undefined) return;
     try {
       const result = publish(record);
+      // benign: 异步消费者失败只影响它自己（防未处理拒绝）；事实不回滚、发布不断。
       if (result !== undefined) void result.catch(() => {});
     } catch {
       // 消费者异常不能回滚事实，也不能打断后续发布。
@@ -1868,10 +1877,12 @@ export class TimelineWriter {
           this.options.beforeSync?.('timeline');
           await handle.sync();
         } catch (error) {
+          // benign: 归档错误路径关闭句柄，失败不掩盖原始错误（回滚后重抛）。
           await handle.close().catch(() => {});
           await this.rollbackTrailingAppend(this.timelinePath, start, buffer.length);
           throw error;
         }
+        // benign: 归档成功路径关闭句柄，失败不掩盖已 sync 的写入结果。
         await handle.close().catch(() => {});
         this.archiveWatermark = Math.max(
           this.archiveWatermark,
@@ -1904,6 +1915,7 @@ export class TimelineWriter {
    * 仍在 {@link appendArchiveSegment} 里每次读 —— 跨进程写者的那一段靠尾窗 + 归档锁兜。
    */
   private async archiveExistingMaxSeq(): Promise<number> {
+    // benign: 缓存戳探针——stat 失败戳为空（强制重新整份读，保守）。
     const info = await stat(this.timelinePath).catch(() => undefined);
     const stamp = info === undefined ? '' : `${String(info.size)}:${String(info.mtimeMs)}`;
     if (this.archiveValidated && stamp === this.archiveStamp) {
@@ -1925,6 +1937,7 @@ export class TimelineWriter {
 
   /** 本进程刚成功追加归档段后刷新校验缓存（新戳 + 当前水位 = 归档副本最大 seq）。 */
   private async refreshArchiveCache(): Promise<void> {
+    // benign: 缓存戳探针——stat 失败戳为空（下次强制重新校验，保守）。
     const info = await stat(this.timelinePath).catch(() => undefined);
     this.archiveStamp = info === undefined ? '' : `${String(info.size)}:${String(info.mtimeMs)}`;
     this.archiveValidatedMaxSeq = this.archiveWatermark;
@@ -2046,7 +2059,7 @@ export class TimelineWriter {
         if (this.closed) return;
         void this.enqueue(async () => {
           await this.flushPendingChunks();
-        }).catch(() => {});
+        }).catch(() => {}); // benign: 定时 flush 防未处理拒绝；失败经 flushPendingChunks→failPendingChunks 登记洞/污点可见。
       },
       Math.max(1, this.chunkFlushMs - CHUNK_FLUSH_LEAD_MS),
     );

@@ -209,7 +209,7 @@ async function publishLock(lockPath: string, content: string): Promise<void> {
   try {
     await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     // Windows 忽略 mode；best-effort chmod 保证 POSIX 上租约是 0600。
-    await chmod(tmpPath, 0o600).catch(() => undefined);
+    await chmod(tmpPath, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask），writeFile 已设 mode。
     try {
       await link(tmpPath, lockPath);
       return;
@@ -218,16 +218,16 @@ async function publishLock(lockPath: string, content: string): Promise<void> {
       // 回退：文件系统不支持硬链接。
     }
   } finally {
-    await unlink(tmpPath).catch(() => {});
+    await unlink(tmpPath).catch(() => {}); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
   }
 
   const handle = await open(lockPath, 'wx', 0o600);
   try {
     await handle.writeFile(content, 'utf8');
-    await chmod(lockPath, 0o600).catch(() => undefined);
+    await chmod(lockPath, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask）。
   } catch (error) {
     await handle.close();
-    await unlink(lockPath).catch(() => {});
+    await unlink(lockPath).catch(() => {}); // benign: 锁释放尽力而为——残留由 stale TTL 兜底。
     throw error;
   }
   await handle.close();
@@ -270,7 +270,7 @@ async function pruneMembers(params: {
         });
       } else if (live === undefined) {
         // 宽限内不可解析：保守视为仍在写入，用 mtime 作为 started_at。
-        const stats = await stat(path).catch(() => undefined);
+        const stats = await stat(path).catch(() => undefined); // benign: stale 判定探针——读不出保守不回收。
         live = { pid: 0, started_at: stats?.mtimeMs ?? now, host };
       }
       continue;
@@ -341,7 +341,7 @@ async function removeMember(memberPath: string, info: DataLockInfo): Promise<voi
   ) {
     return;
   }
-  await unlink(memberPath).catch(() => {});
+  await unlink(memberPath).catch(() => {}); // benign: 成员记录清理尽力而为。
 }
 
 type ReclaimOutcome = 'reclaimed' | 'not_stale' | 'busy';
@@ -376,7 +376,7 @@ async function reclaimStaleLock(params: {
     if (!(await reclaimGuardIsStale(guardPath, now(), guardStaleMs))) {
       return { outcome: 'busy' };
     }
-    await unlink(guardPath).catch(() => {});
+    await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
     try {
       guard = await open(guardPath, 'wx');
     } catch (retryError) {
@@ -397,9 +397,9 @@ async function reclaimStaleLock(params: {
     return { outcome: 'reclaimed' };
   } finally {
     if (guard) {
-      await guard.close().catch(() => {});
+      await guard.close().catch(() => {}); // benign: guard 句柄关闭，失败不掩盖结果。
       // 守卫本身是空文件，删除失败无需处理。
-      await unlink(guardPath).catch(() => {});
+      await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
     }
   }
 }

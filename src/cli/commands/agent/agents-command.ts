@@ -104,7 +104,7 @@ export async function agentsCommand(options: AgentsCommandOptions = {}): Promise
       stderr: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    await target.close().catch(() => undefined);
+    await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 
   const agents = extractAgentList(result);

@@ -164,7 +164,7 @@ async function nodeProcess(
   env: Record<string, string | undefined>,
   now: number,
 ): Promise<PsProcess> {
-  const record = await readGatewayPidRecord(entry.data_dir).catch(() => null);
+  const record = await readGatewayPidRecord(entry.data_dir).catch(() => null); // benign: pid record 探针——读不出按无记录。
   const identityMismatch =
     record !== null &&
     entry.node_id !== undefined &&
@@ -251,7 +251,7 @@ async function collectProcesses(
     for (const entry of snapshot.entries) rows.push(gatewayProcess(entry, now));
   }
   if (want('node')) {
-    const load = await loadNodeRegistry(dataDir).catch(() => null);
+    const load = await loadNodeRegistry(dataDir).catch(() => null); // benign: registry 探针——读不出按无注册。
     let entries: NodeRegistryEntry[];
     if (load !== null && load.kind === 'ready') {
       entries = load.registry.nodes;

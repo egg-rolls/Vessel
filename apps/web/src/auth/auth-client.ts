@@ -236,7 +236,7 @@ async function postJson(
       signal,
     }),
   );
-  const parsed: unknown = await response.json().catch(() => null);
+  const parsed: unknown = await response.json().catch(() => null); // benign: JSON 解析探针——非 JSON 回落 null，下游校验显式失败。
   const record =
     typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   return { status: response.status, body: record };
@@ -319,13 +319,13 @@ export async function setInitialPassword(password: string, baseUrl = ''): Promis
       signal,
     }),
   );
-  const parsed: unknown = await response.json().catch(() => null);
+  const parsed: unknown = await response.json().catch(() => null); // benign: JSON 解析探针——非 JSON 回落 null，下游校验显式失败。
   const body =
     typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   setCsrfToken(null); // 服务端轮换了 sid/CSRF
   if (response.ok) {
     // 轮换后旧 CSRF 立刻作废：紧接着的 /auth/totp/enroll 需要新的同步令牌。
-    await fetchCsrfToken(baseUrl).catch(() => null);
+    await fetchCsrfToken(baseUrl).catch(() => null); // benign: CSRF 预热尽力而为——失败后续请求重取。
   }
   return toLoginResult(response.status, body);
 }
@@ -347,7 +347,7 @@ export async function finishSetup(baseUrl = ''): Promise<LoginResult> {
       signal,
     }),
   );
-  const parsed: unknown = await response.json().catch(() => null);
+  const parsed: unknown = await response.json().catch(() => null); // benign: JSON 解析探针——非 JSON 回落 null，下游校验显式失败。
   const body =
     typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   setCsrfToken(null);
@@ -371,7 +371,7 @@ export async function enrollTotp(baseUrl = ''): Promise<EnrollResult> {
       signal,
     }),
   );
-  const parsed: unknown = await response.json().catch(() => null);
+  const parsed: unknown = await response.json().catch(() => null); // benign: JSON 解析探针——非 JSON 回落 null，下游校验显式失败。
   const body =
     typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
   const error = typeof body.error === 'string' ? body.error : undefined;

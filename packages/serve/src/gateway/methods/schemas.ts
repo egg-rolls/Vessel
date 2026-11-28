@@ -743,6 +743,30 @@ export const metricsSnapshotSchema = {
       },
     },
     updated_at: { type: 'integer' },
+    // q-error-e3（§3.10）：additive，**不进 required**；缺省 = 无错误/降级事件。
+    errors: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['code', 'category', 'count'],
+        properties: {
+          code: { type: 'string' },
+          category: { type: 'string' },
+          count: { type: 'integer', minimum: 0 },
+        },
+      },
+    },
+    degradations: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['component', 'count'],
+        properties: {
+          component: { type: 'string' },
+          count: { type: 'integer', minimum: 0 },
+        },
+      },
+    },
   },
 };
 

@@ -8,7 +8,7 @@
  * @module @vessel-agent/serve
  */
 
-import type { MessageRef } from '@vessel-agent/core';
+import type { MessageRef, RunTrigger } from '@vessel-agent/core';
 
 /** 团队元数据（teams.list / teams.get 的 `team`）。 */
 export interface TeamSummaryLike {
@@ -246,6 +246,11 @@ export interface TeamControlLike {
     conversation_id?: string;
     /** 0.21：跨节点报文元数据 */
     federation?: TeamLogFederationLike;
+    /**
+     * q-error-e3 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+     * teams.post handler 从 ctx 构建；透传进 @ 投递的 dispatch → admit（缺省不变）。
+     */
+    triggered_by?: RunTrigger;
   }): Promise<TeamPostResultLike>;
   /**
    * 删除（wire 仍叫 retract）：追加 tombstone（日志保留原消息；目标须在可读窗口内），

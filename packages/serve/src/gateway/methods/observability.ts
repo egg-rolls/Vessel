@@ -50,6 +50,7 @@ const EVENTS_LIST_MAX_LIMIT = 500;
  * - `since_seq` 排他：`seq > since_seq`（现在是 `timeline_seq`）；
  * - `since_ts` 含（`ts >= since_ts`，与旧实现一致）；
  * - `types` 精确匹配、`type_prefix` 前缀匹配，两者互斥（调用方已校验）；
+ * - `error_id` 精确匹配 envelope `data.error_id`（q-error-e3 additive，E2 决策 H）；
  * - `limit` 缺省 50、硬顶 500、`0` ⇒ 空数组。
  */
 function selectEventsListPage(
@@ -68,12 +69,21 @@ function selectEventsListPage(
     ? (params.types.filter((type): type is string => typeof type === 'string') as string[])
     : undefined;
   const typePrefix = typeof params.type_prefix === 'string' ? params.type_prefix : undefined;
+  const errorId = typeof params.error_id === 'string' ? params.error_id : undefined;
   const selected: TimelineWireEvent[] = [];
   for (const event of events) {
     if (sinceSeq !== undefined && event.seq <= sinceSeq) continue;
     if (sinceTs !== undefined && event.ts < sinceTs) continue;
     if (types !== undefined && !types.includes(event.type)) continue;
     if (typePrefix !== undefined && !event.type.startsWith(typePrefix)) continue;
+    if (errorId !== undefined) {
+      const data = event.data;
+      const eventErrorId =
+        typeof data === 'object' && data !== null && !Array.isArray(data)
+          ? (data as Record<string, unknown>).error_id
+          : undefined;
+      if (eventErrorId !== errorId) continue;
+    }
     selected.push(event);
     if (selected.length >= limit) break;
   }
@@ -106,6 +116,8 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
           since_ts: { type: 'integer', minimum: 0 },
           types: { type: 'array', items: { type: 'string' } },
           type_prefix: { type: 'string' },
+          // q-error-e3（E2 决策 H 候补）：按 envelope error_id 过滤（数据已落盘）。
+          error_id: { type: 'string' },
           limit: { type: 'integer', minimum: 0, maximum: 500 },
         },
       },

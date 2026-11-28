@@ -328,7 +328,10 @@ export function renderGlobalHelp(): string {
       t('help.cmd.federationTeamInfo'),
     ],
     ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
-    ['vessel errors [--json]', t('help.cmd.errors')],
+    [
+      'vessel errors [--connect <url>] [--json] [--id <error_id> | --run <run_id>]',
+      t('help.cmd.errors'),
+    ],
     [
       'vessel gateway start [--foreground] [--instance <name>] [--data-dir <path>]',
       t('help.cmd.gatewayStart'),
@@ -418,7 +421,7 @@ export function renderGlobalHelp(): string {
     ['vessel dev reset [--yes] [--dry-run] [--json]', t('help.cmd.devReset')],
   ];
   const meta: Array<[string, string]> = [
-    ['vessel doctor [--deep]', t('help.cmd.doctor')],
+    ['vessel doctor [--deep] [--errors]', t('help.cmd.doctor')],
     ['vessel logs tail [--json] [--lines N]', t('help.cmd.logsTail')],
     ['vessel --resume-run', t('help.cmd.resumeRunList')],
     ['vessel update [--yes]', t('help.cmd.update')],

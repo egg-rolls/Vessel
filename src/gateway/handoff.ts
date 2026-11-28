@@ -73,20 +73,26 @@ export async function writeHandoffMarker(
   await writeFile(tmp, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
   try {
     await chmod(tmp, 0o600);
-  } catch {}
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），writeFile 已设 mode 0o600。 */
+  }
   try {
     await rename(tmp, filePath);
   } catch (error) {
+    // benign: rename 失败清理临时文件，失败不掩盖原始错误（重抛）。
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
   try {
     await chmod(filePath, 0o600);
-  } catch {}
+  } catch {
+    /* benign: chmod 兜底（Windows/umask），rename 保留 tmp 的 mode。 */
+  }
 }
 
 /** 删除 marker（非 handoff 停止前清理陈旧残留；不存在时静默）。 */
 export async function clearHandoffMarker(dataDir: string, instance?: string): Promise<void> {
+  // benign: 清理陈旧残留，不存在/失败静默（下次启动重写）。
   await unlink(handoffMarkerPath(dataDir, instance)).catch(() => undefined);
 }
 
@@ -107,6 +113,7 @@ export async function consumeHandoffMarker(
   } catch {
     return false;
   }
+  // benign: 消费后清理 marker，失败仅残留（消费侧按 platform_pid 存活校验兜底）。
   await unlink(filePath).catch(() => undefined);
   let parsed: unknown;
   try {

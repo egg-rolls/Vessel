@@ -117,7 +117,7 @@ export class McpConnectionManager {
     const closing: Promise<void>[] = [];
     for (const old of this.entries) {
       if (old.connection !== undefined && !carried.has(old.connection)) {
-        closing.push(old.connection.close().catch(() => {}));
+        closing.push(old.connection.close().catch(() => {})); // benign: 旧连接关闭尽力而为，失败不阻断替换。
       }
     }
     this.entries = next;
@@ -160,7 +160,7 @@ export class McpConnectionManager {
     if (entry.configError !== undefined) throw new Error(entry.configError);
 
     const previous = entry.connection;
-    if (previous !== undefined) await previous.close().catch(() => {});
+    if (previous !== undefined) await previous.close().catch(() => {}); // benign: 旧连接关闭尽力而为。
     const connection = new McpServerConnection(entry.config, this.events);
     entry.connection = connection;
     await connection.connect();
