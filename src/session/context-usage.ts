@@ -96,6 +96,15 @@ export interface SessionEventTailReader {
     types: readonly string[],
     opts?: { limit?: number; maxBytes?: number },
   ): Promise<{ records: SessionEventRecord[] }>;
+  /**
+   * 按索引精确定位该 type 的**最新一条**事实记录（可选能力；读不出 ⇒ `undefined`）。
+   *
+   * 尾窗回扫的触达上界是距尾部 4 MiB：只发过一次、被去重压住的事件（`prompt.system_context`）
+   * 在长会话里会老化出尾窗。实现方（`TimelineEventLog.readLatestOfType`）用 `type.idx`
+   * 定位 + 范围读精确取那一条，触达与日志大小无关；索引缺失/损坏/滞后 ⇒ `undefined`，
+   * 调用方退回 `readTailMatches` 兜底。缺省（假读口 / 旧实现没有这个方法）= 只有尾窗能力。
+   */
+  readLatestOfType?(sessionId: string, type: string): Promise<SessionEventRecord | undefined>;
 }
 
 /** 线上形状（与 `packages/serve` 的 `SessionContextUsage` 一致）。 */
