@@ -11,7 +11,7 @@ paths: [src/cli/commands/hub-command.ts, src/hub/node-state.ts, src/hub/server.t
 > `hub.auto_start`（缺省 true）时自动拉起本地 hub（已有活实例 adopt），`gateway stop` 缺省只停
 > 平台层（见 [GATEWAY](GATEWAY.md)）。控制面只有 **node → hub** 出站方向；协议 / join 判定 /
 > 派生来源的事实家见 [federation-hub](../architecture/federation-hub.md)，配置键见
-> [CONFIG §2.13](CONFIG.md)。
+> [config-hub](config-hub.md)。
 
 ## 命令（只写不跑）
 
