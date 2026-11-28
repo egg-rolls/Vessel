@@ -38,6 +38,13 @@ export interface NodeInfo {
     tools: string[];
     provider?: string;
     model?: string;
+    /**
+     * q-error-e3（§3.8 additive，D9）：provider/model 槽的数据来源标注。
+     * 现实现读 config 层；读失败降级时标 `'stale'`（保留上一次值）。
+     * `'registry'` 值保留给 hardening 期的行为修复（本期不做）。
+     * **缺省（正常读取）省略字段**——nodeInfo 默认 payload 逐字节不变（红线⑤）。
+     */
+    source?: 'registry' | 'config-layer' | 'stale';
     max_concurrency: 1;
     protocol: 1;
   };
