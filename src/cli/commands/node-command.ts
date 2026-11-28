@@ -27,6 +27,7 @@ import {
   cleanupGatewayStateEntry,
   collectGatewayState,
   DEFAULT_GATEWAY_INSTANCE,
+  defaultCommandRunner,
   type GatewayPidRecord,
   type GatewayStateEntry,
   isProcessAlive,
@@ -399,8 +400,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
       ),
     );
     try {
-      if (context.platform === 'win32') process.kill(record.pid);
-      else process.kill(record.pid, 'SIGKILL');
+      await killNodeTree(context.platform, record.pid, 'SIGKILL');
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
         printErr(ui.err(t('gateway.stopFailed', { pid: record.pid, detail: String(error) })));
@@ -411,7 +411,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   }
 
   // 优雅（默认）：进程内 drain-to-quiesce（fence + 不限时等活跃 run 自然跑完）
-  // + 停止方不限时等死 + 5s 进度。Windows 上外部 process.kill 是无条件终止，
+  // + 停止方不限时等死 + 5s 进度。Windows 上外部强杀（taskkill /T /F）是无条件终止，
   // 不先走这一步，在跑 run 会被直接切断（只能靠启动 sweep 对账）。
   let graceful = await shutdownGateway({
     record,
@@ -497,8 +497,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
         ),
       );
       try {
-        if (context.platform === 'win32') process.kill(record.pid);
-        else process.kill(record.pid, 'SIGKILL');
+        await killNodeTree(context.platform, record.pid, 'SIGKILL');
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
           printErr(ui.err(t('gateway.stopFailed', { pid: record.pid, detail: String(error) })));
@@ -524,8 +523,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     formatEventLine('node.drain.skipped', { pid: record.pid, reason: skippedReason }),
   );
   try {
-    if (context.platform === 'win32') process.kill(record.pid);
-    else process.kill(record.pid, 'SIGTERM');
+    await killNodeTree(context.platform, record.pid, 'SIGTERM');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
       printErr(ui.err(t('gateway.stopFailed', { pid: record.pid, detail: String(error) })));
@@ -533,6 +531,25 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     }
   }
   return confirmNodeStopped(context, entry, record.pid, sleep, print, printErr);
+}
+
+/**
+ * TP-1 口径（对齐 node-supervisor 的 terminateChild）：强杀要带走整棵进程树。
+ * POSIX 走信号（force=SIGKILL / 回退=SIGTERM）；Windows 没有进程组语义，
+ * `process.kill` 只终止主进程（子进程成孤儿），统一 `taskkill /PID <pid> /T /F`
+ * 整棵子树。runner 不抛错：进程已不在时 taskkill 非零退出，由 confirmNodeStopped
+ * 的等死确认兜底（与旧 ESRCH 语义同效）。
+ */
+async function killNodeTree(
+  platform: NodeJS.Platform,
+  pid: number,
+  posixSignal: 'SIGKILL' | 'SIGTERM',
+): Promise<void> {
+  if (platform === 'win32') {
+    await defaultCommandRunner(['taskkill', '/PID', String(pid), '/T', '/F']);
+    return;
+  }
+  process.kill(pid, posixSignal);
 }
 
 /** 强杀 / 回退杀后的有界确认等待（kill 应当很快）；确认死 → 条件清理 + 报告。 */

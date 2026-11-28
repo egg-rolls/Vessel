@@ -687,7 +687,8 @@ async function buildPlan(
       bytes: await agentBytes(ctx, facts),
     };
     if (sessionStore === undefined) {
-      // 枚举不出会话就不敢丢记录：丢完这些会话数据就再没人认得（sqlite 的 dry-run 走这里）
+      // 枚举不出会话就不敢丢记录：丢完这些会话数据就再没人认得
+      // （memory 后端、或 sqlite 只读连接打不开时走这里）
       plan.blocked = true;
     } else {
       for (const sessionId of facts.sessions) {
@@ -724,8 +725,9 @@ function createEventLog(ctx: PruneContext): SessionLogDirectoryPort {
 }
 
 /**
- * sqlite 后端的构造器会建库 / 建表（写盘），dry-run 必须保持只读，所以 dry-run 里不构造
- * store 并给一条 note；memory 后端没有持久会话，也不构造。
+ * sqlite 后端的常规构造器会建库 / 建表（写盘），dry-run 必须保持只读，所以 dry-run 改用
+ * **只读连接**打开（不建目录 / 不建表 / 不补列），枚举照常；库不存在或不可读时退回
+ * 「无 store + note」的保守语义。memory 后端没有持久会话，也不构造。
  *
  * 没有 store 就枚举不出会话 ⇒ 目标 agent 一律留（见 `buildPlan`）：宁可少删，不可丢记录。
  */
@@ -735,13 +737,24 @@ function openSessionStore(
 ): { store?: SessionStore; notReadonly: boolean } {
   const backend = ctx.config.session?.backend ?? 'file';
   if (backend === 'memory') return { notReadonly: false };
-  if (backend === 'sqlite' && dryRun) return { notReadonly: true };
+  const opts = {
+    tenantSessionsDir: ctx.tenantPaths.sessions_dir,
+    tenantSessionsDbPath: join(ctx.tenantPaths.root, 'sessions.db'),
+    tenantId: ctx.tenantId,
+  };
+  if (backend === 'sqlite' && dryRun) {
+    try {
+      return {
+        store: createSessionStore(ctx.config.session, { ...opts, readonly: true }),
+        notReadonly: false,
+      };
+    } catch {
+      // 只读连接打不开（库不存在 / 无权限）：回到「枚举不出就不敢删」的保守路径
+      return { notReadonly: true };
+    }
+  }
   return {
-    store: createSessionStore(ctx.config.session, {
-      tenantSessionsDir: ctx.tenantPaths.sessions_dir,
-      tenantSessionsDbPath: join(ctx.tenantPaths.root, 'sessions.db'),
-      tenantId: ctx.tenantId,
-    }),
+    store: createSessionStore(ctx.config.session, opts),
     notReadonly: false,
   };
 }

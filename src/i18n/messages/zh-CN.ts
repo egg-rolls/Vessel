@@ -758,7 +758,7 @@ export const zhCN = {
     '  保留：{count} 个对象查不到归档 / 停用时刻（--older-than 下宁可留）',
   'prune.totals': 'total: {count} 项，{bytes}',
   'prune.note.sessionsBackendNotReadonly':
-    '提示：dry-run 枚举不了会话（session.backend=sqlite 无法只读枚举），agent 记录这次也不删；加 --yes 才看得全。',
+    '提示：会话库（session.backend=sqlite）打不开只读连接（库不存在或不可读），dry-run 枚举不了会话，agent 记录这次也不删。',
   'prune.note.durableDisabled':
     '提示：durable run 已关闭（durable.enabled=false），没有 run 记录可清。',
   'prune.note.agentsSnapshotUnreadable':
