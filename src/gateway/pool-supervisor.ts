@@ -387,20 +387,24 @@ async function waitUntilDead(pid: number, timeoutMs: number, now: () => number):
 }
 
 /**
- * 强杀兜底（node-supervisor terminateChild 先例）：win32 `process.kill` 后
- * `taskkill /PID <pid> /T /F` 兜底整棵子树；POSIX SIGTERM → SIGKILL。不做按端口/进程名批量杀。
+ * 强杀兜底（node-supervisor terminateChild TP-1 同口径）：win32 **无条件**
+ * `taskkill /PID <pid> /T /F` 整棵子树；POSIX SIGTERM → SIGKILL。不做按端口/进程名批量杀。
+ *
+ * TP-1：Windows `process.kill` 是无条件 TerminateProcess，只杀主进程 —— 旧实现
+ * 「先 process.kill 再 waitUntilDead(500) 兜底 taskkill /T」里主进程必死、等待必
+ * 提前 return，taskkill /T 永不执行（死代码），tools-engine 子进程成孤儿。故 win32
+ * 直接树杀；进程已不在时 taskkill 非零退出（runCommand 不抛错），由调用方
+ * waitUntilDead 等死确认兜底 —— 与旧 ESRCH 语义同效。
  */
 async function killPid(pid: number, runCommand: CommandRunner, now: () => number): Promise<void> {
-  try {
-    if (process.platform === 'win32') process.kill(pid);
-    else process.kill(pid, 'SIGTERM');
-  } catch {
-    // ESRCH = 已死；EPERM 等 = 杀不动，交回调用方 waitUntilDead 判定。
+  if (process.platform === 'win32') {
+    await runCommand(['taskkill', '/PID', String(pid), '/T', '/F']);
     return;
   }
-  if (process.platform === 'win32') {
-    if (await waitUntilDead(pid, 500, now)) return;
-    await runCommand(['taskkill', '/PID', String(pid), '/T', '/F']).catch(() => undefined);
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // ESRCH = 已死；EPERM 等 = 杀不动，交回调用方 waitUntilDead 判定。
     return;
   }
   if (await waitUntilDead(pid, STOP_GRACE_MS, now)) return;
