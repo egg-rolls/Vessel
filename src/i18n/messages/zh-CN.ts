@@ -191,6 +191,7 @@ export const zhCN = {
   'flag.check': '只检查是否有新版本，不自替换',
   'flag.channel': '发布通道',
   'flag.deep': '深度自检（会查询 gateway）',
+  'flag.errors': '近期错误清单 + 注册表漂移巡检（q-error-e3）',
   'flag.rpc': '额外查询 RPC health / queue',
   'flag.sources': '显示每个配置项的来源',
   'flag.dryRun': '只列出将做的改动，不写入',

@@ -202,6 +202,8 @@ export interface DoctorCommandArgs {
   json: boolean;
   /** 仅显式给出 `--deep` 时存在（additive） */
   deep?: boolean;
+  /** q-error-e3（§3.10）：`--errors` 近期错误 + 注册表漂移巡检（additive；rebase 吸收） */
+  errors?: boolean;
 }
 
 /** `logs` 子命令（0.15） */

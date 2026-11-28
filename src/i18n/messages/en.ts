@@ -209,6 +209,7 @@ export const en: Record<MessageKey, string> = {
   'flag.check': 'only check for a newer version, do not self-replace',
   'flag.channel': 'release channel',
   'flag.deep': 'deep self-check (queries the gateway)',
+  'flag.errors': 'recent errors list + registry drift inspection (q-error-e3)',
   'flag.rpc': 'also query RPC health / queue',
   'flag.sources': 'show the source of every config item',
   'flag.dryRun': 'only list pending changes, write nothing',

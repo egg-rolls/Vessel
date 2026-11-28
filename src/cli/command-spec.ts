@@ -218,6 +218,8 @@ export const FLAG_DEFS = {
   '--yes': { flag: '--yes', aliases: ['-y'], value: { kind: 'boolean' }, help: 'flag.yes' },
   '--check': { flag: '--check', value: { kind: 'boolean' }, help: 'flag.check' },
   '--deep': { flag: '--deep', value: { kind: 'boolean' }, help: 'flag.deep' },
+  // q-error-e3（rebase 吸收）：doctor --errors 近期错误 + 注册表漂移巡检
+  '--errors': { flag: '--errors', value: { kind: 'boolean' }, help: 'flag.errors' },
   '--rpc': { flag: '--rpc', value: { kind: 'boolean' }, help: 'flag.rpc' },
   '--sources': { flag: '--sources', value: { kind: 'boolean' }, help: 'flag.sources' },
   '--dry-run': { flag: '--dry-run', value: { kind: 'boolean' }, help: 'flag.dryRun' },
@@ -1013,7 +1015,8 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     path: ['doctor'],
     surface: 'one-shot',
     // D-12：args 接受 --data-dir（help-spec 漏声明，args 为准补齐）
-    flags: ['--json', '--deep', '--data-dir'],
+    // q-error-e3（rebase 吸收）：--errors 近期错误 + 注册表漂移巡检
+    flags: ['--json', '--deep', '--errors', '--data-dir'],
     positionalErrors: { extra: (token) => `Unknown argument for doctor: ${token}` },
     load: async () => {
       const { doctorCommand } = await import('./commands/doctor-command');
@@ -1022,7 +1025,11 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
         run: async (parsed) => {
           const f = parsed.flags;
           return printCommandResult(
-            await doctorCommand({ json: f['--json'], ...(f['--deep'] ? { deep: true } : {}) }),
+            await doctorCommand({
+              json: f['--json'],
+              ...(f['--deep'] ? { deep: true } : {}),
+              ...(f['--errors'] ? { errors: true } : {}),
+            }),
           );
         },
       };
@@ -1075,8 +1082,9 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
   defineCommand({
     path: ['errors'],
     surface: 'one-shot',
-    // D-11：args 只接受 --json/--limit；--limit 1..200 双文案（非数字 vs 超范围）
-    flags: ['--json', '--limit'],
+    // D-11 errors 项上游推翻吸收（q-error-e3 1757e315）：--connect 系 targeting +
+    // --id/--run 下钻（rebase 转录；--limit 1..200 双文案保留）。
+    flags: ['--json', '--limit', '--id', '--run', '--connect', '--connect-token', '--ca'],
     flagOverrides: {
       '--limit': {
         value: {
@@ -1091,6 +1099,8 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
         invalidError: (raw) =>
           /^\d+$/.test(raw) ? `Invalid --limit: ${raw} (1-200)` : `Invalid --limit: ${raw}`,
       },
+      '--id': { value: { kind: 'string', placeholder: '<error_id>' } },
+      '--run': { value: { kind: 'string', placeholder: '<run_id>' } },
     },
     positionalErrors: { extra: (token) => `Unknown argument for errors: ${token}` },
     load: async () => {
@@ -1103,6 +1113,8 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
             await errorsCommand({
               json: f['--json'],
               ...(f['--limit'] !== undefined ? { limit: f['--limit'] } : {}),
+              ...(f['--id'] !== undefined ? { id: f['--id'] } : {}),
+              ...(f['--run'] !== undefined ? { run: f['--run'] } : {}),
               connectUrl: parsed.globals.connectArg,
               connectToken: parsed.globals.connectTokenArg,
               caFile: parsed.globals.caArg,
