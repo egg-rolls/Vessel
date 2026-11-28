@@ -7,10 +7,14 @@
  */
 
 import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
-import { resolveDataDir } from '../data/data-paths';
 import { applyLocale } from '../i18n';
-import { listTools } from '../tools-engine/tools-list';
 import type { CliArgs } from './args';
+import {
+  printCommandResult,
+  printTools,
+  resolveCommandContext,
+  resolveCommandDataDir,
+} from './command-support';
 import { runAgentCommand } from './commands/agent/agent-command';
 import { runAgentInboxCommand } from './commands/agent/agent-inbox-command';
 import { agentsCommand } from './commands/agent/agents-command';
@@ -51,7 +55,6 @@ import { runTeamCommand } from './commands/team-command';
 // 0.56：`vessel token show|list|rotate`（根密钥 / 派生 token）。
 import { tokenListCommand, tokenRotateCommand, tokenShowCommand } from './commands/token-command';
 import { tracePruneCommand } from './commands/trace-command';
-import { ui } from './output';
 
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
@@ -67,13 +70,6 @@ export interface CliCommand {
   run(args: CliArgs, ctx: CliCommandContext): Promise<number | undefined>;
 }
 
-/** 打印一次性命令结果并返回退出码 */
-function printCommandResult(result: { exitCode: number; stdout: string; stderr: string }): number {
-  if (result.stdout !== '') console.log(result.stdout);
-  if (result.stderr !== '') console.error(ui.err(result.stderr));
-  return result.exitCode;
-}
-
 /**
  * 一次性命令也尊重 `config.ui.language`（0.10 R2-20）：
  * 配置读取失败时保持入口的 env locale，不阻断命令。
@@ -84,35 +80,6 @@ export async function applyCommandLocale(): Promise<void> {
     applyLocale((config.ui as { language?: string } | undefined)?.language);
   } catch {
     // 配置不可读：沿用 VESSEL_LANG / LANG / LC_ALL
-  }
-}
-
-/** 本地命令的数据根（不 bootstrap） */
-async function resolveCommandDataDir(): Promise<string> {
-  const { config } = await loadConfig();
-  return resolveDataDir(config);
-}
-
-/** federation 等本地命令需要同时拿到 dataDir 与已解析配置 */
-async function resolveCommandContext(): Promise<{ dataDir: string; config: VesselConfig }> {
-  const { config } = await loadConfig();
-  return { dataDir: resolveDataDir(config), config };
-}
-
-/** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
-async function printTools(): Promise<void> {
-  const { tools, warnings, aliases } = await listTools();
-  for (const w of warnings) console.warn(`⚠ ${w}`);
-  console.log(ui.section(`Tools (${tools.length}):`));
-  for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
-  // 0.33：headless 也注册 ask（请求落盘后挂起），这里仍不展开它的 schema。
-  console.log('ask (interactive REPL / gateway / headless-async; not listed here)');
-  // 0.55：旧名不是工具，只在这一版还能用；列出来是为了「改名不静默」。
-  if (aliases.length > 0) {
-    console.log(ui.section('Deprecated tool-name aliases (still accepted, removed next version):'));
-    for (const a of aliases) {
-      console.log(`  - ${a.alias} → ${a.target} (deprecated, removed in ${a.removeIn})`);
-    }
   }
 }
 

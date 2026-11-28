@@ -27,8 +27,10 @@ import {
   type CommandSpec,
   FLAG_DEFS,
   type FlagSpec,
+  type FlagValueKind,
   flagDef,
   type Globals,
+  PURE_GROUP_ERRORS,
 } from './command-spec';
 
 /** 引擎产物（flags 在 thunk 边界经 ParsedFlags 映射互锁；引擎内部为宽形状）。 */
@@ -154,6 +156,15 @@ const ALIAS_TO_FLAG: Readonly<Record<string, string>> = (() => {
   return table;
 })();
 
+/** 全局 flag → Globals 字段写回（现 parser 口径：--data-dir/targeting 写全局字段）。 */
+const GLOBALS_FLAG_MAP: Readonly<Record<string, keyof Globals>> = {
+  '--data-dir': 'dataDirArg',
+  '--connect': 'connectArg',
+  '--connect-token': 'connectTokenArg',
+  '--ca': 'caArg',
+  '--node': 'nodeTargetArg',
+};
+
 interface FlagParseState {
   flags: Record<string, unknown>;
   positionals: string[];
@@ -178,6 +189,7 @@ function canonicalFlag(token: string): { flag: string; inline?: string } {
 function parseCommandArgs(
   spec: CommandSpec,
   rest: readonly string[],
+  globals: Globals,
 ): FlagParseState | { error: string } {
   const accepted = new Set<string>(spec.flags ?? []);
   const state: FlagParseState = { flags: {}, positionals: [], help: false };
@@ -201,7 +213,24 @@ function parseCommandArgs(
       return { error: `Unknown argument: ${token}` };
     }
     const def = flagDef(flag) as FlagSpec;
-    const value = def.value;
+    const override = (
+      spec.flagOverrides as
+        | Readonly<
+            Record<
+              string,
+              | {
+                  value?: FlagValueKind;
+                  missingError?: string;
+                  invalidError?: (raw: string) => string;
+                }
+              | undefined
+            >
+          >
+        | undefined
+    )?.[flag];
+    const value = override?.value ?? def.value;
+    const missingError = override?.missingError ?? def.missingError;
+    const invalidError = override?.invalidError ?? def.invalidError;
     if (value.kind === 'boolean') {
       if (inline !== undefined) return { error: `Unknown argument: ${token}` };
       state.flags[flag] = true;
@@ -218,22 +247,26 @@ function parseCommandArgs(
       } else if (value.kind === 'optional-string') {
         raw = '';
       } else {
-        return { error: def.missingError ?? `Missing value for ${flag}` };
+        return { error: missingError ?? `Missing value for ${flag}` };
       }
     }
     let parsedValue: unknown;
     if (value.kind === 'number') {
       const parsed = value.parse(raw);
       if (parsed === null) {
-        return { error: def.invalidError?.(raw) ?? `Invalid value for ${flag}: ${raw}` };
+        return { error: invalidError?.(raw) ?? `Invalid value for ${flag}: ${raw}` };
       }
       parsedValue = parsed;
     } else if (value.kind === 'enum') {
       if (!value.candidates.includes(raw)) {
-        return { error: def.invalidError?.(raw) ?? `Invalid value for ${flag}: ${raw}` };
+        return { error: invalidError?.(raw) ?? `Invalid value for ${flag}: ${raw}` };
       }
       parsedValue = raw;
     } else if (value.kind === 'string' && value.parse !== undefined) {
+      const parsed = value.parse(raw);
+      if (!parsed.ok) return { error: parsed.error };
+      parsedValue = parsed.value;
+    } else if (value.kind === 'dynamic' && value.parse !== undefined) {
       const parsed = value.parse(raw);
       if (!parsed.ok) return { error: parsed.error };
       parsedValue = parsed.value;
@@ -246,6 +279,10 @@ function parseCommandArgs(
       state.flags[flag] = list;
     } else {
       state.flags[flag] = parsedValue;
+    }
+    const globalsKey = GLOBALS_FLAG_MAP[flag];
+    if (globalsKey !== undefined && typeof parsedValue === 'string') {
+      (globals as unknown as Record<string, unknown>)[globalsKey] = parsedValue;
     }
   }
   return state;
@@ -270,22 +307,23 @@ function checkPositionals(spec: CommandSpec, positionals: readonly string[]): st
     return spec.positionalErrors?.missing ?? `Missing argument: ${form}`;
   }
   if (!variadic && positionals.length > parts.length) {
-    const prefix = spec.positionalErrors?.extra === 'unexpected' ? 'Unexpected' : 'Unknown';
-    return `${prefix} argument: ${positionals[parts.length]}`;
+    const token = positionals[parts.length] ?? '';
+    return spec.positionalErrors?.extra?.(token) ?? `Unknown argument: ${token}`;
   }
   return null;
 }
 
 /** required / exclusive / validate（错误文案现态口径 S5 逐命令核对）。 */
-function checkConstraints(
+async function checkConstraints(
   spec: CommandSpec,
   state: FlagParseState,
   globals: Globals,
-): string | null {
-  for (const flag of spec.flags ?? []) {
-    const def = flagDef(flag);
-    if (def?.required === true && state.flags[flag] === undefined) {
-      return `Missing required flag: ${flag}`;
+): Promise<string | null> {
+  const requiredFlags =
+    spec.required ?? (spec.flags ?? []).filter((f) => flagDef(f)?.required === true);
+  for (const flag of requiredFlags) {
+    if (state.flags[flag] === undefined) {
+      return spec.requiredError?.(flag) ?? `Missing required flag: ${flag}`;
     }
   }
   for (const group of spec.exclusive ?? []) {
@@ -298,7 +336,7 @@ function checkConstraints(
     }
   }
   if (spec.validate !== undefined) {
-    return spec.validate({
+    return await spec.validate({
       flags: state.flags as never,
       positionals: state.positionals,
       globals,
@@ -315,7 +353,7 @@ function checkConstraints(
  * 入口模式层（REPL/serve/headless 全局 flag switch + 互斥校验）S5 自现态
  * parseArgs 965-1250 机械转录；未命中命令路径时当前返回空路径产物（入口层接管）。
  */
-export function parseBySpec(argv: readonly string[]): EngineResult {
+export async function parseBySpec(argv: readonly string[]): Promise<EngineResult> {
   const userConfig = extractUserConfig(argv);
   if (!userConfig.ok) return userConfig;
   const globals = defaultGlobals();
@@ -329,18 +367,21 @@ export function parseBySpec(argv: readonly string[]): EngineResult {
     if (path.length > 0 && node.children.size > 0) {
       const unknown = rest.find((token) => !token.startsWith('-'));
       if (unknown !== undefined) {
-        return { ok: false, error: `Unknown argument: ${unknown}` };
+        const groupError = PURE_GROUP_ERRORS[path.join(' ')];
+        return { ok: false, error: groupError?.(unknown) ?? `Unknown argument: ${unknown}` };
       }
+      // 纯分组裸调用（fleet / session / permission 先例）：help 兜底 → 全局总览 exit 0。
+      return { ok: true, parsed: { path, flags: {}, positionals: [], globals, help: true } };
     }
     return { ok: true, parsed: { path, flags: {}, positionals: rest, globals, help: false } };
   }
 
-  const state = parseCommandArgs(spec, rest);
+  const state = parseCommandArgs(spec, rest, globals);
   if ('error' in state) return { ok: false, error: state.error };
   if (!state.help) {
     const positionalError = checkPositionals(spec, state.positionals);
     if (positionalError !== null) return { ok: false, error: positionalError };
-    const constraintError = checkConstraints(spec, state, globals);
+    const constraintError = await checkConstraints(spec, state, globals);
     if (constraintError !== null) return { ok: false, error: constraintError };
   }
   return {

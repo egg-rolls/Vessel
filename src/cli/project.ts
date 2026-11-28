@@ -66,7 +66,7 @@ export function flagPlaceholder(value: FlagValueKind): string | null {
     case 'boolean':
       return null;
     case 'enum':
-      return `<${value.candidates.join('|')}>`;
+      return value.placeholder ?? `<${value.candidates.join('|')}>`;
     default:
       return value.placeholder;
   }
@@ -76,10 +76,30 @@ export function flagPlaceholder(value: FlagValueKind): string | null {
 function flagOverride(
   spec: CommandSpec,
   flag: string,
-): { readonly value?: FlagValueKind; readonly help?: MessageKey } | undefined {
+):
+  | {
+      readonly value?: FlagValueKind;
+      readonly help?: MessageKey;
+      readonly missingError?: string;
+      readonly invalidError?: (raw: string) => string;
+      readonly hidden?: boolean;
+    }
+  | undefined {
   return (
     spec.flagOverrides as
-      | Readonly<Record<string, { readonly value?: FlagValueKind; readonly help?: MessageKey }>>
+      | Readonly<
+          Record<
+            string,
+            | {
+                readonly value?: FlagValueKind;
+                readonly help?: MessageKey;
+                readonly missingError?: string;
+                readonly invalidError?: (raw: string) => string;
+                readonly hidden?: boolean;
+              }
+            | undefined
+          >
+        >
       | undefined
   )?.[flag];
 }
@@ -102,7 +122,9 @@ export function specFlagHelp(spec: CommandSpec, flag: string): MessageKey {
 
 /** 可见 flag（hidden 不渲染；-h/--help 渲染层统一追加，不在 spec）。 */
 function visibleFlags(spec: CommandSpec): string[] {
-  return (spec.flags ?? []).filter((flag) => flagDef(flag)?.hidden !== true);
+  return (spec.flags ?? []).filter(
+    (flag) => flagDef(flag)?.hidden !== true && flagOverride(spec, flag)?.hidden !== true,
+  );
 }
 
 /** CliHelpCommand[]（形状与今天 help-spec 一致；help.ts 建树 / 渲染零改动消费）。 */
@@ -111,7 +133,7 @@ export function projectHelp(schema: readonly CommandSpec[]): CliHelpCommand[] {
     .filter((spec) => spec.hidden !== true)
     .map((spec) => {
       const flags = visibleFlags(spec);
-      const required = flags.filter((flag) => flagDef(flag)?.required === true);
+      const required = spec.required ?? flags.filter((flag) => flagDef(flag)?.required === true);
       const flagValue: Record<string, string> = {};
       const flagHelp: Record<string, MessageKey> = {};
       for (const flag of flags) {
@@ -123,7 +145,9 @@ export function projectHelp(schema: readonly CommandSpec[]): CliHelpCommand[] {
       return {
         path: spec.path as unknown as CliHelpCommand['path'],
         summary: spec.summary,
-        ...(spec.positional !== undefined ? { args: spec.positional } : {}),
+        ...(spec.positional !== undefined || spec.helpArgs !== undefined
+          ? { args: spec.helpArgs ?? spec.positional }
+          : {}),
         ...(flags.length > 0 ? { flags: flags as CliFlag[] } : {}),
         ...(required.length > 0 ? { required: required as CliFlag[] } : {}),
         ...(Object.keys(flagValue).length > 0 ? { flagValue } : {}),
@@ -152,7 +176,7 @@ export function projectFlagValue(): Readonly<Record<string, string | null>> {
 export function projectFlagHelp(): Readonly<Record<string, MessageKey>> {
   const table: Record<string, MessageKey> = {};
   for (const [flag, def] of Object.entries(FLAG_DEFS) as [string, FlagSpec][]) {
-    if (def.hidden === true) continue;
+    if (def.hidden === true || def.help === undefined) continue;
     table[flag] = def.help;
   }
   return table;
@@ -248,11 +272,12 @@ export function projectGlobalFlags(): string[] {
   return flags;
 }
 
-/** 动态值 flag 清单（现 DYNAMIC_VALUE_FLAGS 派生：kind='dynamic' + 别名）。 */
+/** 动态值 flag 清单（现 DYNAMIC_VALUE_FLAGS 派生：无静态候选 = dynamic/number + 别名）。 */
 export function projectDynamicValueFlags(): string[] {
   const flags: string[] = [];
   for (const def of Object.values(FLAG_DEFS) as FlagSpec[]) {
-    if (def.value.kind !== 'dynamic' || def.hidden === true) continue;
+    if (def.hidden === true) continue;
+    if (def.value.kind !== 'dynamic' && def.value.kind !== 'number') continue;
     flags.push(def.flag, ...(def.aliases ?? []));
   }
   return flags;
