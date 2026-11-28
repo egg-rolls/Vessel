@@ -427,7 +427,12 @@ function envNoticeSettings(): SettingDef[] {
   ];
   ENV_NOTICE_SCOPES.forEach((scope, index) => {
     const pinned = ENV_PINNED_SCOPES.has(scope);
-    const cadenceDefault = DEFAULT_ENV_CADENCE[scope] ?? 'request';
+    // pinned 行默认显示取钉死有效值 run（webui4 观察 A / q-webui4-ui-followups）：
+    // 内置表 model='request' 是 producer finest-cadence 的参与值，不是可配置项
+    // （写路径拒 request，见 validator / config.set 同源 PINNED_REQUEST_SCOPES）。
+    // 直接拿它当 radio 默认会落在裁剪选项 run/off 之外 ⇒ 双 radio 均未选中。
+    // trim 表值本就是 run，钳制无影响；实际只改 model 行的缺省选中态。
+    const cadenceDefault = pinned ? 'run' : (DEFAULT_ENV_CADENCE[scope] ?? 'request');
     const descKey =
       scope === 'files'
         ? 'settings.env.files.desc'
