@@ -2,7 +2,7 @@
 title: 发布手册
 kind: current
 triggers: [发布, 发版, 版本号, 语义化版本, tag, 发布流程, 发布前置, 干跑, npm, 子包, 变更日志, 构建, web 控制台]
-paths: [.github/workflows/release.yml, .github/workflows/version-check.yml, .github/actions/quality/action.yml, package.json, scripts/version.ts, scripts/release.ts, scripts/latest-json.ts, src/shared/version.ts]
+paths: [package.json, .github/workflows/release.yml, .github/workflows/version-check.yml, .github/actions/quality/action.yml, scripts/version.ts, scripts/release.ts, scripts/latest-json.ts, src/shared/version.ts]
 ---
 
 # 发布手册
