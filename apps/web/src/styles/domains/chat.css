@@ -425,25 +425,16 @@
 }
 
 /* ── 工具图片卡（q-media-image-card）──
-   表面走 CardShell（与异步作业卡同一基座）；这里只管卡内布局：
-   缩略图 + 元数据行 + 投递 chip（复用 msg-ref-delivery 配色）+ 原始注记折叠区。 */
+   表面走 CardShell（与异步作业卡同一基座）；图条目行形统一 RefCardRow
+   （ref-card-row：ICON 槽 + 一行文字 + 投递 chip）；这里只管组卡头 /
+   缩略图取值件（ImageThumb 保留供未来消费者）/ 原始注记折叠区。 */
 
 .tool-image-card {
   max-width: 100%;
 }
 
-.tool-image-entry {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* chip 在卡内独立成行：去掉 chip 行里那条竖直分隔（那是「名字 | 状态」同行用的）。 */
-.tool-image-entry .msg-ref-delivery {
-  border-left: 0;
-  padding-left: 0;
-}
+/* 图条目行形已收敛到 RefCardRow（ref-card-row，q-block-cardshell-unify）：
+   ICON 槽 + 一行文件名 + 投递 chip；尺寸 / 字节在 hover 元信息。 */
 
 .tool-image-thumb {
   flex: none;
@@ -485,6 +476,90 @@ button.tool-image-thumb:focus-visible {
   justify-content: center;
   gap: 4px;
   border-style: dashed;
+}
+
+/* ── 统一文件卡（q-block-cardshell-unify，用户新 UI 方向③）──
+   表面走 CardShell（与工具图片卡同一基座）；卡内单 button 行：左 ICON 槽
+   （图片缩略图 / 种类图标）+ 右一行文件名 + 徽标 / 投递 chip（复用
+   msg-ref-delivery 配色）。形态照插件 FileRefLinkCard，表面统一 CardShell。 */
+
+.ref-card {
+  max-width: 100%;
+}
+
+.ref-card-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ref-card-thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  object-fit: cover;
+}
+
+.ref-card-thumb-loading {
+  display: inline-block;
+}
+
+.ref-card-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--faint);
+}
+
+.ref-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.ref-card-badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.ref-card-badge.is-temp {
+  background: var(--surface-sunken);
+  color: var(--muted);
+}
+
+.ref-card-badge.is-expired {
+  background: var(--surface-sunken);
+  color: var(--danger);
+}
+
+/* 卡内投递 chip 与名字同行：保留竖直分隔（msg-ref-delivery 原口径）。 */
+.ref-card-row .msg-ref-delivery {
+  margin-left: auto;
 }
 
 /* 放大预览（ModalShell 基座）：图按视口收敛，不裁不拉伸。 */

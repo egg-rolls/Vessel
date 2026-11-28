@@ -18,6 +18,7 @@ import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { MAX_COMPOSER_REFS } from '../../stores/composerDraftStore';
 import { ATTACH_PATH_MAX, type AttachPathIssue, planAttachPaths } from './attach-paths';
+import { pathBasename, refKindForPath } from './file-token';
 
 /**
  * 「引用文件」弹层（0.52 单一入口）：**只产出路径**的两个 tab —— 浏览目录
@@ -51,54 +52,8 @@ export interface AttachBrowseClient {
   listAttachments(params?: AttachmentListParams): Promise<AttachmentListResult>;
 }
 
-/** 图片 / 文档扩展名只看形状（与 `addRef` 一样不做真实类型探测）。 */
-const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'webp',
-  'bmp',
-  'svg',
-  'avif',
-  'ico',
-]);
-
-const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
-  'pdf',
-  'doc',
-  'docx',
-  'rtf',
-  'txt',
-  'md',
-  'csv',
-  'tsv',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'json',
-  'yaml',
-  'yml',
-  'html',
-  'xml',
-]);
-
-/** 路径 → 文件名（Windows / POSIX 分隔符都认，不引入 node:path）。 */
-function pathBasename(target: string): string {
-  const parts = target.split(/[\\/]/).filter((part) => part.length > 0);
-  return parts[parts.length - 1] ?? target;
-}
-
-/** 扩展名 → `MessageRef.kind`（粗判；`kind` 只影响 chip 的图标 / 文案）。 */
-function refKindForPath(target: string): MessageRef['kind'] {
-  const name = pathBasename(target);
-  const dot = name.lastIndexOf('.');
-  const extension = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-  if (IMAGE_EXTENSIONS.has(extension)) return 'image';
-  if (DOCUMENT_EXTENSIONS.has(extension)) return 'document';
-  return 'file';
-}
+// pathBasename / refKindForPath 抽到 file-token.ts 共享（q-block-cardshell-unify：
+// token 卡与 attach 弹层同一口径；扩展名集合逐字保留，零行为变更）。
 
 /** 结果体里的稳定码 → 人话（与 `refsErrorText` 同族，但这里是「列不出来」而不是「被拒」）。 */
 function reasonText(reason: AttachmentListReason): string {

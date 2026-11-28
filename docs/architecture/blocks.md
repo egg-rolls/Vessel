@@ -2,12 +2,13 @@
 title: 消息块协议（信封规范 / type 注册表 / vessel-block fence）
 kind: current
 triggers: [block, envelope, quote, session-ref, vessel-block, fence, lift, registry, 块, 信封, 引用, 会话引用, 提升, 注册表, 固定标记, legacy]
-paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts]
+paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx]
 ---
 
 # 消息块协议
 
-> 块 P0（渲染统一）+ P1（信封规范收敛）的现态契约。设计依据：外层仓
+> 块 P0（渲染统一）+ P1（信封规范收敛）+ q-block-cardshell-unify（用户正文
+> token lift + CardShell 统一视觉，§3.2）的现态契约。设计依据：外层仓
 > `docs/dev/reports/architecture-block-bootstrap-design.md` §2（main 裁示见其 §9）与
 > `probe-block-protocol-report.md`。两条产品核心不变量（[message-invariants](message-invariants.md)）
 > 是本协议的硬约束：**可见性对等**（块必须有确定性的模型侧文本投影）与
@@ -68,12 +69,13 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
    | tool image | `[tool image]` 注记 + 结构化 refs | transcript-items.ts#toolImageRefsOf |
    | refs 尾注 | `[refs] N attachments: …` | refs-notice-hook（服务端注入，Web 按 name 识别） |
    | runtime notice | `[runtime] <summary>` + `  · ` details 行 | env-notice.ts#runtimeEnvCard |
-   | file token | `vessel-ref:` scheme markdown 链接 | link-enhancers / 插件 FileRefLinkCard |
+   | file token | `vessel-ref:` scheme markdown 链接 | 用户正文：file lift（file-token.ts → RefCard）；助手正文：link-enhancers / 插件 FileRefLinkCard |
 
 4. **新 type 统一 fenced 格式**（见 §5 vessel-block fence spec）。
 5. **块与 refs**：块**引用** refs（按 path/sha256），不复制字节、不替代 refs。
-   image 块 = refs[kind=image] + 注记的渲染提升；file 块 = vessel-ref token / refs
-   chip。数据通道（ingest/边界/投递）一个字不动。
+   image 块 = refs[kind=image] + 注记的渲染提升；file 块 = 正文 vessel-ref token
+   卡 + 剩余 refs chip（occurrence 去重，见 §3.2）。数据通道（ingest/边界/投递）
+   一个字不动。
 6. **块与 notice**：notice 保持独立 runtime 通道（hook 注入 / scope 词表 /
    cadence / 签名去重），**不并入块 wire**——它是 runtime 事实不是业务内容，
    生命周期不同。统一只发生在渲染层：notice 注册为 block type（lift=runtimeEnvCard）。
@@ -89,6 +91,32 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
 - **只对新发送生效**：照 refs-notice-hook 前缀不变三机制（永远末尾追加 / 历史
   notice 不重新渲染 / 进程内签名去重）的兼容口径——历史消息里 zh/en 两种拼法
   逐字节保留，解析侧双认，零回填。
+
+### 3.2 用户正文 vessel-ref token lift（q-block-cardshell-unify 决策记录）
+
+- **canonical 形状唯一**：`[name](<vessel-ref:path>)`（尖括号目标形，与
+  RichComposer `buildAtomicToken` / 插件 drop-handler 同形）。只认完整形状：
+  半截 token 正则不命中 ⇒ 原文保留（流式逐字不闪，与信封 null 语义同构）。
+- **收进 file lift（order 50）**，不另立 type：单块契约保持（一个 file 块
+  payload = `tokens[]` + 剩余 `refs` + 重排后 `imageDelivery`）。`role:user`
+  only —— 助手正文的 vessel-ref 链接仍走 Markdown link-enhancers 内联卡
+  （用户气泡正文是纯文本渲染，不经 Markdown，两侧零双出）。
+- **去重镜像 composer**（`refsToAttachmentsFiltered` 同一口径）：token
+  occurrence 按 path 计数消费结构化 ref（先到先配）——被消费的 ref 不再出
+  chip（卡即其视图，继承 sha256 / 权威 kind / 投递状态），剩余 refs 照旧
+  chip。每个 ref occurrence 恰好渲染一次（卡或 chip）。投递状态按**完整
+  refs** 的 image 同序消费后分流（卡 / chip 各得其所）。
+- **剥正文**：token 就地移除；整行只有 token 的行整行去掉（不留空行）；
+  行内其余文字逐字节保留。正文全被消费时消费点不留空气泡。历史只读：
+  只解析投影，不回填不改写 `Message.content`（复制 / 编辑仍拿原文）。
+- **统一视觉（用户新 UI 方向③）**：静态文件卡 = CardShell + `RefCardRow`
+  （左 ICON 槽 [缩略图 / 骨架 / RefIcon] + 右一行文件名 + 尾部徽标 / 投递
+  chip）。ToolImageCard 图条目收敛同一行形（尺寸 / 字节收 hover 元信息）。
+  取值两路不合并（§2.6 设计稿裁定）：匹配 ref → `useImageBlob`（sha256 +
+  会话闸）；无 ref → `useAttachmentPreview`（既有 `attachments.preview`，
+  path 寻址 + 过期探针）。点击：有字节 → ImageLightbox；无字节 → 复制路径
+  （FileRefLinkCard 同语义，绝不导航；宿主无 PDF 字节预览通道，非图一律
+  图标卡）。插件 bundle 零改动。
 
 ## 4. 双向发送路径
 
@@ -162,7 +190,7 @@ scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送�
 | quote 信封 | 格式不变；lift 已收编注册表 |
 | session-ref 信封 | 新消息固定标记（§3.1）；旧消息双词 + zh field legacy 永久 |
 | [tool image] 注记 + refs | 不动；ToolImageCard 经注册表消费 |
-| vessel-ref token + 插件卡 | 不动；link 槽映射进注册表（x:file-refs:vessel-ref），插件 bundle 零改动 |
+| vessel-ref token + 插件卡 | 用户正文 token 提升为宿主 RefCard（§3.2）；助手正文 link 槽不动（x:file-refs:vessel-ref 登记不变），插件 bundle 零改动 |
 | vessel:notice / [refs] / [runtime] | wire 不动；notice lift 收编 |
 | 历史消息（无 message_id / 旧 locale 头部） | 全走 legacy 解析器 + 既有降级；**不回填不改写** |
 | 旧 gateway / 旧 node | images.blob not_found ⇒ 元数据 chip（既有）；无 composer 贡献 ⇒ 空注册（既有） |
