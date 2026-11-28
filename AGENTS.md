@@ -52,7 +52,7 @@
 - **授权分级**：「这点小事能不能不问就做」按 [docs/constitution/12-autonomy.md](docs/constitution/12-autonomy.md) 自己判，不再逐次请示：`allow` 直接做并在 commit message / 回报里注明依据，`ask` 用 ask 工具一次问全，`deny` 不做并说明命中哪条；顺序 deny → ask → allow，**未知按 ask**，冲突从重。
 - **数据写入**：session / checkpoint 一律 `atomicWrite`，默认 `durable: true`；损坏 ≠ 不存在，抛 `SessionCorruptError`、不 unlink；单公司 data-dir 写意图锁（`src/data/data-lock.ts`），冲突返回 `data_locked` / `session_locked` / `run_locked`；运行时不再获取写者锁（ADR-056/086）。
 - **单 run**：同一个 `ExecutionUnit` 同时只允许一个 active run；第二个 run 抛 `run_already_running`；不要另写终态持久化 / 事件发布路径（ADR-054）。
-- **发布纪律**：1.0 前只做干跑，不 tag、不 publish、不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
+- **发布纪律**：2.x 标准 SemVer，发布流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)（0.x「只干跑不 tag」纪律已随 1.0 门槛越过归档）；收口由 main 晋升时跑 `scripts/release.ts`，tag / publish 由 1 决定，不 force-push；1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；tag `v*` 只有 1 打。
 - **插件信任**：内置插件（随 release 发布）可信；外部插件从项目 `./.vessel/plugins` 与用户 `~/.vessel/plugins` 发现，默认不可信，安装时必须展示其声明的 `permissions`（`fs` / `net` / `process` / `secrets` / `events` / `rpc`），未声明能力默认拒绝；体验插件跑在子进程但**不是安全沙箱**，能力插件仍在 in-process、拥有完整进程权限；`VESSEL_NO_EXTERNAL_PLUGINS=1` 只加载内置插件（ADR-099）。
 - **远程**：不默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环必须 TLS；`serve.allowed_origins` 只接受显式 http(s) origin，禁止 `*` / path / query。
 - **MCP**：MCP 工具默认不 `allow`；只按 `auto_approve_tools` 的原始工具名精确放行（ADR-039）。

@@ -184,7 +184,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
 - **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v<version>-beta.1`。tag 与分支分离，不建 `v<version>` 分支。
-- **基线**：`release/<version>` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（1.0 前只干跑，不打 tag）。
+- **基线**：`release/<version>` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（发布流程见 [operations/RELEASE.md](operations/RELEASE.md)）。
 
 ### 4.3 文件命名
 
@@ -258,7 +258,7 @@ N 在自己的分支提交（只含共享侧成品）
 3. 1 审查 diff，决定目标版本（通常 `release/<version>`）。
 4. 冲突：1 召集相关 N，双方给出理由，1 裁决；裁决写入个人侧 `docs/decisions/`。
 5. 1 合并到 `release/<version>`。
-6. 版本收口：1 把 `release/<version>` 合并到 `main` 并打 tag，触发 release workflow。**1.0 前只干跑：不合并 `main`、不打 tag、不 publish。**
+6. 版本收口：1 把 `release/<version>` 合并到 `main`；收口由 main 晋升时跑 `scripts/release.ts`，是否打 tag / publish 由 1 决定（见 [operations/RELEASE.md](operations/RELEASE.md)）。
 
 ### 7.3 发布
 
@@ -286,7 +286,7 @@ N 在自己的分支提交（只含共享侧成品）
 `.github/actions/quality` 仍被 `release.yml` 使用，**不要删**。
 ### 9.2 Release（`.github/workflows/release.yml`）
 
-触发：push tag `v*`（含预发布）。**1.0 前不触发本流程。**
+触发：push tag `v*`（含预发布）。**日常晋升不打 tag 不触发本流程；仅 1 决定发布时打 tag 触发。**
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本；`verify` 跑 `release-dry-run` 与 `smoke-install`，任一失败则不进入发布。
 2. 复跑 quality（发布前再验一次）。
 3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 16 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。

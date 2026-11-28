@@ -385,7 +385,7 @@ Assembly → Runtime（per-node 无状态工厂）→ ExecutionUnit（per-sessio
 - 飞书富媒体 / 卡片 / 多机器人 / OAuth。
 - 独立二进制 / 二进制自替换更新（ADR-006）；`vessel update` 只对 npm / bun 全局安装执行包级更新。
 - Web 全量本地化：壳层已支持 zh-CN / en，功能页未覆盖文案回退中文。
-- 1.0 前不 tag、不 publish；发布决定由维护者做。
+- tag / publish 不在日常晋升节奏内；发布决定由维护者做（见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)）。
 
 ## FAQ
 
@@ -415,7 +415,7 @@ cd apps/web && bun run build
 
 ### 为什么没有独立二进制？
 
-见 ADR-006：1.0 前只做源码与包级分发，`vessel update` 只更新 npm / bun 全局安装。
+见 ADR-006：只做源码与包级分发，不做独立二进制；`vessel update` 只更新 npm / bun 全局安装。
 
 ### 模型思考过程去哪了？
 
@@ -466,7 +466,7 @@ cd apps/web && bun run build
 
 ## 状态
 
-**alpha。** 1.0 前不发布：没有 tag、没有 `npm publish`、没有独立二进制；代码在 `main` 上滚动。当前版本与已合入能力见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)，历史见 [docs/versions/INDEX.md](docs/versions/INDEX.md)。
+**2.x 滚动开发。** 代码在 `main` 上滚动；tag / `npm publish` 由维护者决定（见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)），不做独立二进制（ADR-006）。当前版本与已合入能力见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)，历史见 [docs/versions/INDEX.md](docs/versions/INDEX.md)。
 
 ## 贡献
 

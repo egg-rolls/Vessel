@@ -200,6 +200,7 @@ docs/
 | `CHANGELOG.md`                                                                     | 版本收口人（`1`）                  |
 - 写索引时先看同类最新一条，保持格式一致；不要新建“第二套写法”。
 - 并行开发时索引由收口人统一更新，避免多人同时改同一文件。
+- **doc forge 独立 worktree**：批量文档改动走独立 worktree + 合 doc 分支入 main，禁直写 main 工作树（防共享 index 互扫）；≤2 叶豁免须 pathspec 提交（`git commit -- <paths>`）且即完即提（2026-11-28 doc-refresh 批教训成文）。
 
 ## 9. 反模式（见到就改）
 
