@@ -2,6 +2,7 @@ export { Badge, type BadgeProps, type BadgeTone } from './Badge';
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { CARD_SHELL_CLASS, CardShell, type CardShellProps } from './CardShell';
 export { CountBadge, type CountBadgeProps, type CountBadgeTone } from './CountBadge';
+export { copyText } from './clipboard';
 export { cn } from './cn';
 export {
   DataTable,
@@ -26,6 +27,11 @@ export {
   Textarea,
   type TextareaProps,
 } from './Field';
+export {
+  type FilterOption,
+  FilterPopover,
+  type FilterPopoverProps,
+} from './FilterPopover';
 export {
   GHOST_BADGE_CLASS,
   GHOST_BUTTON_CLASS,

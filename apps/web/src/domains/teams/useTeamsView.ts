@@ -11,7 +11,7 @@ import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import type { ActionMenuItem } from '../../components/ActionMenu';
 import { useToast } from '../../components/ToastProvider';
-import { copyText } from '../../components/ui/clipboard';
+import { copyText } from '../../components/ui';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { type NodeView, useNodes } from '../../gateway/NodeProvider';
 import { nodeKeyOf } from '../../gateway/nodes';
