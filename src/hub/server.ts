@@ -34,6 +34,7 @@ import {
   originAllowed,
   proxySecretAllowed,
 } from '@vessel-agent/serve';
+import { guardListenerInheritance } from '../shared/socket-inherit-guard.js';
 import type { HubClientHelloFrame, HubDirectoryFrame } from './client-protocol.js';
 import {
   createHubNodeInbound,
@@ -983,6 +984,10 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   (pingTimer as { unref?: () => void }).unref?.();
 
   const actualPort = server.port ?? port;
+  // R-5 根治（q-spawn-inheritance-guard）：监听句柄清继承标志——gateway 后续
+  // spawn 的任何子进程（hub/node/engine/重启链）都无法继承本监听 socket，
+  // 父死端口即释放，杜绝僵尸占 port（win32；POSIX no-op）。
+  guardListenerInheritance(actualPort, server);
   const scheme = tlsMaterial ? 'https' : 'http';
 
   return {
