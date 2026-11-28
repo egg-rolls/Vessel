@@ -37,6 +37,7 @@ import {
   quarantineCorruptRecordIfUnchanged,
   readGatewayStateFile,
 } from '../gateway/pid';
+import { guardListenerInheritance } from '../shared/socket-inherit-guard.js';
 
 /** owner 记录文件名（dataDir 根） */
 export const AGENT_OWNER_FILE = 'agent-owner.json';
@@ -639,6 +640,11 @@ export async function startAgentOwnerServer(
     const message = error instanceof Error ? error.message : String(error);
     throw new AgentOwnerError('agent_owner_bind_failed', message, 500);
   }
+
+  // R-5 根治（q-spawn-inheritance-guard）：node owner 监听（生产事故里的 8644）
+  // 句柄清继承标志——node spawn 的 gateway/重启链子进程不再继承本端口，
+  // node 退出端口即释放（win32；POSIX no-op）。
+  guardListenerInheritance(server.port ?? options.port ?? 0, server);
 
   const record: AgentOwnerRecord = {
     pid: process.pid,
