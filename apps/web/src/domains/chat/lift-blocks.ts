@@ -7,7 +7,9 @@
  * - session-ref：`session-ref.ts#liftSessionRefForDisplay`（本批新补，zh/en 双词）；
  * - image：`transcript-items.ts#toolImageRefsOf`（整条消息成卡）；
  * - notice：`env-notice.ts#runtimeEnvCard`（统一装配入口的包装）；
- * - file：结构化 `Message.refs`（不占正文；工具图片卡已含非图 refs 时不重复出 chip）。
+ * - file：结构化 `Message.refs`（不占正文；工具图片卡已含非图 refs 时不重复出 chip）；
+ * - vessel-block：`vessel-block.ts#parseVesselBlockFence`（块 P1 试点：整条正文
+ *   单闭合 fence + table schema，坏 payload / 未闭合一律原文渲染）。
  *
  * **硬约束**（逐字保留既有语义）：
  * - 流式「信封未收全返回 null」：quote / session-ref 的解析器对半截信封返回 null，
@@ -31,9 +33,10 @@ import { runtimeEnvCard } from './env-notice';
 import { composeQuoteText, liftQuoteForDisplay } from './quote-ref';
 import { composeSessionRefText, liftSessionRefForDisplay } from './session-ref';
 import { toolImageRefsOf } from './transcript-items';
+import { parseVesselBlockFence } from './vessel-block';
 
 export interface LiftBlocksResult {
-  /** 按注册表 order 排好的块（quote 最前 → session-ref → image/notice → file）。 */
+  /** 按注册表 order 排好的块（quote 最前 → session-ref → image/notice → file → vessel-block）。 */
   blocks: LiftedBlock[];
   /** 剥掉所有被消费信封后的剩余正文（无块时 = 原文，逐字节）。 */
   body: string;
@@ -160,5 +163,21 @@ registerBlockType({
         },
       },
     ];
+  },
+});
+
+registerBlockType({
+  type: 'vessel-block',
+  surface: 'card',
+  order: 60,
+  owner: 'host',
+  component: blockViews['vessel-block'],
+  lift: ({ body }) => {
+    // 试点（blocks.md §5.1）：整条剩余正文恰为一个闭合 vessel-block fence +
+    // 合法 schema 才提升；未闭合 / 坏 payload / 中段 fence 一律 null ⇒ 原文
+    // 渲染（markdown code 块兜底，流式逐字保留）。
+    const payload = parseVesselBlockFence(body);
+    if (payload === null) return [];
+    return [{ type: 'vessel-block', payload, body: '' }];
   },
 });

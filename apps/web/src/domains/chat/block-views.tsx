@@ -7,6 +7,7 @@
  * null（正文已在 lift 管线里原样保留，零回归）。订阅注册变化（useBlockType），
  * 插件热更新/禁用即生效。
  */
+import { Markdown } from '../../components/Markdown';
 import type { ImageDelivery, MessageRef } from '../../gateway/types';
 import { type BlockRenderCtx, type LiftedBlock, useBlockType } from './block-registry';
 import { EnvCard } from './EnvCard';
@@ -17,6 +18,7 @@ import type { ParsedQuoteEnvelope } from './quote-ref';
 import { SessionRefBlock } from './SessionRefBlock';
 import type { ParsedSessionRefEnvelope } from './session-ref';
 import { ToolImageCard } from './ToolImageCard';
+import { type VesselBlockTablePayload, vesselBlockMarkdown } from './vessel-block';
 
 /** quote 块 payload = 既有信封解析结果（不另造形状）。 */
 export type QuoteBlockPayload = ParsedQuoteEnvelope;
@@ -91,12 +93,28 @@ function NoticeBlockView({ payload }: { payload: NoticeBlockPayload; render: Blo
   return <EnvCard env={payload.env} ts={payload.ts} />;
 }
 
+/**
+ * vessel-block 试点（块 P1）：payload → markdown 文本 → 既有 Markdown 组件
+ * （原生 table：滚动 + 复制全复用，不造独立卡）。fence 原文即模型侧投影，
+ * 可见性对等天然满足（blocks.md §5）。
+ */
+function VesselBlockView({
+  payload,
+  render,
+}: {
+  payload: VesselBlockTablePayload;
+  render: BlockRenderCtx;
+}) {
+  return <Markdown text={vesselBlockMarkdown(payload)} className={render.className} />;
+}
+
 export const blockViews = {
   quote: QuoteBlockView,
   'session-ref': SessionRefBlockView,
   image: ToolImageCardView,
   file: MessageRefsView,
   notice: NoticeBlockView,
+  'vessel-block': VesselBlockView,
 } as const;
 
 /** 一个块 → 注册表组件。未知 type ⇒ null（原文渲染兜底在管线侧）。 */
