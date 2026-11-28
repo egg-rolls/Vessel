@@ -21,6 +21,7 @@ import { buildPathBoundary } from '@vessel-agent/basic-tools';
 import type { Plugin, PluginHost } from '@vessel-agent/core';
 import { createAutoSubscribeHook } from './auto-sub.js';
 import { type DocSubscriptionConfig, parseDocSubscriptionConfig } from './config.js';
+import { type AgentEventsPort, registerFriendEdges } from './friend-edges.js';
 import { createBeforeLlmHook } from './hook.js';
 import { ScriptRunner } from './script.js';
 import { SubscriptionStore } from './store.js';
@@ -37,6 +38,11 @@ export {
   type ScriptSpec,
 } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
+export {
+  type AgentEventsPort,
+  type FriendSpawnEvent,
+  registerFriendEdges,
+} from './friend-edges.js';
 export {
   describeHealthRev,
   type HealthSnapshot,
@@ -99,6 +105,16 @@ export interface DocSubscriptionPluginOptions {
 /** 插件描述 */
 export const DOC_SUBSCRIPTION_PLUGIN_NAME = 'doc-subscription';
 
+/** agentEvents 端口形状守卫（装配注入；缺省 / 非法 ⇒ 不记边，零回归）。 */
+function isAgentEventsPort(value: unknown): value is AgentEventsPort {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as AgentEventsPort).subscribe === 'function' &&
+    typeof (value as AgentEventsPort).sessionOf === 'function'
+  );
+}
+
 /**
  * 创建插件实例。
  * 显式传入的 install options.config 优先于工厂 options.config；
@@ -107,6 +123,8 @@ export const DOC_SUBSCRIPTION_PLUGIN_NAME = 'doc-subscription';
 export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOptions = {}): Plugin {
   // 本实例的执行器（dispose 可达；install 前 / enabled:false 时缺省）。
   let installedRunner: ScriptRunner | undefined;
+  // 好友边 listener 退订口（q-sub-unify-p1 M6；dispose 可达）。
+  let unsubscribeFriendEdges: (() => void) | undefined;
   return {
     name: DOC_SUBSCRIPTION_PLUGIN_NAME,
     version: '0.27.0',
@@ -143,6 +161,17 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
       // script 执行器：每实例一份（成员共享 hook 引用 ⇒ 单飞按 session+name 键控）。
       const runner = new ScriptRunner();
 
+      // 好友边自动互记（q-sub-unify-p1 M6）：装配层注入 agentEvents 端口（晚绑定
+      // fan-out bridge）；缺省 ⇒ 不记边（裸宿主 / 旧装配零回归）。写入走本实例 store
+      // 的 per-session 串行链，零竞态。
+      const rawEvents =
+        typeof rawConfig === 'object' && rawConfig !== null
+          ? (rawConfig as Record<string, unknown>).agentEvents
+          : undefined;
+      if (isAgentEventsPort(rawEvents)) {
+        unsubscribeFriendEdges = registerFriendEdges(store, rawEvents);
+      }
+
       host.registerTool(createSubscribeTool({ boundary, store, config, liveConfig, runner }));
       host.registerHook(createBeforeLlmHook({ boundary, store, config, liveConfig, runner }));
       host.registerHook(createAutoSubscribeHook({ boundary, store, config }));
@@ -153,6 +182,8 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
       // 继续工作，见 script.ts 模块注释）。
       installedRunner?.dispose();
       installedRunner = undefined;
+      unsubscribeFriendEdges?.();
+      unsubscribeFriendEdges = undefined;
     },
   };
 }
