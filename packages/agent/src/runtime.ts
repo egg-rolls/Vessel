@@ -925,6 +925,18 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   },
   messages: {
     type: 'array',
+    // items 显式声明（q-agent-close-tool-bug）：无 items 数组在 dashscope/qwen
+    // 约束生成下元素被抑制恒空；与父级 tool.ts 同口径（正常路径沿用父级定义）。
+    items: {
+      type: 'object',
+      properties: {
+        to: { type: 'string' },
+        content: { type: 'string' },
+        interrupt: { type: 'boolean' },
+        notify: { type: 'boolean' },
+        message_id: { type: 'string' },
+      },
+    },
     description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
   },
   limit: {
@@ -935,9 +947,18 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
   },
   members: {
     type: 'array',
+    // items 显式声明（q-agent-close-tool-bug）：无 items 数组在 dashscope/qwen
+    // 约束生成下元素被抑制恒空；与父级 tool.ts 同口径（正常路径沿用父级定义）。
+    items: {
+      type: ['string', 'object'],
+      description:
+        'close: a member id or session id string; ' +
+        'create/hire: an object {name?, model?, system_prompt?, visibility?, title?, startup_prompt?}',
+    },
     description:
       'create/hire: [{name?, model?, system_prompt?, visibility?, title?, startup_prompt?}]; ' +
-      'close: [member id or session id]',
+      'close: [member id or session id]. ' +
+      'Always emit the explicit entries; never an empty array',
   },
   startup_prompt: {
     type: 'string',
