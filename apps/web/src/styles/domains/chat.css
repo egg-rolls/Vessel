@@ -572,6 +572,17 @@ button.tool-image-thumb:focus-visible {
   border-radius: var(--radius-sm);
 }
 
+/* PDF 预览（q-pdf-preview-channel）：浏览器原生查看器 iframe，与图片同弹窗基座。
+   高度与图片 max-height 同口径（70dvh）；白底保证深色主题下 PDF 页面可读。 */
+.pdf-lightbox-frame {
+  display: block;
+  width: 100%;
+  height: 70dvh;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #fff;
+}
+
 /* 附件预览弹窗（q-image-chip-inline）：完整路径行（可选中）+ 复制键 +
    「临时」badge。路径行只在传了 path 时渲染（工具图卡旧形态零回归）。 */
 .tool-image-lightbox-staging {

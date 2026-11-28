@@ -198,23 +198,16 @@ export function ImageThumb({
 }
 
 /**
- * 放大预览：复用 ModalShell（Esc / 焦点圈 / 滚动锁 / portal 全套既有 a11y），
- * 不另造 lightbox。图片按视口收敛（object-contain），不裁不拉伸。
- *
- * 可选 `path`（q-image-chip-inline）：完整绝对路径行（可选中）+ 复制键
- * （既有 useMessageCopy：clipboard + toast）；`staging` = 暂存未入池「临时」
- * badge。两者缺省时形态与旧版完全一致（ToolImageCard 等既有消费零回归）。
+ * 预览弹窗共享元信息行（q-pdf-preview-channel 抽出）：文件名（+ 暂存 badge）
+ * + 可选完整路径行 + 复制键。ImageLightbox / PdfLightbox 同一份，不各写一套。
+ * `path` 缺省 = 不渲染路径行（ToolImageCard 等旧消费形态不变）。
  */
-export function ImageLightbox({
-  url,
+export function LightboxMeta({
   name,
-  onClose,
   path,
   staging,
 }: {
-  url: string;
   name: string;
-  onClose: () => void;
   /** 完整绝对路径（给了才渲染路径行 + 复制键）。 */
   path?: string;
   /** 暂存未入池（「临时」badge，与 composer chip 同一语义）。 */
@@ -222,15 +215,7 @@ export function ImageLightbox({
 }) {
   const copy = useMessageCopy(t('chat.toolImage.pathCopied'));
   return (
-    <ModalShell
-      label={t('chat.toolImage.previewNamed', { name })}
-      closeLabel={t('chat.toolImage.close')}
-      onClose={onClose}
-      size="xl"
-      className="tool-image-lightbox"
-      bodyClassName="items-center"
-    >
-      <img src={url} alt={name} className="tool-image-lightbox-img" />
+    <>
       <p className="m-0 w-full truncate text-center font-mono text-2xs text-faint" title={name}>
         {name}
         {staging === true && (
@@ -253,6 +238,44 @@ export function ImageLightbox({
           </button>
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * 放大预览：复用 ModalShell（Esc / 焦点圈 / 滚动锁 / portal 全套既有 a11y），
+ * 不另造 lightbox。图片按视口收敛（object-contain），不裁不拉伸。
+ *
+ * 可选 `path`（q-image-chip-inline）：完整绝对路径行（可选中）+ 复制键
+ * （既有 useMessageCopy：clipboard + toast）；`staging` = 暂存未入池「临时」
+ * badge。两者缺省时形态与旧版完全一致（ToolImageCard 等既有消费零回归）。
+ */
+export function ImageLightbox({
+  url,
+  name,
+  onClose,
+  path,
+  staging,
+}: {
+  url: string;
+  name: string;
+  onClose: () => void;
+  /** 完整绝对路径（给了才渲染路径行 + 复制键）。 */
+  path?: string;
+  /** 暂存未入池（「临时」badge，与 composer chip 同一语义）。 */
+  staging?: boolean;
+}) {
+  return (
+    <ModalShell
+      label={t('chat.toolImage.previewNamed', { name })}
+      closeLabel={t('chat.toolImage.close')}
+      onClose={onClose}
+      size="xl"
+      className="tool-image-lightbox"
+      bodyClassName="items-center"
+    >
+      <img src={url} alt={name} className="tool-image-lightbox-img" />
+      <LightboxMeta name={name} path={path} staging={staging} />
     </ModalShell>
   );
 }
