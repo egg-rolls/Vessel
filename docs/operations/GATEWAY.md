@@ -77,6 +77,7 @@ vessel gateway nodes list [--json]
 
 - **restart 缺省保持运行模式**：读目标实例 pid record 的 `daemon` 标记，不带 `--daemon` 按原模式重启；显式 `--daemon` 强制后台；旧记录无标记 / 无运行实例 → 前台。`restart --all` 仍要求显式 `--daemon`。
 - 判别依据是归属：pid + `started_at` + `node_id`（node）/ `hub.lock`（hub）三元复核；adopt / 外部启动的进程**永远**不在终止名单里。
+- **真停 drain 期间 start 会等待**：`--stop-nodes` / 舰队级 stop/restart 的 drain 窗口内 node/hub 仍活但已被判死；停止方写 `platform-stop-nodes[-<instance>].json` 意图 marker，并发的 `gateway start` / `restart` 候 drain 毕再 adopt/spawn（打一行等待提示），不会接管即将被杀的 node/hub。停止方进程死亡 = marker 失效（残留自动清）。语义见 [gateway-lifecycle](../architecture/gateway-lifecycle.md)。
 - 前台 Ctrl+C / 外部 SIGTERM 没有保留标记 ⇒ 连本进程 spawn 的子进程一起停；`gateway stop` / `restart` 先写保留标记 ⇒ 平台层退出时保留子进程。还没就绪（无 `gateway.pid` 归属证据）的子进程停机时会被终止（留着就是孤儿）。
 - **graceful-first**：停 node 前先经 Node API `gateway.shutdown` 请它进程内 drain（写 resume 标记 + interrupt('shutdown')），缺省不限时等它自死；显式 `--timeout` 到点 / 受理失败回退强杀 + 补偿清理，打一行 `node.drain.skipped`（pid + 原因，持久化到目标实例日志）。平台层同款：经 `/platform/rpc` `gateway.shutdown`（回包 `{stopping:true}` 只受理）跑与 SIGTERM 相同的退出序列（含池 stop 只 terminate owned engine），回退强杀打 `platform.drain.skipped`。drain 完成但退出链挂死 → quiesce 兜底强杀 + `stop.forced`（reason=quiesce_exit_timeout）。退出链步骤级进度见 `node.shutdown.step` 事件（[LOGS](LOGS.md)）。hub 没有 run 面，不走优雅关闭。
 
@@ -99,7 +100,7 @@ vessel gateway nodes list [--json]
 
 ## 7. 关键文件
 
-- 平台：`<dataDir>/platform.pid`、`platform-<instance>.lock`（实例状态）；`platform-children.json`（**只**记录本平台 spawn 的子进程，失败回滚与 `--stop-nodes` 按它复核归属）；`nodes.json`（本地节点唯一真源）。
+- 平台：`<dataDir>/platform.pid`、`platform-<instance>.lock`（实例状态）；`platform-children.json`（**只**记录本平台 spawn 的子进程，失败回滚与 `--stop-nodes` 按它复核归属）；`platform-handoff[-<instance>].json`（保活交接标记，TTL 120s 消费即删）；`platform-stop-nodes[-<instance>].json`（真停 drain 意图标记，停止方活着才有效，drain 毕清除）；`nodes.json`（本地节点唯一真源）。
 - node：`<nodeDataDir>/gateway.pid`、`gateway-default.lock`（`gateway stop` 不删）；`node.json`（节点身份）。hub：`<hubDataDir>/hub.lock`（adopt 判据）。
 - 日志：`<dataDir>/logs/gateway.log`、`logs/node-<name>.log`（0600）。
 

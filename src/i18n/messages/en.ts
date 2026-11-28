@@ -389,6 +389,8 @@ export const en: Record<MessageKey, string> = {
   'gateway.stopTimeout': 'Timed out waiting for the gateway (pid {pid}) to exit ({timeout}).',
   'gateway.stopKeptNodes': 'kept {count} node(s) alive for handoff',
   'gateway.stopKeptHub': 'kept hub alive for handoff',
+  'gateway.stopNodesDrainWait':
+    'stop --stop-nodes is draining (stopper pid {pid}); waiting for it to finish before start/adopt so we do not take over node/hub that are about to be stopped',
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.startedNode': 'node: {name} (port {port})',

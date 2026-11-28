@@ -126,6 +126,11 @@ import {
   snapshotActiveRuns,
   waitForProcessExit,
 } from '../../../gateway/stop-drain';
+import {
+  clearStopNodesMarker,
+  waitForStopNodesDrain,
+  writeStopNodesMarker,
+} from '../../../gateway/stop-nodes-marker';
 import { resolveGatewayToken } from '../../../gateway/transport-factory';
 import {
   readWatchdogSnapshot,
@@ -1025,50 +1030,66 @@ export async function stopGateway(
             ? [normalizeGatewayInstance(selector.instance)]
             : null;
     const cleanupTargets = instances ?? [undefined];
-    for (const instance of cleanupTargets) {
-      const result = await stopSpawnedChildren({
-        gatewayDataDir: context.dataDir,
-        ...(instance === undefined || selector.all === true
-          ? { allInstances: true }
-          : { instance }),
-        platform: context.platform,
-        // F1/SD-2 链C：凭据解析以目标 node 自己的 config/dataDir 为权威；
-        // 平台 config 供隐式 node（dataDir == gatewayDataDir）使用。
-        env: context.env,
-        config: context.config,
-        ...(keepForHandoff ? { keep: true } : {}),
-        ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
-        ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
-        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-        ...(force ? { force: true } : {}),
-        // P0-run-stops P4：node 没 drain 成被强杀时，停止方代打一行结构化日志。
-        // F1/SD-2：同时持久化到 node 子进程日志（对齐 stop.forced 先例，O7）。
-        onDrainSkipped: (info) => {
-          printErr(
-            ui.warn(
-              formatEventLine('node.drain.skipped', {
-                name: info.name,
-                pid: info.pid,
-                reason: info.reason,
-              }),
-            ),
-          );
-          void persistChildDrainSkippedAudit(context.dataDir, info);
-        },
-        // 用户裁定 #5：force 非正常退出审计（停止方代打 stop.forced）。
-        // DR15-1/O7：同时持久化到 node 子进程日志（best-effort，不阻断停止）。
-        onForced: (info) => {
-          printErr(ui.warn(formatForcedStopLine(info)));
-          void persistChildForcedAudit(context.dataDir, info);
-        },
-        // 用户裁定 #5：优雅 drain 进度（5s 一行，哪些 run/session 还在跑）。
-        onProgress: (name, info) => print(ui.info(formatDrainProgressLine(`node ${name}`, info))),
-      });
-      if (result.failed > 0) failed = true;
-      keptNodes += result.kept?.nodes ?? 0;
-      keptHubs += result.kept?.hubs ?? 0;
-      stoppedChildren.push(...(result.stoppedChildren ?? []));
-      failedChildren.push(...(result.failedChildren ?? []));
+    // q-handoff-stop-nodes-race：真停（--stop-nodes）drain 前先写 stop-nodes 意图
+    // marker——drain 期间 node/hub 仍活、adopt 判据全绿，并发 start/restart 见 marker
+    // 会候 drain 毕再接管（见 gateway/stop-nodes-marker.ts）。drain 毕（无论成败）清除。
+    if (!keepForHandoff) {
+      for (const target of cleanupTargets) {
+        await writeStopNodesMarker(context.dataDir, target, process.pid).catch(() => undefined);
+      }
+    }
+    try {
+      for (const instance of cleanupTargets) {
+        const result = await stopSpawnedChildren({
+          gatewayDataDir: context.dataDir,
+          ...(instance === undefined || selector.all === true
+            ? { allInstances: true }
+            : { instance }),
+          platform: context.platform,
+          // F1/SD-2 链C：凭据解析以目标 node 自己的 config/dataDir 为权威；
+          // 平台 config 供隐式 node（dataDir == gatewayDataDir）使用。
+          env: context.env,
+          config: context.config,
+          ...(keepForHandoff ? { keep: true } : {}),
+          ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+          ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+          ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+          ...(force ? { force: true } : {}),
+          // P0-run-stops P4：node 没 drain 成被强杀时，停止方代打一行结构化日志。
+          // F1/SD-2：同时持久化到 node 子进程日志（对齐 stop.forced 先例，O7）。
+          onDrainSkipped: (info) => {
+            printErr(
+              ui.warn(
+                formatEventLine('node.drain.skipped', {
+                  name: info.name,
+                  pid: info.pid,
+                  reason: info.reason,
+                }),
+              ),
+            );
+            void persistChildDrainSkippedAudit(context.dataDir, info);
+          },
+          // 用户裁定 #5：force 非正常退出审计（停止方代打 stop.forced）。
+          // DR15-1/O7：同时持久化到 node 子进程日志（best-effort，不阻断停止）。
+          onForced: (info) => {
+            printErr(ui.warn(formatForcedStopLine(info)));
+            void persistChildForcedAudit(context.dataDir, info);
+          },
+          // 用户裁定 #5：优雅 drain 进度（5s 一行，哪些 run/session 还在跑）。
+          onProgress: (name, info) => print(ui.info(formatDrainProgressLine(`node ${name}`, info))),
+        });
+        if (result.failed > 0) failed = true;
+        keptNodes += result.kept?.nodes ?? 0;
+        keptHubs += result.kept?.hubs ?? 0;
+        stoppedChildren.push(...(result.stoppedChildren ?? []));
+        failedChildren.push(...(result.failedChildren ?? []));
+      }
+    } finally {
+      if (!keepForHandoff) {
+        for (const target of cleanupTargets) {
+          await clearStopNodesMarker(context.dataDir, target).catch(() => undefined);
+        }
+      }
     }
   }
 
@@ -2440,6 +2461,16 @@ export async function startDaemonCommand(
     }
   }
   const instance = deriveGatewayInstance(options.instance, options.port);
+  // q-handoff-stop-nodes-race：stop --stop-nodes 正在 drain 时先候它停完再 spawn
+  // daemon——否则新平台会 adopt 即将被停止方杀掉的 node/hub。等待必须在 spawn 之前：
+  // daemon 父进程的 waitMs 预算会杀掉还没写 PID 的子进程，前台里等会被误杀。
+  if (stateKind === 'platform') {
+    await waitForStopNodesDrain(context.dataDir, instance, {
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+      onWait: (marker) =>
+        print(ui.info(t('gateway.stopNodesDrainWait', { pid: marker.stopper_pid }))),
+    });
+  }
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
 
   // 启动诊断：只提示，不在这里构建 —— 本进程随后就会退出（真正长驻的是被 spawn
@@ -3283,6 +3314,15 @@ export async function runPlatformGatewayForeground(
       ...(node.token !== undefined ? { token: node.token } : {}),
       autoStart: node.entry.auto_start,
     }));
+    // q-handoff-stop-nodes-race：adopt/spawn 判定前再核一次 stop-nodes marker——
+    // 平台已死但停止方还在 drain 的窗口（并发 restart handoff / 平台先被停）里，
+    // 候 drain 毕再 adopt，避免接管即将被杀的 node/hub（daemon 父进程已等过一次，
+    // 这里兜住 --foreground 直达与等待后新出现的 drain）。
+    await waitForStopNodesDrain(dataDir, instance, {
+      ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
+      onWait: (marker) =>
+        print(ui.info(t('gateway.stopNodesDrainWait', { pid: marker.stopper_pid }))),
+    });
     // 0.55 分段启动 phase A：只做 adopt 判定 + spawn（毫秒级，不等就绪）。
     // 单个节点在这里失败只标该节点 failed，**不再回滚整个 gateway**。
     await supervisor.begin(specs);
