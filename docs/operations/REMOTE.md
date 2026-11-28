@@ -23,7 +23,7 @@ children: [remote-connect.md, remote-tls.md, web-console-deploy.md, hub-ops.md]
 - 原 §1 / §3.1–§3.2 / §3.5 / §3.5.1 / §5–§7 → [remote-connect](remote-connect.md)（TLS 行 → [remote-tls](remote-tls.md)）
 - 原 §2（证书与 CA）→ [remote-tls](remote-tls.md)
 - 原 §3.3（跨节点传输已删除）→ [architecture/gateway.md](../architecture/gateway.md#remote)；federation 寻址（原 §3.3.1）→ [federation-hub](../architecture/federation-hub.md)
-- 原 §3.4（生命周期与热重载命令）→ [GATEWAY](GATEWAY.md) / [CONFIG §4.1](CONFIG.md)
+- 原 §3.4（生命周期与热重载命令）→ [GATEWAY](GATEWAY.md) / [config-reload](config-reload.md)
 - 原 §3.6（Hub 控制面）→ [hub-ops](hub-ops.md)（协议事实家 [federation-hub](../architecture/federation-hub.md)）
 - 原 §4 / §4.1（独立前端 / 平台代理）→ [web-console-deploy](web-console-deploy.md)
 
