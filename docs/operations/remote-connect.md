@@ -60,9 +60,8 @@ export VESSEL_CONNECT_TOKEN='<node-b-token>'
 vessel --connect https://node-b.example.com:8644 --ca /etc/vessel/ca.pem --run "hello"
 ```
 
-等价配置：`connect.token_env: VESSEL_CONNECT_TOKEN` + `connect.ca_file: /etc/vessel/ca.pem`。
-
-- token 优先级：`--connect-token` > env（`VESSEL_CONNECT_TOKEN` 或 `connect.token_env`）> `connect.token`。
+- 等价配置：`connect.token_env: VESSEL_CONNECT_TOKEN` + `connect.ca_file`。token 优先级：
+  `--connect-token` > env（`VESSEL_CONNECT_TOKEN` 或 `connect.token_env`）> `connect.token`。
 - `--connect` / `VESSEL_CONNECT` 只接受 origin；回环允许 `http://`，非回环必须 `https://`。
 - 建连后 `health.get` 取远端 node 身份（stderr 打印 `Remote gateway: node=...`）；
   connect 模式不获取本地 data-dir 写意图锁、不写本地 store / trace。
