@@ -1537,6 +1537,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.toolImage.copyPath': 'Copy path',
   'chat.toolImage.pathCopied': 'Path copied',
   'chat.toolImage.staging': 'temp (not ingested)',
+  // q-block-cardshell-unify: unified file card (body vessel-ref token lift; CardShell surface).
+  // Enlarge / loading copy reuses chat.toolImage.* above; delivery chips reuse chat.refs.image.*.
+  'chat.refCard.copyPath': 'Copy path',
+  'chat.refCard.pathCopied': 'Path copied',
+  'chat.refCard.expired': 'expired',
+  'chat.refCard.temporary': 'temp',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': 'Only absolute paths can be referenced: {path}',
   'chat.refs.reject.tooLong': 'The reference path is longer than {max} characters',

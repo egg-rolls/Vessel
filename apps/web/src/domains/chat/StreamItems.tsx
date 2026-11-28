@@ -36,7 +36,6 @@ import {
 } from './env-notice';
 import { humanizeRunError } from './error-text';
 import { liftBlocks } from './lift-blocks';
-import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
@@ -211,8 +210,13 @@ export function UserBubble({
 }) {
   const clock = formatClock(ts);
   // 块提升（块 P0）：信封提升成气泡上方的块，与历史气泡同形（同一管线）。
-  // refs chip 仍走下面独立的 MessageRefs 线（结构化字段，不进正文管线）。
-  const { blocks, body } = liftBlocks({ role: 'user', content: text });
+  // refs 一并交给管线（q-block-cardshell-unify）：file 块统一做 token 卡 + chip
+  // 的 occurrence 去重 —— 不再另挂独立 MessageRefs 线（否则 chip 双出）。
+  const { blocks, body } = liftBlocks({
+    role: 'user',
+    content: text,
+    ...(refs !== undefined ? { refs: [...refs] } : {}),
+  });
   return (
     <div
       className={cn(
@@ -221,12 +225,14 @@ export function UserBubble({
       )}
     >
       <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      <MessageRefs refs={refs} />
-      <div className="msg-bubble">
-        {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
-            只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
-        <MessageFold>{body}</MessageFold>
-      </div>
+      {/* 正文全部被块消费（如只有 token）时不留空气泡。 */}
+      {body.length > 0 && (
+        <div className="msg-bubble">
+          {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
+              只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
+          <MessageFold>{body}</MessageFold>
+        </div>
+      )}
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
       <MessageActions
         className="justify-end"

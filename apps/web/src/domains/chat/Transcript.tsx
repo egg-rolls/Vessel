@@ -171,9 +171,12 @@ const TranscriptMessage = memo(function TranscriptMessage({
             再「带了什么文件」（refs chip）。不改正文，也不影响 copy / edit。
             0.56：图片引用同时显示投递三态（从事件派生，服务端随历史下发）。 */}
         <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-        <div className="msg-bubble">
-          <MessageFold>{body}</MessageFold>
-        </div>
+        {/* 正文全部被块消费（如只有 vessel-ref token）时不留空气泡。 */}
+        {body.length > 0 && (
+          <div className="msg-bubble">
+            <MessageFold>{body}</MessageFold>
+          </div>
+        )}
         {hasMeta || actions.length > 0 ? (
           <MessageActions className="justify-end" actions={actions} meta={meta} />
         ) : null}
