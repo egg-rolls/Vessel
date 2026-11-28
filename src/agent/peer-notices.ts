@@ -8,8 +8,11 @@
  * - 上游是 `AgentService` 的 `peerStops` 端口：它只在「真的停了」时报（见 service.ts
  *   的 `schedulePeerStop` / `flushPeerStop`），本模块不重做那个判定；
  * - 本模块负责**投递语义**：`to` 定向到父 session（总线按 session 游标注入，定向
- *   才不会先跑起来的别的 session 吃掉）、窗口内合并成一条、同一父 session 一轮
- *   （两次 run 之间）最多 1 条；
+ *   才不会先跑起来的别的 session 吃掉）、窗口内合并成一条；
+ * - **发射时机的唯一真相源是 envGranularity 的 peer cadence**（q-peer-notice-cadence）：
+ *   `request` = run 期间也可发（mid-run，下一 LLM 请求即注入）；`run` = hold 到父 run
+ *   收口、同一父 session 一轮最多 1 条；`off` = 整段静默。路由器的判忙（running hold）
+ *   与一轮一条（sentInRound）**只在 cadence=run 时启用**，不是独立决策；
  * - 不发新事件类型：就是 `runtime.notice` 加一个 scope，模型侧仍走既有
  *   `runtime-notice-hook` 的 `vessel:notice` 尾消息。
  *
@@ -19,7 +22,7 @@
  * @module vessel/peer-notices
  */
 
-import type { EventStream, Logger, RunEvent } from '../../packages/core/src/index';
+import type { EnvCadence, EventStream, Logger, RunEvent } from '../../packages/core/src/index';
 import {
   NOTICE_DETAILS_MAX,
   NOTICE_SUMMARY_MAX,
@@ -28,7 +31,8 @@ import {
 } from '../runtime/runtime-notice';
 
 /**
- * 合并 / 判定窗口：第一条变更进来后等这么久，父 session 仍空闲才发。
+ * 合并 / 判定窗口：第一条变更进来后等这么久再发（避抖，与 cadence 正交）。
+ * cadence=run 时窗口到点还要求父 session 空闲；cadence=request 时到点即发（mid-run）。
  *
  * 2s 的取值理由：成员停下后父级马上收到下一条消息是常态（链式派活的最后一跳），
  * 窗口太短会把「停了」和「马上又开工」分两次报出来，等于噪音；再长则父级已经
@@ -81,6 +85,19 @@ export interface PeerNoticeRouterOptions {
    * 时刻的 session —— 向后兼容，绝不因此丢通知。
    */
   resolveParentSession?: (memberId: string) => string | undefined;
+  /**
+   * 发射节奏（注入粒度框架轴 A）：**投递 gating 的唯一真相源**，装配层传
+   * `resolveEnvCadence('peer', …)` 的 live resolver（热改即时生效）。
+   *
+   * - `request`：run 期间也发（mid-run）——不判忙、不限一轮一条；2s 合并窗保留，
+   *   同 run 内重复正文由 notice hook 的 injectedByRun 去重；
+   * - `run`：hold 到父 run 收口 + 同一父 session 一轮最多 1 条（既有行为）；
+   * - `off`：不收不发（总线 publish 入口同样按 off 丢弃，双保险同一真相源）。
+   *
+   * 每次 report / schedule / flush 实时求值（不是注册时快照）。缺省不注入 ⇒ 'run'
+   * （旧装配 = 既有 hold 行为，零回归）；生产装配恒注入 resolver。
+   */
+  cadence?: EnvCadence | (() => EnvCadence);
   /** 窗口；缺省 `PEER_NOTICE_WINDOW_MS` */
   windowMs?: number;
   /** 测试注入。 */
@@ -104,7 +121,7 @@ type TimerHandle = ReturnType<typeof setTimeout>;
 interface SessionState {
   changes: PeerStopChange[];
   timer?: TimerHandle;
-  /** 本轮（这次 run 间隔）已经发过一条；缓冲区留到下一轮 */
+  /** 本轮（这次 run 间隔）已经发过一条；缓冲区留到下一轮。**仅 cadence=run 时记账/生效** */
   sentInRound: boolean;
   /**
    * 这个窗口里最后上报的成员 id：`flush` 时用它重解析父级当前的 session
@@ -117,6 +134,9 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
   const bus = options.bus;
   const logger = options.logger;
   const windowMs = options.windowMs ?? PEER_NOTICE_WINDOW_MS;
+  /** 发射节奏实时求值：gating 全部从这里派生（单真相源），不在别处独立决策。 */
+  const cadenceOf = (): EnvCadence =>
+    typeof options.cadence === 'function' ? options.cadence() : (options.cadence ?? 'run');
   const setTimer =
     options.timers?.set ??
     ((fn: () => void, ms: number): TimerHandle => {
@@ -194,16 +214,26 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
   const flush = (sessionId: string, state: SessionState): void => {
     state.timer = undefined;
     if (state.changes.length === 0) return;
+    // 发射这一刻求值 cadence（热改即时生效）：off 整段静默，缓冲丢弃。
+    const cadence = cadenceOf();
+    if (cadence === 'off') {
+      state.changes = [];
+      return;
+    }
     // 真正投递这一刻才重解析：窗口内父级 rotate 过，就投给新 body（旧 body 的游标
     // 新 body 拉不到）。
     const target = resolveTarget(sessionId, state);
     const live = target === sessionId ? state : rekey(sessionId, state, target);
     if (live.changes.length === 0) return;
-    // 本轮还在跑：留在缓冲区。状态已经挂在新 session 上，收口事件按新 session 就能找到它。
-    if (running.has(target)) return;
-    // 新 body 这一轮已经发过一条：留到下一轮（「每轮最多一条」跟着 session 走）。
-    if (live.sentInRound) return;
-    // 目标状态自己还压着一个窗口：交给它把这两批一起发，不抢跑。
+    // 以下两条 gating **仅在 cadence=run 时启用**（从 cadence 派生，非独立决策）；
+    // request 时 mid-run 照发，下一 LLM 请求由 notice hook 注入。
+    if (cadence === 'run') {
+      // 本轮还在跑：留在缓冲区。状态已经挂在新 session 上，收口事件按新 session 就能找到它。
+      if (running.has(target)) return;
+      // 新 body 这一轮已经发过一条：留到下一轮（「每轮最多一条」跟着 session 走）。
+      if (live.sentInRound) return;
+    }
+    // 目标状态自己还压着一个窗口：交给它把这两批一起发，不抢跑（合并窗，与 cadence 正交）。
     if (live.timer !== undefined) return;
     const changes = live.changes;
     live.changes = [];
@@ -213,7 +243,8 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
         to: target,
         ...(members.length > 0 ? { meta: { members } } : {}),
       });
-      live.sentInRound = true;
+      // 一轮一条只在 run 档记账；request 档不限（同 run 重复正文由 hook 去重）。
+      if (cadence === 'run') live.sentInRound = true;
     } catch (error) {
       logger?.warn('peer_notice.publish_failed', {
         session_id: target,
@@ -225,9 +256,10 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
   const schedule = (sessionId: string, state: SessionState): void => {
     // 一个 session 同时最多一个待发窗口（不叠加定时器）。
     if (state.timer !== undefined) return;
-    // 本轮还在跑：等 run 收口（那一刻父级才是「看完这一轮」的状态）。判忙用的是
-    // **重解析后**的 session：窗口内 rotate 过的话，忙的是新 body，不是旧的那个。
-    if (running.has(resolveTarget(sessionId, state))) return;
+    // cadence=run：本轮还在跑就等 run 收口（那一刻父级才是「看完这一轮」的状态）。
+    // 判忙用的是**重解析后**的 session：窗口内 rotate 过的话，忙的是新 body，不是旧的
+    // 那个。cadence=request：不判忙，合并窗到点即发（mid-run）。
+    if (cadenceOf() === 'run' && running.has(resolveTarget(sessionId, state))) return;
     state.timer = setTimer(() => {
       state.timer = undefined;
       flush(sessionId, state);
@@ -245,7 +277,8 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
     running.delete(sessionId);
     const state = sessions.get(sessionId);
     if (state === undefined) return;
-    // 一轮结束 = 下一轮可以再发一条；缓冲的变更在这条边界之后合并发出。
+    // 一轮结束 = 下一轮可以再发一条（cadence=run 的记账复位；request 档此旗标不生效）；
+    // 缓冲的变更在这条边界之后合并发出。
     state.sentInRound = false;
     if (state.changes.length > 0) schedule(sessionId, state);
   });
@@ -253,12 +286,16 @@ export function createPeerNoticeRouter(options: PeerNoticeRouterOptions): PeerNo
   return {
     report(change) {
       if (change.parent_session_id === '' || change.agent_id === '') return;
+      const cadence = cadenceOf();
+      // off：不收不发（与总线 publish 入口同一真相源，双保险）。
+      if (cadence === 'off') return;
       const state = stateFor(change.parent_session_id);
       // 记下这根的链接：flush 时用它重解析父级当前的 session（rotate 同步链接）。
       state.anchor = change.agent_id;
       pushChange(state, change);
-      // 本轮已发过：留到这一轮结束（run 收口）再发，保证「一轮最多一条」。
-      if (state.sentInRound) return;
+      // cadence=run 且本轮已发过：留到 run 收口再发（「一轮最多一条」）；
+      // request 不限一轮一条，直接进合并窗（mid-run 可发）。
+      if (cadence === 'run' && state.sentInRound) return;
       schedule(change.parent_session_id, state);
     },
     pendingCount() {
