@@ -797,6 +797,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     session,
     timelineLog,
     config,
+    // q-config-get-fresh（O5）：本地面 config.get 视图读活引用（cli 热应用同步）。
+    liveConfigRef,
     bundle,
     localPluginHostManager,
     // 顺手项②：RPC plugins.reload 与 plugin-watch 走同一带 sync 的 reload 链路。
