@@ -61,7 +61,7 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 
 | API | 语义 |
 |---|---|
-| `registerProfile(profile)` | 同内部单 id 幂等；冲突抛错。profile：`tenantId`（内部单 id）/ `providerFactory` / `model` / `resolveModel?`（ModelRef → provider + wire model，缺省走 legacy `providerFactory()` + `model`）/ `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `retry?`（传输层重试策略，缺省 `DEFAULT_PROVIDER_RETRY_POLICY`）/ `vision?`（运行期设置；能力本身问 `provider.vision`）/ `envCadence?`（环境检测节奏端口，缺省恒按 request 观察）/ `context{maxTokens?,autoCompact?,summarizer?}` / `systemPrompt?` / `permission?` / `journalFactory` |
+| `registerProfile(profile)` | 同内部单 id 幂等；冲突抛错。profile：`tenantId`（内部单 id）/ `providerFactory` / `model` / `resolveModel?`（ModelRef → provider + wire model，缺省走 legacy `providerFactory()` + `model`）/ `plugins` / `pluginHostFactory?` / `limits?` / `termination?` / `includeReasoning?` / `retry?`（传输层重试策略，缺省 `DEFAULT_PROVIDER_RETRY_POLICY`）/ `vision?`（运行期设置：图片 token 预算比例缺省 0.05、张数上限由预算推导，`maxImagesPerRequest` 是显式硬上限；能力本身问 `provider.vision`）/ `envCadence?` / `envChannel?`（per-scope 节奏 `request`/`run`/`off` 与通道 `model+ui`/`ui-only` 端口；缺省恒按 request 观察 + model+ui）/ `context{maxTokens?,autoCompact?,summarizer?,toolResultWhitelist?,compositionRecord?}`（白名单缺省 inbox read / agent read、组成快照缺省开；构造期注入重启生效）/ `systemPrompt?` / `permission?` / `journalFactory` |
 | `getOrCreateExecutionUnit(req)` | 请求：`tenantId`（内部单 id）/ `sessionId` / `agentId?` / `session?` / `events` / `eventLog?` / `compactionIndexDir?`（会话目录根 `<dataDir>/sessions`，压缩索引物化落点，供 recall 无参列表；缺省索引只留事件与内存，通过 `deriveCompactionIndex` 重建）/ `leaseService?` / `bindingLease?` / `pluginHost?` / `plugins?` / `contextFactory?` / `overrides?` |
 | `getExecutionUnit` / `retireExecutionUnit` / `listExecutionUnits` / `profileCount` | 诊断与 ControlPlane 生命周期；retire 幂等 |
 
@@ -87,12 +87,20 @@ interface ExecutionUnitOptions {
   agentId?: string; systemPrompt?: string; permission?: RuntimePermissionConfig;
   eventLog?: SessionEventReadPort;     // 只读子集（0.54 stop-write，类型上没有 append）；写由 journal 承担
   leaseService?: LeaseServicePort;     // EU 持有/续租，Run 不持
+  envCadence?: (scope: string) => EnvCadence;   // per-scope 节奏端口（request/run/off）
+  envChannel?: (scope: string) => EnvChannel;   // per-scope 通道端口（model+ui/ui-only）
+  toolResultWhitelist?: readonly ToolResultWhitelistRule[];  // 缺省走 core 内置默认
+  compositionRecord?: boolean;         // 请求组成快照开关，缺省 true
 }
 ```
 
 `create()` 是异步静态工厂（插件安装 fail-fast，ADR-023）；装配层不再直接调用，单 bundle 与成员 host 都经 `Runtime`。
 
 **工具输出调用级作用域（engine 池 Q9）**：core 公开导出 `runWithToolOutputScope(scope, fn)` / `toolOutputRoot()`（`runtime/tool-result-gate.ts`）——池化后同一 engine 进程服务多个 node，落盘根不能只靠进程级 env：派发方逐调用包裹，ALS 随异步上下文传播，`writeToolOutput` 经 `toolOutputRoot()` 自动作用域化（`scope.toolOutputDir` → `<scope.dataDir>/tool-output` → `VESSEL_TOOL_OUTPUT_DIR` → `VESSEL_DATA_DIR/tool-output` → 默认数据目录）；无 scope 的调用点走原 env 链，零回归。
+
+**工具结果附件回执（块 P2）**：`runtime/tool-attachment.ts` 公开导出 `attachToolImages` / `attachToolBlocks`（handler 在 ctx 登记 image refs / typed blocks，严格形状校验、坏条目静默丢）→ 管道认领（`takeToolAttachments`）→ loop 在本批工具结果全部写回后按 type 分条 surfaced 为带 refs / 统一信封 / fence 的 user 消息（既有注入通道）；handler 签名不变，工具零感知。信封 / fence / type 注册表协议见 [blocks](blocks.md)。
+
+**请求 extras（q-thinking-plugin）**：`ChatRequest.extra_headers` / `extra_params`（additive）由 BeforeLlm hook 的 `HookResult.requestExtras` 注入、EU 原样透传，**只有适配器读**；合并闸 `provider/request-extras.ts`：危险头（Authorization 等）与 core 保留键（model/messages/tools/stream/…）丢弃 + 告警，值必须 JSON 可序列化；缺省 / 空 ⇒ 请求逐字节不变。`LLMProvider.providerName?`（可选身份，装配注册名 / registry protocol）由 EU 填进 `HookContext.providerName`，缺省消费方按 model 名启发式降级。
 
 run 级状态收敛在 `Run`（`runId` / `sessionId` / `branch` / 计时 / `stats` / `workingContext`）。`run()` / `resumeRun()` 共用 `activeRun` 槽位并在首个 await 前同步占位；已有 active run 抛 `RunAlreadyRunningError`。公开 `RunnableAgent.resumeRun?(runId)` 仍是门面签名，per-session 门面负责 `runStore.load` 后调 `EU.resumeRun(record)`。
 
