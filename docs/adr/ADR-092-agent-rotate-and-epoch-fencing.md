@@ -118,3 +118,34 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
 - **迟到旧轮的正文**仍由 `agent.reply.stale` 解释（该事件是活的，未改动）：旧 Binding 的
   `run.*` 终态在团队日志里被显式抑制，`agent.reply.stale` 是「那一轮回复为何没出现」的
   唯一解释。
+## Errata（2.2.0 rotate 权限两档：阈值自动允许 + 人工批准）
+
+> 2026-11-28，只追加。上文正文（尤其决策 13 的 `autoApprove += agent` 与 0.51 Errata
+> 提到的「人类确认，见 0.31」）保留当时结论；以下为当前事实。现态口径见
+> [member-team.md §rotate](../architecture/member-team.md#rotate)。
+
+- **0.31 起模型发起的 rotate 须先经人类权限确认**（决策 13 的「成员 `autoApprove` 追加
+  `agent`、无人类确认」已是旧口径）；用户裁定 **q-rotate-threshold**（2.2.0 批，
+  merge `0571c148`）再加一档：**达到/超过阈值自动允许，不发批准卡**。
+- **判据与界面同一个整数**（`packages/agent/src/tool.ts`）：`percent = Math.round(ratio * 100)`
+  （0.52 取整口径，与 TUI 状态栏 / 会话列表 / `context.pressure` 一致）；阈值线
+  `warningLine = Math.round(CONTEXT_PRESSURE_WARN_RATIO * 100)` = 50
+  （`packages/core/src/runtime/execution-unit.ts`，用户裁定 0.5，与 runtime 的 rotate
+  压力提示同源）。`percent >= warningLine` → 直接 approved，零 permission、零批准卡；
+  审计事实经 `emitFact` 发 `runtime.notice`（scope `permission`，带 `context_percent` /
+  `auto_allow_reason: 'threshold'`）进 journal / 时间线（同批准卡通道）。
+- **低于阈值 / ratio 未知 fail-closed 走人工批准**（0.31 原档位不动）：发
+  `tool.permission.request`（`tool: agent.rotate`，带 `context_ratio` / `context_percent` /
+  `warning`），且须入口 `humanApproval === true` 与该 body 真有 bridge 两条件同时成立。
+  等待上限 `ROTATE_APPROVAL_TIMEOUT_MS` = 120s（`rotateApprovalTimeoutMs` 可覆盖，
+  ≤0 = 显式不设限）：超时发 `tool.permission.expired` 收卡，回
+  `rotate_not_needed{reason: approval_timeout, timeout_ms}`；其它错误打断回
+  `approval_unavailable`；run 被中止优先抛 `cancelled`；拒绝 / 无人类通道 / 非人类应答回
+  `rotate_not_needed`（`denied_by_human` / `no_human_channel`）。
+- **`rotate_not_needed` 是冻结码名**：q-rotate-threshold 起只出现在人工批准档，
+  **不代表「ratio 太低」**（未知 ratio 也走这条路）；调用方必须看 `reason` 分辨档位。
+- `agent.rotate.approved` 与 `rotated` 结果在自动允许档带 `auto_allowed: true` +
+  `auto_allow_reason: 'threshold'`（结果另带 `context_percent`），区分「人批准的」与
+  「阈值放行的」。
+- CLI / 人工 RPC（`sessions.create` / `sessions.restart`）直接走 service，不经过这道
+  闸门、不被询问。

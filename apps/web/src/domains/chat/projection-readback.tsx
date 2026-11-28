@@ -1,5 +1,7 @@
 /**
- * 投影卡的**读回**接线（`sessions.events`，spec §3.3 / 实现要点 6）。
+ * 投影卡的**读回**接线（`sessions.events`，spec §3.3 / §1.7.1 第 6 条）。
+ *
+ * spec = `docs/specs/projection-card-spec.md`（0.54 投影卡规格；早期 design 稿已退场）。
  *
  * 依赖从调用方注入（而不是在组件里 `useConnection`），理由与 `tool-catalog.tsx` 同一条：
  * 静态渲染 / 设计预览 / 单测里直接渲染 `ToolCard` 时不该拉起整个 gateway 连接模块。
@@ -9,7 +11,7 @@
  * 2. 读回结果**只用于展示**：不回写任何缓存、不塞进消息、不进 store（下一次渲染还是
  *    以 wire 的 `projection` 为准，读回只是这一次的临时展开）；
  * 3. 失败 / 空结果都返回 `undefined`，由渲染层降级成 `gone` 的文案 —— 不弹错误框、
- *    不显示 stack（spec §6.5：读回可能变死链，必须明确降级而不是静默空白）。
+ *    不显示 stack（spec §6 第 5 条：读回可能变死链，必须明确降级而不是静默空白）。
  */
 
 import { createContext, type ReactNode, useContext, useMemo } from 'react';

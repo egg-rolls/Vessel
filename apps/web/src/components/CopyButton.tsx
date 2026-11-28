@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { t } from '../i18n';
 import { useToast } from './ToastProvider';
 import { Tooltip } from './Tooltip';
-import { Button } from './ui';
-import { copyText } from './ui/clipboard';
+import { Button, copyText } from './ui';
 
 export function CopyButton({
   text,

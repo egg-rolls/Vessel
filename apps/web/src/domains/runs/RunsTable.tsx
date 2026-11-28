@@ -7,8 +7,7 @@
 
 import type { ReactNode } from 'react';
 import { StatusChip } from '../../components/StatusChip';
-import { Button, DataTable } from '../../components/ui';
-import { FilterPopover } from '../../components/ui/FilterPopover';
+import { Button, DataTable, FilterPopover } from '../../components/ui';
 import { formatTimestamp } from '../../format';
 import type { DurableRunSummary, RunStatus, Usage } from '../../gateway/types';
 import { t } from '../../i18n';
