@@ -236,6 +236,13 @@
   box-shadow: var(--elev-1);
 }
 
+/* 时间列对齐写在 legacy 层两端（宽屏 flex-end / ≤680 flex-start）：
+   utilities 层压过 legacy，若宽屏用 `items-end` utility，窄屏 media 的
+   flex-start 永远赢不了（q-p680-cosmetic）。 */
+.team-body-history-meta {
+  align-items: flex-end;
+}
+
 /* 高对比模式没有阴影：历史条目退回系统色描边。 */
 @media (forced-colors: active) {
   .team-body-history-item {
