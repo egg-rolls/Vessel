@@ -13,7 +13,7 @@
  * @module @vessel-agent/serve
  */
 
-import type { MessageRef } from '@vessel-agent/core';
+import type { MessageRef, RunTrigger } from '@vessel-agent/core';
 
 /** run 状态（与 core `RunStatus` / `RunSnapshot.state` 同值）。 */
 export type RunControlStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -70,6 +70,11 @@ export interface RunStartLikeInput {
    * app 侧映射到 `AgentService.admit({ resume: true })`。
    */
   resume?: boolean;
+  /**
+   * q-error-e2 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * handler 从 ctx.request_id + ctx.method 构建；app 侧透传进 admit。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** `runs.start` 的受理结果。 */

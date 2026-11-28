@@ -129,7 +129,10 @@ export interface ShutdownGatewayOptions {
   createClient?: (options: { baseUrl: string; token: string; timeoutMs: number }) => ReloadClient;
 }
 
-export type ShutdownGatewayResult = { ok: true } | { ok: false; error: string; code?: string };
+/** q-error-e2（§3.5）：additive http_status —— drain 证据契约用（RpcClientError.httpStatus）。 */
+export type ShutdownGatewayResult =
+  | { ok: true }
+  | { ok: false; error: string; code?: string; http_status?: number };
 
 /**
  * 调用 `gateway.shutdown`：只受理「退出序列已启动」（`{stopping:true}`），
@@ -168,7 +171,12 @@ export async function shutdownGateway(
         error.code === 'method_not_found'
           ? ' (this gateway build does not expose gateway.shutdown yet)'
           : '';
-      return { ok: false, error: `${error.code}: ${error.message}${hint}`, code: error.code };
+      return {
+        ok: false,
+        error: `${error.code}: ${error.message}${hint}`,
+        code: error.code,
+        ...(error.httpStatus !== undefined ? { http_status: error.httpStatus } : {}),
+      };
     }
     return {
       ok: false,

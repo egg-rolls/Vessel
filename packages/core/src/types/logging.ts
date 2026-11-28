@@ -9,7 +9,14 @@
 /** 日志等级（debug < info < warn < error） */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/** 结构化字段；值会经默认 redactor 处理 */
+/**
+ * 结构化字段；值会经默认 redactor 处理。
+ *
+ * q-error-e2（§3.7）约定键（additive 约定，不改端口形状；全文见 docs LogFields
+ * 约定键文档）：run_id / session_id / agent_id / tool_name / rpc_method /
+ * request_id / error_id / operation / node_id。correlation 用 `withFields`
+ * 显式绑 base 逐层透传（裁定④，不用 AsyncLocalStorage）。
+ */
 export type LogFields = Record<string, unknown>;
 
 /**

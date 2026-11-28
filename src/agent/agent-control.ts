@@ -278,6 +278,8 @@ export function createAgentControl(
           ...(input.interrupt !== undefined ? { interrupt: input.interrupt } : {}),
           ...(input.notify !== undefined ? { notify: input.notify } : {}),
           ...(input.message_id !== undefined ? { message_id: input.message_id } : {}),
+          // E2 §3.7：RPC correlation 透传（只普通 send 填）。
+          ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
         })),
       });
       return {

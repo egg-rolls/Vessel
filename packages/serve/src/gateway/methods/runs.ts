@@ -245,7 +245,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           retry_after_ms: { type: 'integer', minimum: 0 },
         },
       },
-      handler: async (params) => {
+      handler: async (params, ctx) => {
         const control = requireRunControl();
         const agentId = typeof params.agent_id === 'string' ? params.agent_id : undefined;
         const requestedSession =
@@ -258,6 +258,16 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           ...(agentId !== undefined ? { agent_id: agentId } : {}),
           ...(requestedSession !== undefined ? { session_id: requestedSession } : {}),
           ...(refs.length > 0 ? { refs } : {}),
+          // E2 §3.7：RPC correlation 从信封构建（裁定④显式字段）。
+          ...(ctx.request_id !== undefined
+            ? {
+                triggered_by: {
+                  request_id: ctx.request_id,
+                  rpc_method: ctx.method ?? 'runs.start',
+                  ...(agentId !== undefined ? { agent_id: agentId } : {}),
+                },
+              }
+            : {}),
         });
         // `session_id` 只能来自控制面；控制面没回传时不编造（用请求值）。
         const returnedSession = (result as { session_id?: unknown }).session_id;

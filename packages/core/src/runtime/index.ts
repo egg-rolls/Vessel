@@ -20,6 +20,9 @@ export {
   type ErrorSummary,
   type ErrorSummaryLink,
   errorSummary,
+  firstStackFrame,
+  newErrorId,
+  stampErrorId,
 } from './error-summary.js';
 export { CONTEXT_PRESSURE_WARN_RATIO, ExecutionUnit } from './execution-unit.js';
 export { PermissionTimeoutError } from './permission-policy.js';

@@ -178,7 +178,7 @@ export {
   shouldColor,
 } from './log-hub.js';
 // 日志端口（0.10 R2-14）：Logger / LogLevel / LogFields / LoggingConfig 经 ./types 导出
-export { createStderrLogger, noopLogger, writeStderrNotice } from './logging.js';
+export { createStderrLogger, noopLogger, withFields, writeStderrNotice } from './logging.js';
 // Observability（0.4 C2 聚合 + 0.5 F2 trace）
 export {
   createDefaultTraceRedactor,
@@ -281,6 +281,7 @@ export {
   type ExecutionUnitRequest,
   errorSummary,
   findToolNameAlias,
+  firstStackFrame,
   type InstalledPlugins,
   installPluginsIntoHost,
   isBridgeCall,
@@ -291,6 +292,7 @@ export {
   markBridgeCall,
   markToolResultBounded,
   markToolTransport,
+  newErrorId,
   normalizeRetryPolicy,
   omitMarker,
   PermissionTimeoutError,
@@ -308,6 +310,7 @@ export {
   retryBackoffMs,
   runWithToolOutputScope,
   safeSegment,
+  stampErrorId,
   suggestToolName,
   type TenantRuntimeProfile,
   TOOL_NAME_ALIASES,

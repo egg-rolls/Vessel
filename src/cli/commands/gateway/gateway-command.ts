@@ -25,6 +25,7 @@ import {
   loadConfig,
   resolveAuthSettings,
   resolvePlatformProxySecret,
+  tokenFingerprint,
   type VesselConfig,
 } from '../../../../packages/config/src/index';
 import {
@@ -119,6 +120,7 @@ import {
 import {
   type DrainProgressInfo,
   type DrainRun,
+  drainSkippedHint,
   formatWaited,
   nodeRunSampler,
   POST_QUIESCE_EXIT_TIMEOUT_MS,
@@ -301,8 +303,25 @@ function persistChildDrainSkippedAudit(dataDir: string, info: DrainSkippedInfo):
       name: info.name,
       pid: info.pid,
       reason: info.reason,
+      ...drainSkippedEvidenceFields(info),
     }),
   );
+}
+
+/**
+ * q-error-e2（§3.5）：drain 证据结构化扩展字段（additive；缺省不写）。
+ * token 值绝不进；指纹只允许 tokenFingerprint 前 8 位。
+ */
+function drainSkippedEvidenceFields(info: DrainSkippedInfo): Record<string, unknown> {
+  return {
+    ...(info.target !== undefined ? { target: info.target } : {}),
+    ...(info.credential_source !== undefined ? { credential_source: info.credential_source } : {}),
+    ...(info.http_status !== undefined ? { http_status: info.http_status } : {}),
+    ...(info.token_fingerprint !== undefined ? { token_fingerprint: info.token_fingerprint } : {}),
+    ...(info.sample_error !== undefined ? { sample_error: info.sample_error } : {}),
+    ...(info.hint !== undefined ? { hint: info.hint } : {}),
+    ...(info.hint_key !== undefined ? { hint_key: info.hint_key } : {}),
+  };
 }
 
 /** 通用 force 审计行（component = node/hub/platform；entry 与子进程共用）。 */
@@ -1050,6 +1069,7 @@ export async function stopGateway(
                 name: info.name,
                 pid: info.pid,
                 reason: info.reason,
+                ...drainSkippedEvidenceFields(info),
               }),
             ),
           );
@@ -1226,6 +1246,9 @@ export async function stopGateway(
         let graceful: ShutdownGatewayResult = { ok: false, error: 'no record', code: 'no_record' };
         let samplerToken = token ?? '';
         let samplerTls = context.config.node?.tls !== undefined;
+        // E2 §3.5：凭据来源进 drain 证据（resolveGatewayToken 只读显式配置/env）。
+        let credentialSource: 'anonymous' | 'derived' | 'explicit' | 'injected' =
+          token !== undefined ? 'explicit' : 'anonymous';
         const record = entry.record;
         if (record !== undefined) {
           if (stateKind === 'platform') {
@@ -1236,6 +1259,10 @@ export async function stopGateway(
               env: context.env,
             });
             samplerToken = resolution.ok ? (resolution.value.token ?? '') : '';
+            credentialSource =
+              resolution.ok && resolution.value.source !== 'none'
+                ? resolution.value.source
+                : 'anonymous';
             samplerTls = false;
             graceful = resolution.ok
               ? await shutdownGateway({
@@ -1258,6 +1285,7 @@ export async function stopGateway(
               if (anonymous.ok) {
                 graceful = anonymous;
                 samplerToken = '';
+                credentialSource = 'anonymous';
               }
             }
           } else {
@@ -1278,6 +1306,7 @@ export async function stopGateway(
               if (anonymous.ok) {
                 graceful = anonymous;
                 samplerToken = '';
+                credentialSource = 'anonymous';
               }
             }
           }
@@ -1355,11 +1384,26 @@ export async function stopGateway(
           const skippedEvent =
             stateKind === 'platform' ? 'platform.drain.skipped' : 'node.drain.skipped';
           const skippedReason = graceful.ok ? 'error' : (graceful.code ?? 'error');
-          printErr(ui.warn(formatEventLine(skippedEvent, { pid, reason: skippedReason })));
+          // E2 §3.5：证据契约（target/credential_source/http_status/指纹/hint；token 值绝不进）。
+          const skippedHint = drainSkippedHint(skippedReason);
+          const skippedFields = {
+            pid,
+            reason: skippedReason,
+            ...(record !== undefined ? { target: `${record.host}:${record.port}` } : {}),
+            credential_source: credentialSource,
+            ...(!graceful.ok && graceful.http_status !== undefined
+              ? { http_status: graceful.http_status }
+              : {}),
+            ...(samplerToken !== '' ? { token_fingerprint: tokenFingerprint(samplerToken) } : {}),
+            ...(skippedHint !== undefined
+              ? { hint: skippedHint.hint, hint_key: skippedHint.hint_key }
+              : {}),
+          };
+          printErr(ui.warn(formatEventLine(skippedEvent, skippedFields)));
           // F1/SD-2：drain.skipped 证据持久化到目标实例日志（对齐 stop.forced 先例，O7）。
           await persistStopAuditLine(
             gatewayLogPath(context.dataDir, entry.instance),
-            formatEventLine(skippedEvent, { pid, reason: skippedReason }),
+            formatEventLine(skippedEvent, skippedFields),
           );
           terminateProcess(pid, context.platform);
         }
@@ -3260,6 +3304,7 @@ export async function runPlatformGatewayForeground(
               name: info.name,
               pid: info.pid,
               reason: info.reason,
+              ...drainSkippedEvidenceFields(info),
             }),
           ),
         );

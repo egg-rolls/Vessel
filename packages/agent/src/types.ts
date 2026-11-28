@@ -20,6 +20,7 @@ import type {
   RunOptions,
   RunRecord,
   RunRecordStore,
+  RunTrigger,
   RuntimePermissionConfig,
   Scheduler,
   SessionEventLogPort,
@@ -27,6 +28,7 @@ import type {
   ToolDefinition,
   Usage,
 } from '@vessel-agent/core';
+import { firstStackFrame, newErrorId } from '@vessel-agent/core';
 import type { AgentInboxDelivery, AgentInboxPort } from './inbox.js';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
@@ -297,6 +299,12 @@ export interface AgentMessage {
    */
   distress?: true;
   /**
+   * RPC 触发的 run correlation（q-error-e2 §3.7，裁定④，内存内元数据，不落
+   * snapshot）。由 admit 从 AdmitInput.triggered_by 拷贝；执行内核透传进
+   * RunOptions → run.started.triggered_by。内部触发（team @ / distress / bash）缺省。
+   */
+  triggered_by?: RunTrigger;
+  /**
    * 这条投递在会话里应写成的 `Message.name`（内存内元数据，不落 snapshot）。
    *
    * 只给**运行时合成输入**与**交接嘱托**用，两者都不是「谁说的话」而是同一件事的
@@ -412,6 +420,12 @@ export interface MemberExecutionPort {
   resumeRun?(record: RunRecord, opts?: RunOptions): Promise<string>;
   cancel(member: MemberExecutionMember, reason?: RunInterruptReason): Promise<void> | void;
   dispose(member: MemberExecutionMember): Promise<void> | void;
+  /**
+   * q-error-e2（§3.6，additive，可选）：宿主缺省 model ref（spawn 解析
+   * `member.model ?? 缺省` 的兜底身份）。spawn_failed 证据契约 default 档
+   * resolution.ref 用；未实现时 ref 缺省（旧实现零破，裁定 B）。
+   */
+  defaultModelRef?(): string | undefined;
   /**
    * Stage 3（additive，可选）：当前 session 有效 SessionLease 的 fencingToken。
    * 用于 sessions.restart / sessions.create 的 conflict payload 与生命周期事件。
@@ -930,6 +944,12 @@ export interface AdmitInput {
    * `agents.send` 的 wire 映射不透传该字段。随消息进 inbox 落盘，防循环判定用。
    */
   distress?: boolean;
+  /**
+   * q-error-e2 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 由 runs.start / agents.send handler 从 ctx.request_id + ctx.method 构建；
+   * admit 拷贝进 AgentMessage（内存元数据）→ RunOptions → run.started.triggered_by。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /**
@@ -1095,6 +1115,11 @@ export interface SendInput {
    * 并发一次摘要 wake；不 hold / submit / consume）。内部一律转成投递模式再走链路。
    */
   notify?: boolean;
+  /**
+   * q-error-e2 §3.7（仅内部装配，不暴露为 wire 参数）：RPC 触发的 run correlation。
+   * 只普通 send（非 interrupt/notify）有意义；透传进 admit → run.started。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** 批量发送 */
@@ -1697,8 +1722,26 @@ export interface AgentServiceOptions {
    * seeded create 的**显式 input.model** 落盘前过闸；未命中 → invalid_input，
    * 不再持久化毒 pin。缺省不校验（mock / 纯内存零回归）；源记录 pin 拷贝不重验
    * （存量 legacy pin 不因派生被误杀）。
+   *
+   * q-error-e2（§3.6）：返回结构化 ModelRefErrorInfo（原 string 拍扁废除），
+   * wiring 直接透传 ModelRefError 字段；agent 包最小结构类型，不反向依赖 config。
    */
-  modelRefError?: (ref: string) => string | undefined;
+  modelRefError?: (ref: string) => ModelRefErrorInfo | undefined;
+}
+
+/**
+ * 注册 ref 校验失败的结构化形状（q-error-e2 §3.6，agent 包最小结构类型）。
+ * 与 config ModelRefError 字段同形（code/ref/message/candidates），不反向依赖 config。
+ */
+export interface ModelRefErrorInfo {
+  /** 稳定领域码（当前唯一 'unknown_ref'，注册表已登记） */
+  code: string;
+  /** 未命中的 ref 原文 */
+  ref: string;
+  /** 人读错误文案（不含候选拼接） */
+  message: string;
+  /** 注册 ref 候选（便于改错与迁移）；非 ModelRefError 兜底时缺省 */
+  candidates?: string[];
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -1724,15 +1767,45 @@ export type AgentErrorCode =
    */
   | 'node_draining';
 
+/** AgentError 构造选项（q-error-e2 §3.3，additive 第三参；既有调用点零改动） */
+export interface AgentErrorOptions {
+  /** 原生 Error.cause（ES2022）：包装层沿用同一 error_id，各层加 operation */
+  cause?: unknown;
+  /** 非敏感结构化上下文（脱敏红线同 envelope） */
+  details?: Record<string, unknown>;
+  /** 本层「我在做什么」（替代手拼前缀） */
+  operation?: string;
+}
+
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {
   readonly code: AgentErrorCode;
+  /** 以下 E2 字段均不可枚举 stamp（裁定 G：不改 JSON 序列化面） */
+  declare readonly operation?: string;
+  declare readonly details?: Record<string, unknown>;
+  declare readonly errorId?: string;
+  declare readonly at?: string;
 
-  constructor(code: AgentErrorCode, message: string) {
-    super(message);
+  constructor(code: AgentErrorCode, message: string, options: AgentErrorOptions = {}) {
+    super(message, options.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = 'AgentError';
     this.code = code;
+    if (options.operation !== undefined) stampHidden(this, 'operation', options.operation);
+    if (options.details !== undefined) stampHidden(this, 'details', options.details);
+    stampHidden(this, 'errorId', newErrorId());
+    const at = firstStackFrame(new Error().stack, [/new AgentError/, /error-summary/]);
+    if (at !== undefined) stampHidden(this, 'at', at);
   }
+}
+
+/** 不可枚举属性 stamp（裁定 G）：JSON.stringify / 展开均不见，属性读取正常 */
+function stampHidden(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 }
 
 /** Agent 能力层唯一契约 */

@@ -112,6 +112,8 @@ export function createRunControl(
         ...(input.resume === true ? { resume: true } : {}),
         // 0.52：附件引用只透传，不在这里读文件 / 判边界（闸门在 runs.start handler）。
         ...(input.refs !== undefined && input.refs.length > 0 ? { refs: input.refs } : {}),
+        // E2 §3.7：RPC correlation 透传（handler 从信封构建）。
+        ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
       };
       let result: Awaited<ReturnType<AgentService['admit']>>;
       try {

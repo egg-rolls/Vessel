@@ -5,6 +5,7 @@
 
 import type { WorkingContext } from './context.js';
 import type { ErrorPhase } from './error.js';
+import type { RunTrigger } from './event.js';
 import type { UsageStats } from './limits.js';
 import type { Message } from './provider.js';
 import type { RunRecord } from './run-record-store.js';
@@ -131,4 +132,9 @@ export interface RunOptions {
    * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 WorkingContext。
    */
   messages?: Message[];
+  /**
+   * RPC 触发的 run correlation（q-error-e2 §3.7，裁定④，additive）。
+   * core 不解释语义，只透传进 `run.started.triggered_by`；内部触发缺省。
+   */
+  triggered_by?: RunTrigger;
 }

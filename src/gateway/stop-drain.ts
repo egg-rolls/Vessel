@@ -229,6 +229,48 @@ export function nodeRunSampler(
   return () => snapshotActiveRuns(record, token, tls);
 }
 
+/**
+ * q-error-e2（§3.5）：drain 失败按 reason 的可操作指引。
+ * hintKey 已在 core 注册表登记（node_drain_*）；四段 i18n 全文属 E3，
+ * 本期 hint 字段 + hintKey 就位。token 值绝不进指引文本。
+ */
+export function drainSkippedHint(reason: string): { hint_key: string; hint: string } | undefined {
+  switch (reason) {
+    case 'no_record':
+      return {
+        hint_key: 'error.hint.node_drain_no_record',
+        hint: 'gateway.pid missing or pid mismatch; the node may have crashed or been started outside the supervisor. Check the node log.',
+      };
+    case 'unauthorized':
+      return {
+        hint_key: 'error.hint.node_drain_unauthorized',
+        hint: 'Stop credential rejected (401) and anonymous loopback fallback failed. Verify gateway.token / VESSEL_NODE_TOKEN matches the target node config.',
+      };
+    case 'method_not_found':
+      return {
+        hint_key: 'error.hint.node_drain_method_not_found',
+        hint: 'Target gateway build does not expose gateway.shutdown; upgrade the node or stop it manually.',
+      };
+    case 'network':
+      return {
+        hint_key: 'error.hint.node_drain_network',
+        hint: 'Cannot reach the node gateway (connection refused / timeout). Check the process and gateway.pid host:port.',
+      };
+    case 'timeout':
+      return {
+        hint_key: 'error.hint.node_drain_timeout',
+        hint: 'Node did not exit within the stop timeout; active runs may still be draining. Inspect runs.list or force-stop.',
+      };
+    case 'quiesce_timeout':
+      return {
+        hint_key: 'error.hint.node_drain_quiesce_timeout',
+        hint: 'Node quiesced but did not exit within the post-quiesce window; force-killed. Check shutdown hooks.',
+      };
+    default:
+      return undefined;
+  }
+}
+
 /** 把等待毫秒渲染成人类时长（进度行用：35s / 4m12s）。 */
 export function formatWaited(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));

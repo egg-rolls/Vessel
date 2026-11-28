@@ -22,7 +22,12 @@
 
 import { mkdir, open, readdir, readFile, unlink } from 'node:fs/promises';
 import * as path from 'node:path';
-import { DATA_DIR_CLI_MARKER_ENV, loadConfig, type VesselConfig } from '@vessel-agent/config';
+import {
+  DATA_DIR_CLI_MARKER_ENV,
+  loadConfig,
+  tokenFingerprint,
+  type VesselConfig,
+} from '@vessel-agent/config';
 import { atomicWrite, withDeadline } from '@vessel-agent/core';
 import { readHubLockFile } from '../hub/runtime';
 import { effectiveNodeToken } from '../node/token-derive';
@@ -42,6 +47,7 @@ import { shutdownGateway } from './reload';
 import {
   type DrainProgressInfo,
   type DrainRun,
+  drainSkippedHint,
   nodeRunSampler,
   POST_QUIESCE_EXIT_TIMEOUT_MS,
   snapshotActiveRuns,
@@ -459,6 +465,29 @@ export interface DrainSkippedInfo {
   pid: number;
   /** no_record / unauthorized / not_found / network / timeout / …（不含 token）。 */
   reason: string;
+  /** q-error-e2（§3.5，additive）：目标 host:port（gateway.pid 记录；no_record 时缺省）。 */
+  target?: string;
+  /** q-error-e2（§3.5，additive）：最后一次尝试使用的凭据来源（token 值绝不进）。 */
+  credential_source?: 'anonymous' | 'derived' | 'explicit' | 'injected';
+  /** q-error-e2（§3.5，additive）：drain 请求的 HTTP 状态（RpcClientError.httpStatus）。 */
+  http_status?: number;
+  /** q-error-e2（§3.5，additive）：凭据指纹前 8 位（tokenFingerprint 既有件；匿名缺省）。 */
+  token_fingerprint?: string;
+  /** q-error-e2（§3.5，additive）：等死段采样失败码（与主 reason 区分；匿名采样失败同进证据）。 */
+  sample_error?: string;
+  /** q-error-e2（§3.5，additive）：按 reason 的可操作指引（英文短句；四段 i18n 属 E3）。 */
+  hint?: string;
+  /** q-error-e2（§3.5，additive）：指引 i18n 键（core 注册表 node_drain_* 已登记）。 */
+  hint_key?: string;
+}
+
+/** drain 证据（tryGracefulNodeShutdown 返回；停止方据此填 DrainSkippedInfo）。 */
+export interface DrainEvidence {
+  target?: string;
+  credential_source?: DrainSkippedInfo['credential_source'];
+  http_status?: number;
+  token_fingerprint?: string;
+  sample_error?: string;
 }
 
 /**
@@ -487,8 +516,26 @@ export async function resolveNodeStopToken(options: {
   /** 平台自身 config：仅用于隐式 node（dataDir == registryDataDir）。 */
   implicitConfig?: VesselConfig;
 }): Promise<string> {
-  if (options.specToken !== undefined && options.specToken !== '') return options.specToken;
-  if (options.nodeId === '') return '';
+  return (await resolveNodeStopCredential(options)).token;
+}
+
+/**
+ * q-error-e2（§3.5）：resolveNodeStopToken 的结构化兄弟（解析逻辑单源）。
+ * 额外返回凭据来源（drain 证据 credential_source）；token 值只用于请求头，
+ * 不打印、不落盘；证据面只允许 tokenFingerprint 指纹。
+ */
+export async function resolveNodeStopCredential(options: {
+  nodeId: string;
+  dataDir: string;
+  registryDataDir?: string;
+  env?: Record<string, string | undefined>;
+  specToken?: string;
+  implicitConfig?: VesselConfig;
+}): Promise<{ token: string; source: 'anonymous' | 'derived' | 'explicit' | 'injected' }> {
+  if (options.specToken !== undefined && options.specToken !== '') {
+    return { token: options.specToken, source: 'injected' };
+  }
+  if (options.nodeId === '') return { token: '', source: 'anonymous' };
   const env = options.env ?? process.env;
   let config: VesselConfig | undefined;
   if (options.registryDataDir !== undefined) {
@@ -517,7 +564,11 @@ export async function resolveNodeStopToken(options: {
     nodeId: options.nodeId,
     env,
   });
-  return resolution.ok ? (resolution.value.token ?? '') : '';
+  if (resolution.ok && resolution.value.token !== undefined && resolution.value.token !== '') {
+    const source = resolution.value.source;
+    return { token: resolution.value.token, source: source === 'none' ? 'anonymous' : source };
+  }
+  return { token: '', source: 'anonymous' };
 }
 
 /**
@@ -544,11 +595,18 @@ async function tryGracefulNodeShutdown(
     onProgress?: (info: DrainProgressInfo) => void;
     /** 目标 node 生效凭据（F1/SD-2 链C）；缺省 '' = 回环匿名。 */
     token?: string;
+    /** q-error-e2（§3.5）：token 对应的凭据来源（证据用；缺省按匿名/未知）。 */
+    credentialSource?: DrainSkippedInfo['credential_source'];
   },
-): Promise<{ dead: boolean; reason?: string }> {
+): Promise<{ dead: boolean; reason?: string; evidence?: DrainEvidence }> {
   const record = await readGatewayPidRecord(child.data_dir);
   if (record === null || record.pid !== child.pid) return { dead: false, reason: 'no_record' };
   const token = opts?.token ?? '';
+  // E2 §3.5 证据：target/凭据来源/指纹（token 值绝不进证据）。
+  const target = `${record.host}:${record.port}`;
+  let credentialSource: DrainSkippedInfo['credential_source'] | undefined =
+    opts?.credentialSource ?? (token === '' ? 'anonymous' : undefined);
+  let fingerprint = token !== '' ? tokenFingerprint(token) : undefined;
   let result = await shutdownGateway({
     record,
     token,
@@ -563,24 +621,57 @@ async function tryGracefulNodeShutdown(
       token: '',
       requestTimeoutMs: GRACEFUL_SHUTDOWN_REQUEST_MS,
     });
-    if (anonymous.ok) {
-      result = anonymous;
-      samplerToken = '';
-    }
+    // 证据记最后一次尝试（匿名）；原始 401 由 reason:'unauthorized' 表达。
+    result = anonymous.ok ? anonymous : { ...anonymous, code: result.code };
+    credentialSource = 'anonymous';
+    fingerprint = undefined;
+    if (anonymous.ok) samplerToken = '';
   }
-  if (!result.ok) return { dead: false, reason: result.code ?? 'error' };
+  if (!result.ok) {
+    return {
+      dead: false,
+      reason: result.code ?? 'error',
+      evidence: {
+        target,
+        ...(credentialSource !== undefined ? { credential_source: credentialSource } : {}),
+        ...(result.http_status !== undefined ? { http_status: result.http_status } : {}),
+        ...(fingerprint !== undefined ? { token_fingerprint: fingerprint } : {}),
+      },
+    };
+  }
   // 默认不限时等死 + 5s 进度（用户裁定 #5）；显式 --timeout 到点 reason:'timeout'。
   // DR15-1：等死段有界兜底 —— quiesce 后 30s 未自死 → reason:'quiesce_timeout'，
   // 调用方 force + stop.forced 审计；候 run 段（live > 0）不限时红线不动。
+  // E2 §3.5：等死段采样失败（含匿名采样）同进证据，sample_error 与主 reason 区分。
+  let sampleError: string | undefined;
+  const baseSampler = nodeRunSampler(record, samplerToken);
+  const sampler = async (): Promise<DrainRun[]> => {
+    try {
+      return await baseSampler();
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      sampleError = typeof code === 'string' && /^[a-z][a-z0-9_]*$/.test(code) ? code : 'network';
+      throw error;
+    }
+  };
   const wait = await waitForProcessExit(child.pid, {
     sleep,
     ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     postQuiesceTimeoutMs: POST_QUIESCE_EXIT_TIMEOUT_MS,
     ...(opts?.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
-    sampleRuns: nodeRunSampler(record, samplerToken),
+    sampleRuns: sampler,
   });
   if (wait.dead) return { dead: true };
-  return { dead: false, reason: wait.quiesceTimedOut ? 'quiesce_timeout' : 'timeout' };
+  return {
+    dead: false,
+    reason: wait.quiesceTimedOut ? 'quiesce_timeout' : 'timeout',
+    evidence: {
+      target,
+      ...(credentialSource !== undefined ? { credential_source: credentialSource } : {}),
+      ...(fingerprint !== undefined ? { token_fingerprint: fingerprint } : {}),
+      ...(sampleError !== undefined ? { sample_error: sampleError } : {}),
+    },
+  };
 }
 
 async function waitUntilDead(
@@ -792,16 +883,18 @@ export async function stopSpawnedChildren(
       // 缺省 = 优雅不限时 drain + 进度（node 进程内写 resume 标记），hub 无 run 面不试。
       const kind: 'node' | 'hub' = child.kind === 'hub' ? 'hub' : 'node';
       // F1/SD-2 链C：停止凭据以目标 node 自己的 config/dataDir 为权威（不再硬编码 ''）。
-      const stopToken =
+      // E2 §3.5：结构化解析（token + source），source 进 drain 证据。
+      const stopCredential =
         child.kind === 'hub'
-          ? ''
-          : await resolveNodeStopToken({
+          ? { token: '', source: 'anonymous' as const }
+          : await resolveNodeStopCredential({
               nodeId: child.node_id,
               dataDir: child.data_dir,
               registryDataDir: options.gatewayDataDir,
               ...(options.env !== undefined ? { env: options.env } : {}),
               ...(options.config !== undefined ? { implicitConfig: options.config } : {}),
             });
+      const stopToken = stopCredential.token;
       let ok = false;
       let failReason: string | undefined;
       if (options.force === true) {
@@ -843,6 +936,7 @@ export async function stopSpawnedChildren(
         if (child.kind !== 'hub') {
           const graceful = await tryGracefulNodeShutdown(child, sleep, {
             token: stopToken,
+            credentialSource: stopCredential.source,
             ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
             ...(options.onProgress !== undefined
               ? { onProgress: (info) => options.onProgress?.(child.name, info) }
@@ -880,11 +974,16 @@ export async function stopSpawnedChildren(
             }
           } else if (!graceful.dead && !gracefulTimeout) {
             // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
+            // E2 §3.5：证据契约（target/credential_source/http_status/指纹/hint）。
+            const reason = graceful.reason ?? 'unknown';
+            const hint = drainSkippedHint(reason);
             try {
               options.onDrainSkipped?.({
                 name: child.name,
                 pid: child.pid,
-                reason: graceful.reason ?? 'unknown',
+                reason,
+                ...graceful.evidence,
+                ...(hint !== undefined ? { hint: hint.hint, hint_key: hint.hint_key } : {}),
               });
             } catch {
               // 观察者抛错不影响终止。
@@ -1891,10 +1990,11 @@ export class NodeSupervisor {
         let gracefulDead = false;
         let quiesceTimeout = false;
         // F1/SD-2 链C：停止凭据 = spec token（进程内已知）> 目标 node 自身 config/dataDir。
-        const stopToken =
+        // E2 §3.5：结构化解析（token + source），source 进 drain 证据。
+        const stopCredential =
           child.kind === 'hub'
-            ? ''
-            : await resolveNodeStopToken({
+            ? { token: '', source: 'anonymous' as const }
+            : await resolveNodeStopCredential({
                 nodeId: child.node_id,
                 dataDir: child.data_dir,
                 registryDataDir: this.options.gatewayDataDir,
@@ -1903,8 +2003,12 @@ export class NodeSupervisor {
                   ? { specToken: specTokens.get(child.node_id) }
                   : {}),
               });
+        const stopToken = stopCredential.token;
         if (child.kind !== 'hub') {
-          const graceful = await tryGracefulNodeShutdown(child, this.sleep, { token: stopToken });
+          const graceful = await tryGracefulNodeShutdown(child, this.sleep, {
+            token: stopToken,
+            credentialSource: stopCredential.source,
+          });
           gracefulDead = graceful.dead;
           quiesceTimeout = graceful.reason === 'quiesce_timeout';
           if (quiesceTimeout) {
@@ -1935,11 +2039,16 @@ export class NodeSupervisor {
               // 观察者抛错不影响终止。
             }
           } else if (!graceful.dead) {
+            // E2 §3.5：证据契约（target/credential_source/http_status/指纹/hint）。
+            const reason = graceful.reason ?? 'unknown';
+            const hint = drainSkippedHint(reason);
             try {
               this.options.onDrainSkipped?.({
                 name: child.name,
                 pid: child.pid,
-                reason: graceful.reason ?? 'unknown',
+                reason,
+                ...graceful.evidence,
+                ...(hint !== undefined ? { hint: hint.hint, hint_key: hint.hint_key } : {}),
               });
             } catch {
               // 观察者抛错不影响终止。

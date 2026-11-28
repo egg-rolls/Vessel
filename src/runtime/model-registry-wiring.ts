@@ -22,6 +22,7 @@
 import { createDecipheriv } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
+import type { ModelRefErrorInfo } from '../../packages/agent/src/index';
 import {
   DERIVED_TOKEN_PREFIX,
   type DefaultModelIdentity,
@@ -189,8 +190,15 @@ export interface ModelRegistryWiring {
   /**
    * 纯校验（P3 收紧，§11.1）：ref 未命中注册表且无 legacy 透传 → 错误文案 + 候选；
    * 命中 / 透传 → undefined。不构造 provider、不解密凭证（gateway 参数闸用）。
+   * q-error-e2 起为 validateModelRefDetailed 的薄封装（校验逻辑单源，裁定 A）。
    */
   validateModelRef: (ref: string) => string | undefined;
+  /**
+   * 结构化纯校验（q-error-e2 §3.6，裁定 A 单源内核）：直接透传 ModelRefError
+   * 字段（code/ref/message/candidates），不拼 string；modelRefError 端口注入面。
+   * 形状与 validateModelRef 自身均不动（q-registry-hardening 红线），merge 冲突面留 main。
+   */
+  validateModelRefDetailed: (ref: string) => ModelRefErrorInfo | undefined;
   /** config scope 热应用：重建快照 + 清缓存；下一具 body/EU/run 生效，不动 live 请求。 */
   applyConfig: (next: VesselConfig) => void;
   /** provider 类 in-process 插件中声明 capabilityManifest 的（装配层 install 后登记）。 */
@@ -443,16 +451,34 @@ export async function createModelRegistryWiring(options: {
     return { ref: defaultModelRefOf(resolved, present), wireModel: resolved.wireModel };
   };
 
-  const validateModelRef = (ref: string): string | undefined => {
+  // E2 §3.6 单源内核（裁定 A）：结构化校验唯一实现；validateModelRef 是其薄封装。
+  const validateModelRefDetailed = (ref: string): ModelRefErrorInfo | undefined => {
     try {
       resolveModelRef(snapshot, ref);
       return undefined;
     } catch (error) {
       if (error instanceof ModelRefError) {
-        return `${error.message} Candidates: ${error.candidates.join(', ') || '<none>'}`;
+        return {
+          code: error.code,
+          ref: error.ref,
+          message: error.message,
+          candidates: [...error.candidates],
+        };
       }
-      return error instanceof Error ? error.message : String(error);
+      return {
+        code: 'internal',
+        ref,
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
+  };
+
+  const validateModelRef = (ref: string): string | undefined => {
+    const info = validateModelRefDetailed(ref);
+    if (info === undefined) return undefined;
+    return info.candidates !== undefined
+      ? `${info.message} Candidates: ${info.candidates.join(', ') || '<none>'}`
+      : info.message;
   };
 
   const applyConfig = (next: VesselConfig): void => {
@@ -465,5 +491,12 @@ export async function createModelRegistryWiring(options: {
     cache.clear();
   };
 
-  return { resolveModel, previewDefaultModel, validateModelRef, applyConfig, inProcessPlugins };
+  return {
+    resolveModel,
+    previewDefaultModel,
+    validateModelRef,
+    validateModelRefDetailed,
+    applyConfig,
+    inProcessPlugins,
+  };
 }

@@ -1328,12 +1328,57 @@ export class AgentServiceImpl implements AgentService {
    * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 落盘前的注册 ref 闸。
    * 与 gateway `agents.create|update` 参数闸同一校验口（装配层注入 validateModelRef）；
    * 缺省不校验（mock / 纯内存零回归）。错误码 invalid_input 与 RPC 闸同形。
+   * q-error-e2（§3.6）：结构化透传 ref/candidates（details），不再拼 string。
    */
   private assertModelRef(model: string): void {
-    const error = this.modelRefError?.(model);
-    if (error !== undefined) {
-      throw new AgentError('invalid_input', `model: ${error}`);
+    const info = this.modelRefError?.(model);
+    if (info !== undefined) {
+      throw new AgentError('invalid_input', `model: ${info.message}`, {
+        operation: 'assertModelRef',
+        details: {
+          domain_code: info.code,
+          ref: info.ref,
+          ...(info.candidates !== undefined ? { candidates: info.candidates } : {}),
+        },
+      });
     }
+  }
+
+  /**
+   * q-error-e2（§3.6）：spawn_failed 证据契约 details（各收口点共用）。
+   * resolution 按收口点局部知识派生：record.model 有值 = pin（seeded 拷贝点
+   * 显式传 'inherit'）；无值 = 宿主缺省（ref 经 port additive getter，裁定 B）。
+   * candidates 从 cause 错误结构化读取（ModelRefError 形状），不拼 string。
+   */
+  private spawnFailureDetails(
+    record: MemberRecord,
+    error: unknown,
+    stage?: 'inherit',
+  ): Record<string, unknown> {
+    const defaultRef = this.runtime.defaultModelRef?.();
+    const modelRef = record.model ?? defaultRef;
+    const resolution =
+      record.model !== undefined
+        ? {
+            stage: stage ?? ('pin' as const),
+            ref: record.model,
+            via: stage === 'inherit' ? ['source.record', 'record.model'] : ['record.model'],
+          }
+        : {
+            stage: 'default' as const,
+            ...(defaultRef !== undefined ? { ref: defaultRef } : {}),
+            via: ['host.default'],
+          };
+    const causeCandidates = (error as { candidates?: unknown } | null)?.candidates;
+    return {
+      ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
+      ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
+      ...(modelRef !== undefined ? { model_ref: modelRef } : {}),
+      resolution,
+      ...(Array.isArray(causeCandidates) && causeCandidates.every((c) => typeof c === 'string')
+        ? { candidates: causeCandidates }
+        : {}),
+    };
   }
 
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
@@ -1572,7 +1617,11 @@ export class AgentServiceImpl implements AgentService {
     try {
       await this.spawnRecord(record);
     } catch (error) {
-      throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
+      throw new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'create.spawn',
+        details: this.spawnFailureDetails(record, error),
+      });
     }
     this.emit('agent.spawned', record, {
       state: 'idle',
@@ -1885,17 +1934,28 @@ export class AgentServiceImpl implements AgentService {
       parentSessionIds: [fromSessionId, record.parentId, spawnedBy],
     });
 
+    // E2 §3.6：pin 来自源拷贝（无显式 input）时 resolution.stage='inherit'。
+    const inheritStage =
+      inputModel === undefined && source.model !== undefined ? ('inherit' as const) : undefined;
+
     try {
       await this.spawnRecord(record);
     } catch (error) {
+      const failure = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'create.spawn',
+        details: this.spawnFailureDetails(record, error, inheritStage),
+      });
       this.emitForSession('agent.create.failed', source, fromSessionId, {
         from: source.id,
         to: name,
-        reason: `create_failed: ${errorText(error)}`,
+        reason: errorText(error),
+        error_id: failure.errorId,
+        operation: 'create.spawn',
         from_session_id: fromSessionId,
         seed,
       });
-      throw new AgentError('spawn_failed', `create_failed: ${errorText(error)}`);
+      throw failure;
     }
 
     try {
@@ -1907,14 +1967,21 @@ export class AgentServiceImpl implements AgentService {
       this.executionUnitRegistry.delete(record.id);
       await this.cleanupSessionData(record.id, record.id);
       this.scheduleSnapshot();
+      const failure = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'create.seed',
+        details: this.spawnFailureDetails(record, error, inheritStage),
+      });
       this.emitForSession('agent.create.failed', source, fromSessionId, {
         from: source.id,
         to: name,
-        reason: `create_failed: ${errorText(error)}`,
+        reason: errorText(error),
+        error_id: failure.errorId,
+        operation: 'create.seed',
         from_session_id: fromSessionId,
         seed,
       });
-      throw new AgentError('spawn_failed', `create_failed: ${errorText(error)}`);
+      throw failure;
     }
 
     this.emit('agent.spawned', record, {
@@ -2468,7 +2535,7 @@ export class AgentServiceImpl implements AgentService {
       return {
         ok: false,
         code: 'auto_create_failed',
-        reason: 'auto_create_failed: session_id_collision',
+        reason: 'session_id_collision',
       };
     }
 
@@ -2500,14 +2567,21 @@ export class AgentServiceImpl implements AgentService {
     try {
       await this.spawnRecord(record);
     } catch (error) {
-      const reason = `auto_create_failed: ${errorText(error)}`;
+      // E2 §3.6：废手拼前缀；code 已表达 auto_create_failed，reason 只留原文。
+      const failure = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'team.auto_create',
+        details: this.spawnFailureDetails(record, error, 'inherit'),
+      });
       const sourceSessionId = primaryBinding(source)?.bindingId ?? source.sessionId;
       this.emitForSession('agent.create.failed', source, sourceSessionId, {
         from: source.id,
         to: name,
-        reason,
+        reason: errorText(error),
+        error_id: failure.errorId,
+        operation: 'team.auto_create',
       });
-      return { ok: false, code: 'auto_create_failed', reason };
+      return { ok: false, code: 'auto_create_failed', reason: errorText(error) };
     }
 
     // spawn 期间源可能已被 close：踢人不得凭空产生新 Agent。
@@ -2573,7 +2647,11 @@ export class AgentServiceImpl implements AgentService {
       try {
         grant = await this.leaseService.acquire('binding', body.bindingId);
       } catch (error) {
-        throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
+        throw new AgentError('spawn_failed', errorText(error), {
+          cause: error,
+          operation: 'body.lease',
+          details: this.spawnFailureDetails(record, error),
+        });
       }
     }
     const runtimeMember: MemberExecutionMember = {
@@ -2648,7 +2726,11 @@ export class AgentServiceImpl implements AgentService {
       try {
         grant = await this.leaseService.acquire('binding', bindingId);
       } catch (error) {
-        throw new AgentError('spawn_failed', `body_lease_failed: ${errorText(error)}`);
+        throw new AgentError('spawn_failed', errorText(error), {
+          cause: error,
+          operation: 'body.lease',
+          details: this.spawnFailureDetails(record, error),
+        });
       }
     }
     try {
@@ -3253,6 +3335,8 @@ export class AgentServiceImpl implements AgentService {
       // 求救标记（q-distress-message）：生产侧 maybeSendDistress / 重投路径声明，
       // 随消息进 inbox 落盘；防循环判定在 executeExecutionUnitTurn 的失败出口读它。
       ...(input.distress === true ? { distress: true as const } : {}),
+      // E2 §3.7：RPC correlation 内存元数据（不落 snapshot），执行内核透传进 run.started。
+      ...(input.triggered_by !== undefined ? { triggered_by: input.triggered_by } : {}),
       // 会话身份（`Message.name`）：rotate 交接嘱托（`ROTATE_HANDOFF_INPUT_NAME`）与
       // 跨进程续作嘱托（`CONTINUATION_INPUT_NAME`）声明。缺省不写 —— 人类正文的载荷
       // 与今天逐字节一致。
@@ -3651,16 +3735,30 @@ export class AgentServiceImpl implements AgentService {
     try {
       await this.ensureRuntime(entry);
     } catch (error) {
-      const failure = `spawn_failed: ${errorText(error)}`;
+      // q-error-e2（§3.6）：spawn_failed 证据契约——废手拼前缀，结构化 details
+      // 携 parent_id/team_id/model_ref/resolution/candidates；error_id 出生点 stamped，
+      // cause 链沿原生 Error.cause（errorSummary 摘要上 wire，stack 仅日志）。
+      const spawnError = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'body.spawn',
+        details: this.spawnFailureDetails(record, error),
+      });
+      const spawnDetails = spawnError.details ?? {};
       this.logger.error('agent.body.spawn_failed', {
         member_id: record.id,
         session_id: entry.bindingId,
         run_id: runId,
-        error: failure,
+        ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
+        ...(spawnDetails.model_ref !== undefined ? { model_ref: spawnDetails.model_ref } : {}),
+        error_id: spawnError.errorId,
+        code: 'spawn_failed',
+        error: errorText(error),
+        // E2 §3.3：stack 全文仅日志面（log-hub 脱敏），不上 wire（裁定⑤）。
+        ...(error instanceof Error && error.stack !== undefined ? { stack: error.stack } : {}),
       });
       this.inbox?.unhold(record.id, [message.id]);
       const failed = new ExecutionUnitRunHandle(runId, record.id, entry.bindingId);
-      failed.fail(failure);
+      failed.fail(spawnError);
       // q-distress-message：body 起不来 = 投递终态故障（消息会反复重投反复失败），
       // 以遇难 agent 身份求救；forceCode 声明服务层触发码（错误对象未必有稳定 code）。
       void this.maybeSendDistress(record, entry, error, message, DISTRESS_SPAWN_FAILED).catch(
@@ -5384,6 +5482,18 @@ export class AgentServiceImpl implements AgentService {
       });
     }
     const sessionId = this.registry.getBySession(to)?.id === target.id ? to : undefined;
+    // E2 §3.7：内部装配字段（非 wire），形状归一后透传进 admit → run.started。
+    const trigger = input.triggered_by;
+    const triggeredBy =
+      isRecord(trigger) &&
+      typeof trigger.request_id === 'string' &&
+      typeof trigger.rpc_method === 'string'
+        ? {
+            request_id: trigger.request_id,
+            rpc_method: trigger.rpc_method,
+            ...(typeof trigger.agent_id === 'string' ? { agent_id: trigger.agent_id } : {}),
+          }
+        : undefined;
     const result = await this.admit({
       content,
       agent_id: target.id,
@@ -5394,6 +5504,7 @@ export class AgentServiceImpl implements AgentService {
       ...(originSessionId !== undefined ? { origin_session_id: originSessionId } : {}),
       ...(originRunId !== undefined ? { origin_run_id: originRunId } : {}),
       ...(refs.length > 0 ? { refs } : {}),
+      ...(triggeredBy !== undefined ? { triggered_by: triggeredBy } : {}),
       strict: true,
     });
     // 消息身份直接取 admit 回填的 `message_id`（0.57 起恒有）；`run_id` 只在真起跑时才有
@@ -6418,7 +6529,10 @@ export class AgentServiceImpl implements AgentService {
       this.registry.getBySession(newSessionId) !== undefined ||
       this.registry.isRetiredSession(newSessionId)
     ) {
-      throw new AgentError('spawn_failed', 'create_failed: session_id_collision');
+      throw new AgentError('spawn_failed', 'session_id_collision', {
+        operation: 'session.create',
+        details: this.spawnFailureDetails(record, undefined),
+      });
     }
 
     // 0.53 U1（ADR-104）：新 body 的上下文投射声明。校验 / 收窄排在写事件、换 binding
@@ -6464,7 +6578,11 @@ export class AgentServiceImpl implements AgentService {
     } catch (error) {
       // 事件可能已部分写入：best-effort 清掉新 session，源 / 旧 primary 不动。
       await this.cleanupSessionData(newSessionId, record.id);
-      throw new AgentError('spawn_failed', `create_failed: ${errorText(error)}`);
+      throw new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'session.create.seed',
+        details: this.spawnFailureDetails(record, error),
+      });
     }
 
     let switchResult: { previousSessionId: string; epoch: number };
@@ -6687,7 +6805,11 @@ export class AgentServiceImpl implements AgentService {
       return { previousSessionId: oldSessionId, epoch: newEpoch };
     } catch (error) {
       await rollback();
-      throw new AgentError('spawn_failed', `create_failed: ${errorText(error)}`);
+      throw new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'session.create.switch',
+        details: this.spawnFailureDetails(record, error),
+      });
     }
   }
 
@@ -6809,9 +6931,26 @@ export class AgentServiceImpl implements AgentService {
             { startup: true },
           );
         } catch (error) {
-          this.logger.warn('agent.restart.startup_failed', {
+          // q-error-e2（§3.6，裁定 F）：warn-only → A 类 fail-loud。restart 本身已成功
+          // 不回滚；startup prompt 投递失败必须 run 面可见（0.56 send-first 口径：
+          // 绝不静默丢掉用户刚发的那句话）——结构化失败事件 + error 级日志。
+          const startupError = new AgentError('spawn_failed', errorText(error), {
+            cause: error,
+            operation: 'session.restart.startup',
+            details: this.spawnFailureDetails(record, error),
+          });
+          this.logger.error('agent.restart.startup_failed', {
             agent_id: record.id,
+            session_id: sessionId,
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
             error: errorText(error),
+          });
+          this.emitForSession('agent.restart.startup_failed', record, sessionId, {
+            error: errorText(error),
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
+            operation: 'session.restart.startup',
           });
         }
       }
@@ -6836,12 +6975,17 @@ export class AgentServiceImpl implements AgentService {
           session_id: sessionId,
           error: errorText(rollbackError),
         });
-        throw new AgentError(
-          'spawn_failed',
-          `restart_rollback_failed: ${errorText(rollbackError)}`,
-        );
+        throw new AgentError('spawn_failed', errorText(rollbackError), {
+          cause: rollbackError,
+          operation: 'session.restart.rollback',
+          details: this.spawnFailureDetails(record, rollbackError),
+        });
       }
-      throw new AgentError('spawn_failed', `restart_failed: ${errorText(error)}`);
+      throw new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'session.restart',
+        details: this.spawnFailureDetails(record, error),
+      });
     } finally {
       this.rotations.delete(record.id);
       const current = this.registry.get(record.id);
@@ -7013,12 +7157,17 @@ export class AgentServiceImpl implements AgentService {
           session_id: sessionId,
           error: errorText(rollbackError),
         });
-        throw new AgentError(
-          'spawn_failed',
-          `activate_rollback_failed: ${errorText(rollbackError)}`,
-        );
+        throw new AgentError('spawn_failed', errorText(rollbackError), {
+          cause: rollbackError,
+          operation: 'session.activate.rollback',
+          details: this.spawnFailureDetails(record, rollbackError),
+        });
       }
-      throw new AgentError('spawn_failed', `activate_failed: ${errorText(error)}`);
+      throw new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'session.activate',
+        details: this.spawnFailureDetails(record, error),
+      });
     } finally {
       this.rotations.delete(record.id);
       const currentRecord = this.registry.get(record.id);

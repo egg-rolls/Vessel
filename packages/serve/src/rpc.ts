@@ -8,7 +8,13 @@
  */
 
 import type { PrincipalScope } from '@vessel-agent/config';
-import { type FrozenRpcCode, lookupErrorCode, type RunEvent } from '@vessel-agent/core';
+import {
+  errorSummary,
+  type FrozenRpcCode,
+  firstStackFrame,
+  lookupErrorCode,
+  type RunEvent,
+} from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 /**
@@ -97,6 +103,10 @@ export interface RpcMethodContext {
   };
   isAdmin: boolean;
   connection: 'http' | 'ws' | 'local';
+  /** 请求信封 id（q-error-e2 §3.7，additive）：dispatcher 注入，correlation 根 */
+  request_id?: string;
+  /** 方法名（q-error-e2 §3.7，additive）：dispatcher 注入 */
+  method?: string;
 }
 
 /** 方法处理函数 */
@@ -405,12 +415,42 @@ function failure(id: string, error: RpcErrorBody): RpcFailureResponse {
   return { v: PROTOCOL_VERSION, id, ok: false, error };
 }
 
+/**
+ * E2 §3.3 定位字段（裁定⑤）：error_id/operation/cause 摘要/at 单行上 wire（details），
+ * stack 全文不上 wire。errorSummary 兜底 id 不可枚举 stamp 回错误对象（裁定 G）。
+ */
+function locationDetails(error: unknown): Record<string, unknown> {
+  const summary = errorSummary(error);
+  const fields: Record<string, unknown> = { error_id: summary.error_id };
+  if (summary.id_origin === 'summary') fields.id_origin = 'summary';
+  if (typeof error === 'object' && error !== null) {
+    const operation = (error as { operation?: unknown }).operation;
+    if (typeof operation === 'string' && operation.length > 0) fields.operation = operation;
+    const at = (error as { at?: unknown }).at;
+    if (typeof at === 'string' && at.length > 0) fields.at = at;
+    else if (error instanceof Error) {
+      const frame = firstStackFrame(error.stack);
+      if (frame !== undefined) fields.at = frame;
+    }
+  }
+  if (summary.chain.length > 0) fields.cause = summary.chain;
+  return fields;
+}
+
 function toErrorBody(error: unknown): RpcErrorBody {
   if (error instanceof RpcError) {
+    // details 已携 source 定位字段（mapSessionControlError）时优先沿用（同一事故 id）。
+    const location = locationDetails(error);
+    const details =
+      typeof error.details === 'object' && error.details !== null && !Array.isArray(error.details)
+        ? { ...location, ...(error.details as Record<string, unknown>) }
+        : error.details === undefined
+          ? location
+          : error.details;
     return {
       code: error.code,
       message: error.message,
-      ...(error.details !== undefined ? { details: error.details } : {}),
+      ...(details !== undefined ? { details } : {}),
     };
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -419,12 +459,13 @@ function toErrorBody(error: unknown): RpcErrorBody {
     typeof rawCode === 'string' && /^[a-z][a-z0-9_]*$/.test(rawCode) ? rawCode : undefined;
   const mapped = mapExternalErrorCode(rawCode);
   // q-error-e1（D2 边界保真）：details additive 携带 domain_code/classified_by，
-  // 稳定领域码不再死在最后一跳（error_id/operation/cause 属 E2）。stack 不上 wire。
+  // 稳定领域码不再死在最后一跳。q-error-e2：additive error_id/operation/cause/at。
+  const location = locationDetails(error);
   if (mapped !== null && domainCode !== undefined) {
     return {
       code: mapped,
       message,
-      details: { domain_code: domainCode, classified_by: 'registry' },
+      details: { ...location, domain_code: domainCode, classified_by: 'registry' },
     };
   }
   if (domainCode !== undefined) {
@@ -432,10 +473,10 @@ function toErrorBody(error: unknown): RpcErrorBody {
     return {
       code: 'internal',
       message,
-      details: { domain_code: domainCode, classified_by: 'registry-miss' },
+      details: { ...location, domain_code: domainCode, classified_by: 'registry-miss' },
     };
   }
-  return { code: 'internal', message, details: { classified_by: 'message' } };
+  return { code: 'internal', message, details: { ...location, classified_by: 'message' } };
 }
 
 /**
@@ -484,6 +525,9 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
     } catch (error) {
       return failure(id, toErrorBody(error));
     }
+    // E2 §3.7：correlation 显式字段（裁定④，不用 AsyncLocalStorage）。
+    if (id.length > 0) ctx.request_id = id;
+    ctx.method = method.name;
 
     // S5：动态 token scope 白名单先于 rank 检查；admin / 缺省 scope 不受影响。
     const allowlist = scopeAllowlist(principal.scope);

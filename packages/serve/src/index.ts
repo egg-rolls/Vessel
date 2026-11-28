@@ -40,6 +40,7 @@ export type {
   AgentToolEntryLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
+  ModelRefErrorLike,
   SessionActivateLikeInput,
   SessionActivateLikeResult,
   SessionCreateLikeInput,

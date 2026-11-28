@@ -22,6 +22,7 @@ import type {
   AgentStatusLike,
   AgentUpdateLikeInput,
   AgentVisibilityLike,
+  ModelRefErrorLike,
 } from '../../agent-control.js';
 import type { AgentRegistry, AgentRegistryEntry } from '../../agents-registry.js';
 import {
@@ -62,9 +63,10 @@ export interface AgentMethodsDeps {
   sessionStore?: () => SessionStore | undefined;
   /**
    * P3 收紧（两面重构 §11.1）：model 参数未注册 ref 校验（装配层注入 registry 纯校验）。
-   * 返回错误文案 = 拒绝（invalid_params）；undefined = 放行。缺省不校验（零回归）。
+   * 返回结构化错误 = 拒绝（invalid_params + details.candidates）；undefined = 放行。
+   * 缺省不校验（零回归）。q-error-e2（§3.6）：string 拍扁改结构化透传。
    */
-  modelRefError?: (ref: string) => string | undefined;
+  modelRefError?: (ref: string) => ModelRefErrorLike | undefined;
 }
 
 /**
@@ -627,11 +629,18 @@ async function visibleAgents(
 
 export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[] {
   // P3 收紧（两面重构 §11.1）：model 参数未注册 ref 校验（注入面；缺省不校验，零回归）。
+  // q-error-e2（§3.6）：结构化透传 ref/candidates（details），不再拼 string。
   const readModelParam = (entry: Record<string, unknown>, method: string): string | undefined => {
     const model = optionalEntryString(entry, 'model', method);
     if (model !== undefined && deps.modelRefError !== undefined) {
-      const error = deps.modelRefError(model);
-      if (error !== undefined) throw new RpcError('invalid_params', `model: ${error}`);
+      const info = deps.modelRefError(model);
+      if (info !== undefined) {
+        throw new RpcError('invalid_params', `model: ${info.message}`, {
+          domain_code: info.code,
+          ref: info.ref,
+          ...(info.candidates !== undefined ? { candidates: info.candidates } : {}),
+        });
+      }
     }
     return model;
   };
@@ -1557,6 +1566,16 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
                 ...(interrupt ? { interrupt: true } : {}),
                 ...(notify ? { notify: true } : {}),
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
+                // E2 §3.7：只普通 send 起 run，correlation 才有意义（interrupt/notify 缺省）。
+                ...(!interrupt && !notify && ctx.request_id !== undefined
+                  ? {
+                      triggered_by: {
+                        request_id: ctx.request_id,
+                        rpc_method: ctx.method ?? 'agents.send',
+                        agent_id: to,
+                      },
+                    }
+                  : {}),
               },
             };
           }),

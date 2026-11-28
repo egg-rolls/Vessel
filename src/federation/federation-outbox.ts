@@ -54,6 +54,19 @@ export interface FederationOutboxEvent {
   to?: string;
   attempts?: number;
   code?: string;
+  /**
+   * q-error-e2 §3.7（additive）：correlation 根 = 既有 wire 字段 request_id ?? message_id
+   * **本地派生，不上 wire**（main 2026-11-28 批准的设计字面偏离：接收侧严格顶层键
+   * 白名单 serve/federation.ts:156-166/417，新键 → 旧 peer federation_invalid →
+   * 非策略拒绝重试耗尽 = 丢用户正文；message_id 既是去重键又恒在 wire/盘上，
+   * 设计意图「重试/去重/丢弃审计可关联」由派生达成）。
+   */
+  correlation_id?: string;
+}
+
+/** correlation 派生单源（request_id ?? message_id；二者均既有跨 wire 字段）。 */
+function correlationOf(message: FederationMessage): string {
+  return message.request_id ?? message.message_id;
 }
 
 export interface FederationOutboxOptions {
@@ -229,6 +242,7 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
         message_id: entry.message.message_id,
         to,
         attempts: entry.attempts,
+        correlation_id: correlationOf(entry.message),
       });
       await persist();
       return;
@@ -243,6 +257,7 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
         to,
         attempts: entry.attempts,
         code: result.code,
+        correlation_id: correlationOf(entry.message),
       });
     } else {
       // 退避至少 1ms：注入零退避 + 假时钟时防 flushDue 原地重选死循环。
@@ -253,6 +268,7 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
         to,
         attempts: entry.attempts,
         code: result.code,
+        correlation_id: correlationOf(entry.message),
       });
     }
     await persist();
@@ -283,7 +299,11 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
         return true;
       }
       if (entries.length >= maxEntries) {
-        emit({ kind: 'full', message_id: message.message_id });
+        emit({
+          kind: 'full',
+          message_id: message.message_id,
+          correlation_id: correlationOf(message),
+        });
         return false;
       }
       const at = now();
@@ -292,6 +312,7 @@ export function createFederationOutbox(options: FederationOutboxOptions): Federa
         kind: 'enqueued',
         message_id: message.message_id,
         to: `${message.to.node_id}:${message.to.team_id}`,
+        correlation_id: correlationOf(message),
       });
       await persist();
       // 入队即试一次（peer 可能只是瞬时抖动）；失败进退避。
