@@ -18,11 +18,7 @@ import { formatRoute } from '../../app/router';
 import { CardShell } from '../../components/ui';
 import { Icon } from '../../components/ui/Icon';
 import { t } from '../../i18n';
-import {
-  type SessionRefChip,
-  sessionRefBadges,
-  sessionRefDescription,
-} from './session-ref';
+import { type SessionRefChip, sessionRefBadges, sessionRefDescription } from './session-ref';
 
 export function SessionRefBlock({
   chips,

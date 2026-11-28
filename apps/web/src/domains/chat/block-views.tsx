@@ -8,14 +8,14 @@
  * 插件热更新/禁用即生效。
  */
 import type { ImageDelivery, MessageRef } from '../../gateway/types';
-import { useBlockType, type BlockRenderCtx, type LiftedBlock } from './block-registry';
+import { type BlockRenderCtx, type LiftedBlock, useBlockType } from './block-registry';
 import { EnvCard } from './EnvCard';
 import type { EnvNoticeCard } from './env-notice';
 import { MessageRefs } from './MessageRefs';
-import type { ParsedQuoteEnvelope } from './quote-ref';
 import { QuoteBlock } from './QuoteBlock';
-import type { ParsedSessionRefEnvelope } from './session-ref';
+import type { ParsedQuoteEnvelope } from './quote-ref';
 import { SessionRefBlock } from './SessionRefBlock';
+import type { ParsedSessionRefEnvelope } from './session-ref';
 import { ToolImageCard } from './ToolImageCard';
 
 /** quote 块 payload = 既有信封解析结果（不另造形状）。 */
@@ -107,7 +107,9 @@ export function BlockView({ block, render }: { block: LiftedBlock; render?: Bloc
   return <Component payload={block.payload} render={render ?? {}} />;
 }
 
-/** 一组块按管线顺序渲染（消费点只喂 blocks + 交互上下文）。 */
+/** 一组块按管线顺序渲染（消费点只喂 blocks + 交互上下文）。
+ * key = type：一条消息里每个宿主 type 至多提升一块（lift 契约），type 即稳定唯一键；
+ * 未来一 type 多块时由 lift 侧给块内稳定 id，不用数组下标。 */
 export function MessageBlocks({
   blocks,
   render,
@@ -117,8 +119,8 @@ export function MessageBlocks({
 }) {
   return (
     <>
-      {blocks.map((block, index) => (
-        <BlockView key={`${block.type}#${index}`} block={block} render={render} />
+      {blocks.map((block) => (
+        <BlockView key={block.type} block={block} render={render} />
       ))}
     </>
   );

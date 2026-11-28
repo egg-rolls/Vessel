@@ -21,30 +21,10 @@ import { formatBytes, formatClock } from '../../format';
 import type { ImageDelivery, MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useSessionStore } from '../../stores/sessionStore';
+import { occurrenceKeys } from '../../text';
 import { ImageLightbox, ImageThumb, useImageBlob } from './image-preview';
 import { deliveryClass, imageDeliveryLabel, MessageRefs, refDisplayName } from './MessageRefs';
-
-/** 卡头图标（与 MessageRefs 的图片 chip 同一形状；装饰性，aria-hidden）。 */
-function ImageIcon() {
-  return (
-    <svg
-      width={14}
-      height={14}
-      viewBox="0 0 20 20"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.5}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <rect x="3" y="4" width="14" height="12" rx="2" />
-      <circle cx="7.5" cy="8" r="1.3" />
-      <path d="M4 14.5 8.5 10l3 3 2-2 2.5 2.5" />
-    </svg>
-  );
-}
+import { RefIcon } from './RefIcon';
 
 /** 一张图：缩略图 + 文件名 + 尺寸 / 字节 + 投递 chip。 */
 function ToolImageEntry({
@@ -114,12 +94,13 @@ export function ToolImageCard({
   const clock = formatClock(ts);
   // 投递状态按 image 项同序消费（与 MessageRefs 同一口径）。
   let imageIndex = 0;
-  const occurrence = new Map<string, number>();
+  // key 口径与 MessageRefs 同一份实现（occurrenceKeys）。
+  const keys = occurrenceKeys(images.map((ref) => ref.path));
   return (
     <CardShell className="tool-image-card" ariaLabel={t('chat.toolImage.group')}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted">
-          <ImageIcon />
+          <RefIcon kind="image" size={14} />
           {t('chat.toolImage.title')}
         </span>
         {images.length > 1 && (
@@ -131,14 +112,11 @@ export function ToolImageCard({
           <span className="ml-auto font-mono text-2xs tabular-nums text-faint">{clock}</span>
         )}
       </div>
-      {images.map((ref) => {
-        // key 用「同一路径的第几次引用」（与 MessageRefs 同一口径，不用数组下标）。
-        const seen = occurrence.get(ref.path) ?? 0;
-        occurrence.set(ref.path, seen + 1);
+      {images.map((ref, index) => {
         const delivery = imageDelivery !== undefined ? imageDelivery[imageIndex++] : undefined;
         return (
           <ToolImageEntry
-            key={`${ref.path}#${seen}`}
+            key={keys[index] ?? `${ref.path}#${index}`}
             imageRef={ref}
             delivery={delivery}
             sessionId={sessionId}

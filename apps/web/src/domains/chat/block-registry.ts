@@ -13,8 +13,8 @@
  * 纯注册机制，无 React 组件依赖；lift 管线与宿主注册在 lift-blocks.ts。
  */
 
-import type { Message } from '../../gateway/types';
 import { type ComponentType, useSyncExternalStore } from 'react';
+import type { Message } from '../../gateway/types';
 
 /** 块的渲染表面档位：静态卡（CardShell）/ 正文内 inline / 气泡附属轻量块。 */
 export type BlockSurface = 'card' | 'inline' | 'light';

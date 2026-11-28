@@ -156,7 +156,9 @@ function ComposerPluginBridge({
           order: 100,
           owner: pluginId,
           lift: () => [],
-          component: ({ payload }) => <LinkCard href={payload.href} text={payload.text} host={host} />,
+          component: ({ payload }) => (
+            <LinkCard href={payload.href} text={payload.text} host={host} />
+          ),
         });
         continue;
       }

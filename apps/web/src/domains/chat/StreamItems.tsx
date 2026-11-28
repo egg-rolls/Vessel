@@ -21,8 +21,10 @@ import { DEFAULT_MESSAGE_VISIBILITY, type MessageVisibility } from '../../state/
 import type { Verbosity } from '../../state/visibility';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { useConfigStoreApi } from '../../stores/useConfigStoreApi';
+import { truncateSnippet } from '../../text';
 import { AgentMessageCard } from './AgentMessageCard';
 import { senderOfName } from './agent-sender';
+import { MessageBlocks } from './block-views';
 import { filterTimelineItems, reasoningVisible, runningToolHint } from './chat-visibility';
 import { composerIconControlClass, composerQuietIconTone } from './composer-controls';
 import { EnvCard } from './EnvCard';
@@ -33,7 +35,6 @@ import {
   envCardOfPromptContext,
 } from './env-notice';
 import { humanizeRunError } from './error-text';
-import { MessageBlocks } from './block-views';
 import { liftBlocks } from './lift-blocks';
 import { MessageRefs } from './MessageRefs';
 import { ReasoningBlock } from './ReasoningBlock';
@@ -41,10 +42,6 @@ import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
 import { type PromptContextItem, type RunFailure, runFailureOfGroup } from './transcript-items';
-
-function truncate(value: string, length: number): string {
-  return value.length > length ? `${value.slice(0, length)}…` : value;
-}
 
 /**
  * 失败 run 的详情深链：`#/runs/<runId>?session=…`（独立详情页，不再内联展开）。
@@ -292,7 +289,7 @@ export function RunFailureCard({
       <div className="flex flex-col items-start gap-1 pt-1">
         <StatusChip status="failed" label={t('chat.run.failed')} />
         <span className="text-2xs text-muted font-mono tabular-nums" title={failure.runId}>
-          {t('chat.run.failure.run', { id: truncate(failure.runId, 12) })}
+          {t('chat.run.failure.run', { id: truncateSnippet(failure.runId, 12) })}
         </span>
       </div>
       {/* 0.52：错误文本分级 —— 内部 reason（lease_expired / stale_fence …）先翻成人话，
@@ -326,7 +323,7 @@ export function RunFailureCard({
         error === undefined ? (
           t('chat.run.noError')
         ) : (
-          <span className="text-danger">{truncate(error, 240)}</span>
+          <span className="text-danger">{truncateSnippet(error, 240)}</span>
         )
       }
       actions={

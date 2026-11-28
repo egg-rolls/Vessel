@@ -99,7 +99,9 @@ registerBlockType({
         type: 'image',
         payload: {
           refs,
-          ...(message.image_delivery !== undefined ? { imageDelivery: message.image_delivery } : {}),
+          ...(message.image_delivery !== undefined
+            ? { imageDelivery: message.image_delivery }
+            : {}),
           note: message.content,
           ...(message.timestamp !== undefined ? { ts: message.timestamp } : {}),
         },
@@ -152,7 +154,9 @@ registerBlockType({
         type: 'file',
         payload: {
           refs,
-          ...(message.image_delivery !== undefined ? { imageDelivery: message.image_delivery } : {}),
+          ...(message.image_delivery !== undefined
+            ? { imageDelivery: message.image_delivery }
+            : {}),
         },
       },
     ];
