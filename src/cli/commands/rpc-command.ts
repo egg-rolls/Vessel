@@ -167,7 +167,7 @@ export async function rpcListCommand(options: RpcListOptions = {}): Promise<Comm
             : String(error),
     };
   } finally {
-    await target.close().catch(() => undefined);
+    await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 
   const manifest = isRecord(result) ? result : {};

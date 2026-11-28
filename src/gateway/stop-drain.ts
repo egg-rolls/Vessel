@@ -212,6 +212,7 @@ export async function snapshotActiveRuns(
     const raw = await client.request('runs.list', {});
     return activeRunsOf(raw);
   } finally {
+    // benign: drain 探针客户端关闭，失败不掩盖 runs.list 结果。
     await client.close().catch(() => undefined);
   }
 }

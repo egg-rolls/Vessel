@@ -107,6 +107,7 @@ export async function writeSelfRestartHandoff(
   try {
     await rename(tmp, filePath);
   } catch (error) {
+    // benign: rename 失败清理临时文件，失败不掩盖原始错误（重抛）。
     await unlink(tmp).catch(() => undefined);
     throw error;
   }
@@ -133,5 +134,6 @@ export function isSelfRestartHandoffStale(handoff: SelfRestartHandoff, now = Dat
 }
 
 export async function clearSelfRestartHandoff(dataDir: string): Promise<void> {
+  // benign: 清理 handoff 残留，失败静默（TTL 判定兜底）。
   await unlink(selfRestartHandoffPath(dataDir)).catch(() => undefined);
 }

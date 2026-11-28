@@ -114,6 +114,7 @@ export async function reloadGateway(options: ReloadGatewayOptions): Promise<Relo
       code: 'network',
     };
   } finally {
+    // benign: reload 客户端关闭，失败不掩盖 reload 结果。
     await client.close().catch(() => undefined);
   }
 }
@@ -184,6 +185,7 @@ export async function shutdownGateway(
       code: 'network',
     };
   } finally {
+    // benign: reload 客户端关闭，失败不掩盖 reload 结果。
     await client.close().catch(() => undefined);
   }
 }

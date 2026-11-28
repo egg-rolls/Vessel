@@ -63,6 +63,7 @@ async function spawnBunDetached(opts: CleanSpawnOptions): Promise<CleanSpawnResu
     proc.unref();
     return { pid: proc.pid, via: 'bun-detached' };
   } finally {
+    // benign: spawn 日志句柄关闭，失败不掩盖 spawn 结果。
     await handle.close().catch(() => undefined);
   }
 }

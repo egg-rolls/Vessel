@@ -159,7 +159,7 @@ export async function restartFleetCommand(options: RestartFleetOptions = {}): Pr
         printErr,
       });
     }
-    const registry = await loadNodeRegistry(dataDir).catch(() => undefined);
+    const registry = await loadNodeRegistry(dataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册。
     if (registry?.kind === 'ready') {
       const node = registry.registry.nodes.find((item) => item.name === trimmed);
       if (node !== undefined) {
@@ -402,7 +402,7 @@ export async function selfRestartReserveCommand(input: SelfRestartReserveInput):
     printErr(ui.err(`restart --self: reservation rejected: ${String(error)}`));
     return 1;
   } finally {
-    await client.close().catch(() => undefined);
+    await client.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
   const triggeringRunId = accepted.run_id ?? runId ?? '';
   if (triggeringRunId === '') {
@@ -585,7 +585,7 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
           break;
         }
       } finally {
-        await client.close().catch(() => undefined);
+        await client.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
       }
     }
     if (Date.now() >= deadline) {
@@ -600,7 +600,7 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
         } catch {
           // 撤销失败不阻断退出：标记留着，下次启动续作投递仍会判终态。
         } finally {
-          await client.close().catch(() => undefined);
+          await client.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
         }
       }
       await clearSelfRestartHandoff(handoffDir);

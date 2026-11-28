@@ -247,7 +247,7 @@ async function probeLocalNode(
   const config = options.getConfig();
   const env = options.env ?? process.env;
   let entry: NodeRegistryEntry | undefined;
-  const load = await loadNodeRegistry(options.dataDir).catch(() => null);
+  const load = await loadNodeRegistry(options.dataDir).catch(() => null); // benign: registry 探针——读不出按无注册。
   if (load !== null && load.kind === 'ready') {
     entry = load.registry.nodes.find((node) => node.node_id === target);
   }
@@ -336,7 +336,7 @@ async function probeFederationTarget(
   if (peer.token !== '') {
     let ca: string | undefined;
     if (peer.caFile !== undefined) {
-      ca = await readFile(peer.caFile, 'utf-8').catch(() => undefined);
+      ca = await readFile(peer.caFile, 'utf-8').catch(() => undefined); // benign: CA 读探针——读不出按无自定义 CA（TLS 失败下游可见）。
       if (ca !== undefined && ca.trim() === '') ca = undefined;
     }
     const client = createHttpRpcClient({
@@ -365,7 +365,7 @@ async function probeFederationTarget(
     } catch {
       // RPC 失败（含 401）：落到匿名可达性探测（node 可能活着但凭据不对）。
     } finally {
-      await client.close().catch(() => undefined);
+      await client.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
     }
   }
 

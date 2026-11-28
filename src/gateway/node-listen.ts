@@ -61,6 +61,7 @@ export async function preferLiveNodeListen(
   fallback: NodeListenInfo,
   options: { nodeId?: string; tls?: boolean } = {},
 ): Promise<{ listen: NodeListenInfo; source: 'record' | 'config'; pid?: number }> {
+  // benign: pid record 探针——读不出/进程不活回落 config（source 标注）。
   const record = await readGatewayPidRecord(nodeDataDir).catch(() => null);
   if (record === null || !isProcessAlive(record.pid)) {
     return { listen: fallback, source: 'config' };

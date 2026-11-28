@@ -365,7 +365,7 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
         stderr: error instanceof Error ? error.message : String(error),
       };
     } finally {
-      await resolved.target.close().catch(() => undefined);
+      await resolved.target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
     }
   } else {
     // 0.49 T5（C6）：只读根布局；非根布局数据 fail-fast。

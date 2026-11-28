@@ -324,7 +324,7 @@ export async function writeAgentOwnerRecord(
   try {
     await rename(tmp, filePath);
   } catch (error) {
-    await unlink(tmp).catch(() => undefined);
+    await unlink(tmp).catch(() => undefined); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
     throw error;
   }
   try {

@@ -162,6 +162,7 @@ export async function acquireGatewayInstanceLock(
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       await writeFile(filePath, body, { flag: 'wx', mode: 0o600 });
+      // benign: chmod 兜底（Windows/umask），writeFile 已设 mode。
       await chmod(filePath, 0o600).catch(() => undefined);
       let released = false;
       return {

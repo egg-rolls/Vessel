@@ -539,7 +539,7 @@ export async function resolveNodeStopCredential(options: {
   const env = options.env ?? process.env;
   let config: VesselConfig | undefined;
   if (options.registryDataDir !== undefined) {
-    const registry = await loadNodeRegistry(options.registryDataDir).catch(() => undefined);
+    const registry = await loadNodeRegistry(options.registryDataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册（回落默认）。
     const entry =
       registry?.kind === 'ready'
         ? registry.registry.nodes.find((node) => node.node_id === options.nodeId)
@@ -549,7 +549,7 @@ export async function resolveNodeStopCredential(options: {
         configPath: entry.config_path,
         // registry data_dir 是 CLI 级权威（与 supervisor spawn / resolveLocalNodes 同口径）。
         env: { ...env, VESSEL_DATA_DIR: options.dataDir, [DATA_DIR_CLI_MARKER_ENV]: '1' },
-      }).catch(() => undefined);
+      }).catch(() => undefined); // benign: 配置探针——读不出/校验不过保持默认配置（下方 validation 闸）。
       if (loaded !== undefined && loaded.validation.errors.length === 0) config = loaded.config;
     } else if (
       options.implicitConfig !== undefined &&
@@ -1028,7 +1028,7 @@ export async function stopSpawnedChildren(
     }
     if (options.keep === true) continue;
     if (remaining.length === 0) {
-      await removeSpawnedChildren(options.gatewayDataDir, file.instance).catch(() => undefined);
+      await removeSpawnedChildren(options.gatewayDataDir, file.instance).catch(() => undefined); // benign: 残留清理尽力而为——pid 存活判定兜底。
     } else {
       await writeSpawnedChildren(options.gatewayDataDir, file.instance, remaining).catch(
         () => undefined,
@@ -1141,7 +1141,7 @@ export class NodeSupervisor {
     const { gatewayDataDir, instance } = this.options;
     this.watchdogWrites = this.watchdogWrites
       .then(() => writeWatchdogSnapshot(gatewayDataDir, instance, snapshot))
-      .catch(() => undefined);
+      .catch(() => undefined); // benign: 看门狗快照是观测侧车——写失败下一拍重试，不影响判定。
   }
 
   /**
@@ -1223,7 +1223,7 @@ export class NodeSupervisor {
 
     this.restarting.add(spec.nodeId);
     try {
-      const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+      const record = await readGatewayPidRecord(spec.dataDir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
       if (record !== null && record.pid !== oldPid) {
         return {
           ok: false,
@@ -1240,7 +1240,7 @@ export class NodeSupervisor {
       this.spawned = this.spawned.filter(
         (child) => !(child.node_id === spec.nodeId && child.pid === oldPid),
       );
-      await this.writeManifest().catch(() => undefined);
+      await this.writeManifest().catch(() => undefined); // benign: manifest 是派生目录（pid record 权威），写失败不阻断状态机。
       if (this.stopping || this.noRestart) return { ok: false, error: 'gateway is stopping' };
 
       const entry = await this.spawnOnly(spec);
@@ -1257,7 +1257,7 @@ export class NodeSupervisor {
         );
         return { ok: false, error: `${ready.code}: ${ready.message}` };
       }
-      const startedRecord = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+      const startedRecord = await readGatewayPidRecord(spec.dataDir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
       if (startedRecord === null) {
         await this.abandonSpawned(
           { spec, pid: entry.pid, spawned: true, manifestEntry: entry },
@@ -1340,7 +1340,7 @@ export class NodeSupervisor {
       specs.map(async (spec) => {
         if (!spec.autoStart) {
           // 只读一次 pid 文件：区分「已经在跑」和「缺席」，两种都仍是 external。
-          const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+          const record = await readGatewayPidRecord(spec.dataDir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
           if (record === null || !isProcessAlive(record.pid)) return;
           this.setState(spec, 'external', {
             spawned: false,
@@ -1485,7 +1485,7 @@ export class NodeSupervisor {
         await handle.read(buffer, 0, buffer.length, start);
         return new TextDecoder().decode(buffer).includes('port_in_use');
       } finally {
-        await handle.close().catch(() => undefined);
+        await handle.close().catch(() => undefined); // benign: 退出/错误路径句柄清理，失败不掩盖结果。
       }
     } catch {
       return false;
@@ -1627,14 +1627,14 @@ export class NodeSupervisor {
         },
       });
     } catch (error) {
-      await handle.close().catch(() => undefined);
+      await handle.close().catch(() => undefined); // benign: 退出/错误路径句柄清理，失败不掩盖结果。
       return {
         ok: false,
         code: 'hub_start_failed',
         message: `hub failed to spawn: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    await handle.close().catch(() => undefined);
+    await handle.close().catch(() => undefined); // benign: 退出/错误路径句柄清理，失败不掩盖结果。
     child.unref?.();
 
     const pid = child.pid;
@@ -1675,7 +1675,7 @@ export class NodeSupervisor {
       // 本进程 spawn 的 Hub 没起来：尽力终止自己的子进程，避免孤儿。
       const stopped = await this.terminatePid(pending.pid);
       if (stopped) this.spawned = this.spawned.filter((child) => child !== pending.manifestEntry);
-      await this.writeManifest().catch(() => undefined);
+      await this.writeManifest().catch(() => undefined); // benign: manifest 是派生目录（pid record 权威），写失败不阻断状态机。
       pending.result = ready;
       return;
     }
@@ -1789,7 +1789,7 @@ export class NodeSupervisor {
         },
       });
     } catch (error) {
-      await handle.close().catch(() => undefined);
+      await handle.close().catch(() => undefined); // benign: 退出/错误路径句柄清理，失败不掩盖结果。
       return fail(
         'node_start_failed',
         `node "${spec.name}" failed to spawn: ${
@@ -1797,7 +1797,7 @@ export class NodeSupervisor {
         }`,
       );
     }
-    await handle.close().catch(() => undefined);
+    await handle.close().catch(() => undefined); // benign: 退出/错误路径句柄清理，失败不掩盖结果。
     child.unref?.();
 
     const pid = child.pid;
@@ -1836,7 +1836,7 @@ export class NodeSupervisor {
     const { spec } = entry;
     this.spawnLogOffset.delete(entry.pid);
     const manifestEntry = entry.manifestEntry;
-    const record = await readGatewayPidRecord(spec.dataDir).catch(() => null);
+    const record = await readGatewayPidRecord(spec.dataDir).catch(() => null); // benign: pid record 探针——读不出按无记录（保守判定）。
     if (record !== null && record.pid === entry.pid && manifestEntry !== undefined) {
       manifestEntry.started_at = record.started_at;
     }
@@ -1844,7 +1844,7 @@ export class NodeSupervisor {
     if (stopped && manifestEntry !== undefined) {
       this.spawned = this.spawned.filter((child) => child !== manifestEntry);
     }
-    await this.writeManifest().catch(() => undefined);
+    await this.writeManifest().catch(() => undefined); // benign: manifest 是派生目录（pid record 权威），写失败不阻断状态机。
     if (this.stopping) return;
     this.setState(spec, 'failed', { spawned: true, pid: entry.pid, reason });
   }
@@ -1920,7 +1920,7 @@ export class NodeSupervisor {
    */
   private writeManifest(): Promise<void> {
     const own = this.spawned.filter((child) => child.started_at !== '');
-    return this.enqueueManifestWrite(own).catch(() => undefined);
+    return this.enqueueManifestWrite(own).catch(() => undefined); // benign: manifest 派生目录，写失败不阻断（pid record 权威）。
   }
 
   private enqueueManifestWrite(own: SpawnedChildRecord[]): Promise<void> {
@@ -2089,7 +2089,7 @@ export class NodeSupervisor {
     }
     this.spawned = remaining;
     // 停止路径要写回未终止的条目（含 started_at 空的），所以不过滤。
-    await this.enqueueManifestWrite(remaining).catch(() => undefined);
+    await this.enqueueManifestWrite(remaining).catch(() => undefined); // benign: 同上——manifest 派生目录。
     return { stopped, failed };
   }
 }

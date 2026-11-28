@@ -71,7 +71,7 @@ function createStatusWriter(dataDir: string, logger: Logger | undefined) {
     if (helloAt !== undefined) body.hello_at = helloAt;
 
     const task = queue.then(() => writeHubNodeStatus(dataDir, body));
-    queue = task.catch(() => {});
+    queue = task.catch(() => {}); // benign: 串行链尾防未处理拒绝；调用方拿到的 task 仍 reject（错误可见）。
     return task.catch((failure: unknown) => {
       logger?.warn('hub.node.status_write_failed', {
         error: failure instanceof Error ? failure.message : String(failure),

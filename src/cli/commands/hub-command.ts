@@ -388,7 +388,7 @@ function waitForStop(runtime: HubRuntime, deps: HubCommandDeps): Promise<void> {
       cleanup();
       void runtime
         .stop()
-        .catch(() => undefined)
+        .catch(() => undefined) // benign: 信号关停尽力而为——finally 恒 resolve，强杀兜底。
         .finally(() => resolve());
     }
     process.once('SIGINT', finish);

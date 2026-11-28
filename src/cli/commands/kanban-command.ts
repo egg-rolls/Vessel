@@ -102,7 +102,7 @@ async function callKanban(
   } catch (error) {
     return { ok: false, error: errorResult(error) };
   } finally {
-    await target.close().catch(() => undefined);
+    await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
   }
 }
 

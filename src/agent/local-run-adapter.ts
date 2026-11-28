@@ -199,7 +199,7 @@ export function createLocalRunAdapter(options: LocalRunAdapterOptions): {
     // 重启 / `--session` 续接时 agent 已存在（id 就是会话 id，见下）：直接复用，
     // 否则 `create` 会以 `duplicate member id` 拒绝，续接路径直接不可用。
     // 与 `createOrRestoreOwner` 同一套「先建、重名则回读」的语义。
-    const existing = await options.agentControl.get(sessionId).catch(() => undefined);
+    const existing = await options.agentControl.get(sessionId).catch(() => undefined); // benign: 续接探针——读不出走 create（重名则回读，见上注）。
     if (existing !== undefined) {
       agentBySession.set(sessionId, existing.id ?? sessionId);
       return existing.id ?? sessionId;

@@ -377,7 +377,7 @@ export class FileLeaseService implements LeaseServicePort {
   private async tryCreate(path: string, record: LeaseFileRecord): Promise<boolean> {
     try {
       await writeFile(path, `${JSON.stringify(record)}\n`, { flag: 'wx', mode: 0o600 });
-      await chmod(path, 0o600).catch(() => undefined);
+      await chmod(path, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask），writeFile 已设 mode。
       return true;
     } catch (error) {
       if (isErrno(error, 'EEXIST')) return false;
@@ -407,7 +407,7 @@ export class FileLeaseService implements LeaseServicePort {
           .then((info) => this.now() - info.mtimeMs > LEASE_RECLAIM_GUARD_STALE_MS)
           .catch(() => true);
         if (!stale) throw new LeaseConflictError(kind, key);
-        await unlink(guardPath).catch(() => undefined);
+        await unlink(guardPath).catch(() => undefined); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
       }
     }
     if (guard === undefined) throw new LeaseConflictError(kind, key);
@@ -428,8 +428,8 @@ export class FileLeaseService implements LeaseServicePort {
       await this.writeRecord(path, record);
       return record;
     } finally {
-      await guard.close().catch(() => undefined);
-      await unlink(guardPath).catch(() => undefined);
+      await guard.close().catch(() => undefined); // benign: guard 句柄关闭，失败不掩盖结果。
+      await unlink(guardPath).catch(() => undefined); // benign: guard 清理尽力而为——残留由 stale 判定兜底。
     }
   }
 
@@ -438,11 +438,11 @@ export class FileLeaseService implements LeaseServicePort {
     const temp = `${path}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await writeFile(temp, `${JSON.stringify(record)}\n`, { mode: 0o600 });
-      await chmod(temp, 0o600).catch(() => undefined);
+      await chmod(temp, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask）。
       await rename(temp, path);
-      await chmod(path, 0o600).catch(() => undefined);
+      await chmod(path, 0o600).catch(() => undefined); // benign: chmod 兜底（Windows/umask），writeFile 已设 mode。
     } catch (error) {
-      await unlink(temp).catch(() => undefined);
+      await unlink(temp).catch(() => undefined); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
       throw error;
     }
   }

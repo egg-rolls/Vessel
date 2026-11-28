@@ -815,7 +815,7 @@ async function dryRunTraceBucket(
     }
     return await pruneTrace(temp, options);
   } finally {
-    await rm(temp, { recursive: true, force: true }).catch(() => {});
+    await rm(temp, { recursive: true, force: true }).catch(() => {}); // benign: dry-run 临时副本清理尽力而为。
   }
 }
 

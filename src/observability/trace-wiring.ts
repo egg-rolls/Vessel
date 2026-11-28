@@ -130,7 +130,7 @@ async function dryRunPrune(
     }
     return await pruneTrace(temp, options);
   } finally {
-    await rm(temp, { recursive: true, force: true }).catch(() => {});
+    await rm(temp, { recursive: true, force: true }).catch(() => {}); // benign: 临时目录清理尽力而为。
   }
 }
 
@@ -196,7 +196,7 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
         }
 
         if (TERMINAL_EVENTS.has(event.type)) {
-          void recorder.flush(event.run_id).catch(() => {});
+          void recorder.flush(event.run_id).catch(() => {}); // benign: fire-and-forget 防未处理拒绝；写失败已在 flush 内可见。
         }
       }),
     );

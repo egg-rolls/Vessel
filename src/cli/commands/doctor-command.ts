@@ -604,7 +604,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
           message: `${target.baseUrl}: ${error instanceof Error ? error.message : String(error)}`,
         });
       } finally {
-        await target.close().catch(() => undefined);
+        await target.close().catch(() => undefined); // benign: 探针客户端关闭，失败不掩盖结果。
       }
     }
   }
@@ -785,7 +785,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   // 离线扫描本舰队 registry 各节点 config（隐式节点用本地 config）；重复 → fail（已掩码）。
   {
     const feishuEntries: FeishuTenantConfig[] = [];
-    const registry = await loadNodeRegistry(dataDir).catch(() => undefined);
+    const registry = await loadNodeRegistry(dataDir).catch(() => undefined); // benign: registry 探针——读不出按无注册。
     if (registry?.kind === 'ready') {
       for (const node of registry.registry.nodes) {
         if (node.config_path === undefined) {

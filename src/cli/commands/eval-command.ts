@@ -163,6 +163,6 @@ export async function runEvalCommand(
         // trace 收尾失败不改变 eval 退出码
       }
     }
-    await dataLock?.release().catch(() => undefined);
+    await dataLock?.release().catch(() => undefined); // benign: 锁释放尽力而为——残留由 stale TTL 兜底。
   }
 }
