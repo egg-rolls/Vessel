@@ -1,7 +1,7 @@
 ---
 title: UI 与可见性配置项
 kind: current
-triggers: [ui, 语言, VESSEL_LANG, language, showReasoning, status_bars, verbosity, showInternalEvents, showArchived, errorLevel, askUser, expandCards, messageVisibility, depthColor, 深度配色, indicator, clearOnStart, 状态栏, 可见性]
+triggers: [ui, 语言, VESSEL_LANG, language, showReasoning, status_bars, verbosity, showInternalEvents, showArchived, errorLevel, addressStyle, address_style, 地址显示, askUser, expandCards, messageVisibility, depthColor, 深度配色, indicator, clearOnStart, 状态栏, 可见性]
 paths: [packages/config/src/types.ts, packages/config/src/validator.ts, src/config/ui-settings.ts]
 ---
 
@@ -41,6 +41,7 @@ ui:
   verbosity: normal            # minimal | normal | debug；缺失/非法回退 normal
   show_internal_events: false  # 存量键；未配 message_visibility.system 时继续生效
   error_level: user            # user | all；all 追加 internal/process 级错误
+  address_style: name          # name | compact | full；地址显示三档（q-addr-display）
   ask_user: true               # 入口默认；显式 false 关闭 ask 工具
   expand_cards: false          # Web 时间线卡片默认展开；可操作卡片始终展开
   show_archived: false         # 列表展示已归档 Team / 已停用 agent
@@ -63,6 +64,10 @@ observability:
 - `show_retired_sessions`（默认 false）：会话卡片列表是否显示退休会话（子标题灰色）。默认隐藏；
   搜索态绕过此过滤（退休会话仍搜得到），直接 URL/命令面板照常。判据与灰色子标题同源
   （`session.agent.primary===false` + roster 回落，`primary===true` 现役护栏）。Web `state/retired-visibility.ts`。
+- `ui.address_style`（TS `addressStyle`，默认 name）：地址显示三档 `name | compact | full`
+  （q-addr-display）。只管「给人 / 模型看」的显示层；路由地址永远 canonical full-id 三段。
+  实现单源 `packages/agent/src/address-display.ts`（web 经 alias 共用）；RPC 键
+  `ui.addressStyle`，serve / asm / Web settings-registry 同一白名单。
 - `ui.ask_user`（键名未随工具改名，工具现名 `ask`）：交互 REPL（TTY）或 gateway/serve 才注册；
   headless/管道不注册，显式 true 也不能让无客户端入口注册。提问卡默认无限等待（见
   [config-permission](config-permission.md)）。

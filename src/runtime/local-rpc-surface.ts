@@ -24,6 +24,7 @@ import { createLocalRpcDispatcher } from '../../packages/serve/src/index';
 import { createAskAnswerDelivery } from '../agent/ask-answer-delivery';
 import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
 import { withDataLock } from '../data/data-lock';
+import { createGatewayConfigSet } from '../gateway/gateway-config-control';
 import type { resolveGatewayAuth } from '../gateway/serve-auth';
 import { setPluginConfigValue } from '../plugin/plugin-config';
 import type { createPluginReloader } from '../plugin/plugin-host-assembly';
@@ -187,6 +188,15 @@ export function buildLocalRpcSurface(input: LocalRpcSurfaceInput): LocalRpcDispa
           paths: loaded.paths,
           tenantId,
         }) as unknown as ConfigSnapshotLike,
+      // batch8 残留（R-1 同族）：本地面 config.set 写面注入——与 cli 网络面同一 asm
+      // 写函数（白名单 isSettableConfigKey + default tenant 防御 + 原子 0600 写）。
+      // 此前只注入 snapshot ⇒ 本地 dispatcher（vessel 元工具 op=set_config / TUI）
+      // config.set 恒 not_found。写后热应用：serve 模式由 cli configWatch 的 fs 回声
+      // 承载；纯本地 REPL 无热应用（liveConfigRef 启动快照语义，与插件读面一致）。
+      set: createGatewayConfigSet({
+        defaultTenantId: tenantId,
+        projectConfigPath: loaded.paths.project,
+      }),
     },
     // bootstrap P0：与 cli 网络面同源（createPluginSurface）——child runtime 行 +
     // 显式 disabled 补行 + 活配置口径由工厂统一提供；catalog 首次注入本地面。
