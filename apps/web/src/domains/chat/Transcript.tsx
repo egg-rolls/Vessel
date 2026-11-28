@@ -11,13 +11,11 @@ import type { Message } from '../../gateway/types';
 import { t } from '../../i18n';
 import { runtimeMessageKind } from '../../state/runtime-visibility';
 import { AgentMessageCard, agentMessageSender } from './AgentMessageCard';
+import { BlockView, MessageBlocks } from './block-views';
 import { isIndexUserMessage } from './conversation-index';
-import { MessageRefs } from './MessageRefs';
-import { QuoteBlock } from './QuoteBlock';
-import { liftQuoteForDisplay } from './quote-ref';
+import { liftBlocks } from './lift-blocks';
 import { hasReasoningCard, ReasoningBlock } from './ReasoningBlock';
-import { ToolImageCard } from './ToolImageCard';
-import { isCardInputMessage, type TranscriptItem, toolImageRefsOf } from './transcript-items';
+import { isCardInputMessage, type TranscriptItem } from './transcript-items';
 
 /**
  * 这条历史消息自己要显示的思考文本（thinking 模式的 reasoning_content）。
@@ -136,23 +134,15 @@ const TranscriptMessage = memo(function TranscriptMessage({
         />
       );
     }
-    // 消息引用（q-message-quote）：正文开头的信封提升成气泡上方的轻量引用块；
-    // 不是信封时 lifted = null，正文原样渲染（零回归）。
-    const lifted = liftQuoteForDisplay(message.content, quoteTargets);
-    const body = lifted !== null ? lifted.body : message.content;
+    // 块提升（块 P0）：一次 liftBlocks 收编 quote / session-ref / image / file 解析；
+    // 不是信封时 blocks 为空、body = 原文（零回归）。顺序由注册表 order 决定。
+    const { blocks, body } = liftBlocks(message, { messages: quoteTargets });
     const actions: MessageAction[] = [];
-    // 工具图片注入（media view 等）：结构化图片卡替代「[tool image]…」文本 dump
-    // （q-media-image-card）。缩略图 + 元数据 + 投递 chip；原始注记收进卡内折叠区。
-    const toolImageRefs = toolImageRefsOf(message);
-    if (toolImageRefs !== undefined) {
-      return (
-        <ToolImageCard
-          refs={toolImageRefs}
-          imageDelivery={message.image_delivery}
-          note={message.content}
-          ts={message.timestamp}
-        />
-      );
+    // 工具图片注入（media view 等）：整条消息成卡（注册表 image 块），替代
+    // 「[tool image]…」文本 dump；原始注记收进卡内折叠区（组件内部不动）。
+    const imageBlock = blocks.find((block) => block.type === 'image');
+    if (imageBlock !== undefined) {
+      return <BlockView block={imageBlock} />;
     }
     if (message.content.trim().length > 0) {
       actions.push({
@@ -177,13 +167,10 @@ const TranscriptMessage = memo(function TranscriptMessage({
     }
     return (
       <div className="msg-user group flex max-w-full flex-col items-end gap-1">
-        {/* 引用块在附件 chip 之上：先「回复哪一句」，再「带了什么文件」。 */}
-        {lifted !== null && (
-          <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
-        )}
-        {/* 引用（只有路径）在气泡上方一行：不改正文，也不影响 copy / edit。
+        {/* 块按注册表顺序在气泡上方：先「回复哪一句」（quote），再会话引用卡，
+            再「带了什么文件」（refs chip）。不改正文，也不影响 copy / edit。
             0.56：图片引用同时显示投递三态（从事件派生，服务端随历史下发）。 */}
-        <MessageRefs refs={message.refs} imageDelivery={message.image_delivery} />
+        <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
         <div className="msg-bubble">
           <MessageFold>{body}</MessageFold>
         </div>
@@ -195,9 +182,9 @@ const TranscriptMessage = memo(function TranscriptMessage({
   }
 
   const calls = message.tool_calls ?? [];
-  // 消息引用（q-message-quote）：AI 回复也可以带信封引用用户消息（双向同形）。
-  const lifted = liftQuoteForDisplay(message.content, quoteTargets);
-  const body = lifted !== null ? lifted.body : message.content;
+  // 块提升（块 P0）：AI 回复也可以带信封引用用户消息（双向同形）；session-ref
+  // 信封同样提升成卡。一次 liftBlocks，未知正文原样渲染（零回归）。
+  const { blocks, body } = liftBlocks(message, { messages: quoteTargets });
   // 思考块就在这个 item 里渲：被 live 认领的消息走不到这里（见 historyReasoning）。
   // q-msg-visibility：思考过程 toggle / minimal 档关闭时不渲（与 live 同一判定）。
   const reasoning = showReasoning ? historyReasoning(message) : undefined;
@@ -240,10 +227,8 @@ const TranscriptMessage = memo(function TranscriptMessage({
   const isRunEnd = calls.length === 0;
   return (
     <div className="msg-assistant group relative max-w-full">
-      {/* 引用块在最前：这条回复「针对哪一句」先于思考与正文。 */}
-      {lifted !== null && (
-        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
-      )}
+      {/* 块在最前：这条回复「针对哪一句」先于思考与正文（注册表顺序）。 */}
+      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
       {/* 思考在正文之前：与 live 一致（run 里 reasoning item 先于 text item）。
           `time` = 这条消息的时刻：有思考卡时，这一轮的时间只出现在卡头最右。 */}
       {reasoning !== undefined && (
