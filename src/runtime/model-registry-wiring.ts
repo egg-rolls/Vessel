@@ -111,24 +111,66 @@ interface CredentialEnvelopeEntry {
   updatedAt: string;
 }
 
-/** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined）。启动闸与请求侧共用。 */
-function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelopeEntry | undefined {
+/**
+ * 信封读取三态（CHAIN-08）：ok = 条目在库且形状完整；absent = 文件 / 条目不存在；
+ * corrupt = 文件在但读不出 / 形状损坏。**损坏 ≠ 不存在**——与写侧
+ * CredentialStore.readEnvelope 同一纪律（写侧抛 credentials_corrupt 不静默覆盖，
+ * 读侧此前却把损坏静默折成 undefined → 闸误报「未配置 API Key」、请求侧误报
+ * 「凭证缺失，请重录」，而重录单条凭证根本修不好损坏的库）。
+ */
+type CredentialEnvelopeRead =
+  | { kind: 'ok'; entry: CredentialEnvelopeEntry }
+  | { kind: 'absent' }
+  | { kind: 'corrupt'; reason: string };
+
+/** 读信封条目（只读元数据路径）。启动闸与请求侧共用；损坏显式成态，不静默。 */
+function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelopeRead {
+  const file = path.join(dataDir, 'credentials.json');
   let raw: string;
   try {
-    raw = readFileSync(path.join(dataDir, 'credentials.json'), 'utf-8');
-  } catch {
-    return undefined;
+    raw = readFileSync(file, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'corrupt', reason: `credentials_read_failed: ${file}: ${messageOf(error)}` };
   }
+  let parsed: { v?: unknown; entries?: Record<string, unknown> };
   try {
-    const parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
-    if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
-      return undefined;
-    }
-    const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
-    return entry !== undefined && typeof entry.updatedAt === 'string' ? entry : undefined;
-  } catch {
-    return undefined;
+    parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
+  } catch (error) {
+    return { kind: 'corrupt', reason: `credentials_corrupt: ${file}: ${messageOf(error)}` };
   }
+  if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
+    return { kind: 'corrupt', reason: `credentials_corrupt: ${file}: unexpected envelope shape` };
+  }
+  const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
+  if (entry === undefined) return { kind: 'absent' };
+  // 条目形状与写侧逐字段同口径（iv/tag/data/createdAt/updatedAt 全 string）：
+  // 此前只查 updatedAt，残缺条目会流到解密步再误报「root secret 已轮换」。
+  if (
+    typeof entry.iv !== 'string' ||
+    typeof entry.tag !== 'string' ||
+    typeof entry.data !== 'string' ||
+    typeof entry.createdAt !== 'string' ||
+    typeof entry.updatedAt !== 'string'
+  ) {
+    return {
+      kind: 'corrupt',
+      reason: `credentials_corrupt: ${file}: entry "${id}" has invalid shape`,
+    };
+  }
+  return { kind: 'ok', entry };
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 损坏信封的 fail-loud 文案（闸与请求侧共用；稳定前缀与写侧一致，可 grep）。 */
+function corruptStoreError(reason: string): ProviderConfigError {
+  return new ProviderConfigError(
+    `${reason} — the credential store is unreadable; repair or restore credentials.json ` +
+      '(re-recording a single credential does not fix a corrupt store).',
+  );
 }
 
 /**
@@ -178,7 +220,10 @@ export function hasBootRegistryKey(
     return false;
   }
   if (resolved.credentialRef !== undefined) {
-    return readCredentialEnvelope(dataDir, resolved.credentialRef) !== undefined;
+    const read = readCredentialEnvelope(dataDir, resolved.credentialRef);
+    // CHAIN-08：损坏 fail-loud（精确文案），不再静默折成「未配置 API Key」。
+    if (read.kind === 'corrupt') throw corruptStoreError(read.reason);
+    return read.kind === 'ok';
   }
   if (resolved.apiKeyEnv !== undefined) {
     const value = process.env[resolved.apiKeyEnv];
@@ -256,11 +301,6 @@ export async function createModelRegistryWiring(options: {
   let snapshot = synthesizeLegacyRegistry(config, legacyPresent);
   /** 实例缓存：键 = entryId + baseUrl + 凭证 updatedAt + promptCache + param 构造缺省。 */
   const cache = new Map<string, LLMProvider>();
-
-  /** 读信封条目（只读元数据路径；不存在 / 损坏 → undefined，请求侧按缺凭证处理）。 */
-  function readCredentialEntry(id: string): CredentialEnvelopeEntry | undefined {
-    return readCredentialEnvelope(dataDir, id);
-  }
 
   /** 解密取明文：只在实例构造瞬间存在；失败（root-secret 轮换，D10 需重录）→ undefined。 */
   function decryptCredential(entry: CredentialEnvelopeEntry): string | undefined {
@@ -385,10 +425,16 @@ export async function createModelRegistryWiring(options: {
 
   /** 按当前键取/建实例：凭证信封 updatedAt 每请求只读元数据，轮换 → 键变 → 重建。 */
   function currentInstance(resolved: ResolvedModel): LLMProvider {
-    const entry =
-      resolved.credentialRef !== undefined
-        ? readCredentialEntry(resolved.credentialRef)
-        : undefined;
+    // legacy 链凭证值来自 provider.*，不消费加密库：不读信封（损坏的库不得拖垮
+    // legacy 请求，缓存键也与今天一致恒无 updatedAt）。注册凭证区分损坏与缺失
+    // （CHAIN-08）：损坏 fail-loud 精确文案，不再静默按「缺凭证」误导重录。
+    const legacyChain = resolved.legacy || resolved.credentialRef?.startsWith('legacy:') === true;
+    let entry: CredentialEnvelopeEntry | undefined;
+    if (resolved.credentialRef !== undefined && !legacyChain) {
+      const read = readCredentialEnvelope(dataDir, resolved.credentialRef);
+      if (read.kind === 'corrupt') throw corruptStoreError(read.reason);
+      entry = read.kind === 'ok' ? read.entry : undefined;
+    }
     const key = cacheKeyOf(resolved, entry?.updatedAt);
     const hit = cache.get(key);
     if (hit !== undefined) return hit;
