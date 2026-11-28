@@ -946,6 +946,17 @@ export interface AgentRecoverResult {
 }
 
 /**
+ * 启动对账异步作业占位卡的结果（q-async-job-reconcile，只用于日志 / 自检，不上 wire）。
+ *
+ * `reconciled` = 本次从 running 回写成 failed 的孤儿占位卡数；`failed` = 回写失败的卡数
+ * （条目保持 running，下次启动再试）。
+ */
+export interface AgentAsyncJobReconcileResult {
+  reconciled: number;
+  failed: number;
+}
+
+/**
  * 启动 dispatch sweep 的结果（只用于日志 / 自检，不上 wire）。
  *
  * `lit` = 重建 noticeDirty 点亮的成员数（有可直投队头）；`dispatched` = 真正让目标
@@ -1771,6 +1782,15 @@ export interface AgentService {
     endedAt?: number;
     payload?: Record<string, unknown>;
   }): Promise<boolean>;
+  /**
+   * q-async-job-reconcile：启动对账 —— 异步作业注册表是**进程内存**（basic-tools 的
+   * asyncJobs），占位卡却随 inbox 落盘：进程退出时子进程被 exit sweep 停掉，running
+   * 占位卡却留在盘上；重启后 recoverPendingInputs / startupDispatchSweep 都跳过 quiet
+   * 条目，没有任何路径回写它 ⇒ 恒 running 的孤儿卡。本方法在启动时把盘上所有仍在
+   * running 的占位卡原位回写成 failed（作业进程已随上次退出被停，结果丢失），只改
+   * 卡片视觉（quiet 留档），不起 run、不投消息。每进程一次（幂等闸）。
+   */
+  reconcileAsyncJobs(): Promise<AgentAsyncJobReconcileResult>;
   /** 某 agent 的 live ExecutionUnit 状态（primary 优先） */
   bodies(agentId: string): Promise<ExecutionUnitStatus[]>;
   /**

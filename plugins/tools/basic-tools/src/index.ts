@@ -1750,9 +1750,21 @@ async function startAsyncBash(options: {
   }
 
   // 收口是脱钩的（工具已经返回了）：异常没有收件人，收敛成一条「收集失败」的通知。
+  // q-async-job-reconcile：兜底也要走唤醒出口 —— 否则占位卡恒 running（hook 只注入
+  // 通知正文，从不回写卡片），时间线徽标也停在「等待异步任务」。
   void finalizeAsyncBash(job).catch(() => {
     job.finishedAt = Date.now();
     job.notice = `[runtime] bash job ${id} finished, but its output could not be collected. See ${logPath}.`;
+    void deliverAsyncNotice(job, job.notice, job.exitCode ?? null, logPath);
+    emitBashJobFact(job, 'bash.job.failed', {
+      status: 'failed',
+      exit_code: job.exitCode ?? null,
+      timed_out: job.timedOut,
+      collect_failed: true,
+      elapsed_ms: job.finishedAt - job.startedAt,
+      log_path: logPath,
+      ended_at: job.finishedAt,
+    });
     pruneAsyncJobs();
   });
 
@@ -1940,6 +1952,18 @@ function detachAsyncJob(job: AsyncBashJob): void {
   })().catch(() => {
     appender.open();
     job.notice = `[runtime] bash job ${job.id} timed out after ${job.timeoutMs}ms; process left running, but its output could not be collected. See ${job.logPath}.`;
+    // q-async-job-reconcile：兜底同样走唤醒出口回写占位卡（否则恒 running）+ 时间线事实。
+    void deliverAsyncNotice(job, job.notice, null, job.logPath);
+    emitBashJobFact(job, 'bash.job.failed', {
+      status: 'failed',
+      exit_code: null,
+      timed_out: true,
+      detached: true,
+      collect_failed: true,
+      elapsed_ms: (job.finishedAt ?? Date.now()) - job.startedAt,
+      log_path: job.logPath,
+      ended_at: job.finishedAt,
+    });
     pruneAsyncJobs();
   });
 }

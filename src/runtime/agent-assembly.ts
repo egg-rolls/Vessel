@@ -427,6 +427,20 @@ export async function finishAgentAssembly(
   // 降级出来的普通标记恰好被随后的 node-resume 发卡。node-resume 跳过 continuation 标记。
   // （标记单写口更新 updateResumeMarker 是函数声明，提升在本函数作用域，见 selfRestart 旁。）
   if (!headless) {
+    // q-async-job-reconcile：先对账孤儿异步作业占位卡，再走队列恢复。作业注册表是
+    // 进程内存、占位卡随 inbox 落盘 ⇒ 启动时盘上的 running 卡必属上一进程（子进程已
+    // 被 exit sweep 停掉），原位回写 failed；quiet 留档不起 run，与恢复链互不干扰。
+    // 失败不阻断启动（卡保持 running，下次启动再试）。
+    try {
+      const reconciled = await wiring.service.reconcileAsyncJobs();
+      if (reconciled.reconciled > 0 || reconciled.failed > 0) {
+        logger.info('agent.async_job.reconcile_done', { ...reconciled });
+      }
+    } catch (error) {
+      logger.warn('agent.async_job.reconcile_failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     try {
       if (eventLog === undefined) {
         // memory 后端 / 只读执行面没有事件日志：拿不到「卡发过没、准入没」的证据，
