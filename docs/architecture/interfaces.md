@@ -55,9 +55,7 @@ interface Message {
 }
 ```
 
-`VisionBackend` / `AttachmentPlan` 形状在 `types/vision.ts`。`message_id` 只进会话壳与事件流，**不进请求体**（Provider 适配层逐字段挑）；`attachment_plan` 缺省 = 旧行为，适配器命中时才把对应消息的 `content` 升成块数组。
-
-流式不是独立方法：`stream: true` + `on_chunk` 回调，loop 把增量发成 `llm.stream.chunk` 事件（ADR-007）。不支持的 Provider 忽略 `on_chunk` 即退化为整段返回。
+`VisionBackend` / `AttachmentPlan` 形状在 `types/vision.ts`。`message_id` 只进会话壳与事件流，**不进请求体**（Provider 适配层逐字段挑）；`attachment_plan` 缺省 = 旧行为，适配器命中时才把对应消息的 `content` 升成块数组。流式不是独立方法：`stream: true` + `on_chunk` 回调，loop 把增量发成 `llm.stream.chunk` 事件（ADR-007）；不支持的 Provider 忽略 `on_chunk` 即退化为整段返回。
 
 `reasoning_content` 是 OpenAI 兼容 thinking 模型的可选扩展（DeepSeek 等）：Provider 返回后由 runtime 保存在 assistant 消息里，下一轮请求原样回传（含 `tool_calls` 轮次），否则 API 会拒绝。它**不进** `llm.request` / `context.changed` 事件，也不进 TUI；会话持久化保留。Anthropic 路径不使用该字段。
 
@@ -79,6 +77,8 @@ interface WorkingContext {
 }
 ```
 
+可选扩展成员（实现可选，语义见 [context](context.md) / [session-length](session-length.md)）：`compactAsync?` / `autoCompactAsync?`（异步压缩）、`maxTokens?` / `autoCompact?` / `compactThreshold?` / `lastCompaction?`（预算与压缩报告）、`setContextAnchor?` / `recordRealPromptTokens?` / `contextAnchor?`（真实 token 锚点校正）。
+
 `add()` 是**同步直接写**（关键路径，模型下一轮必读）；每次写入由 runtime 发一条 `context.changed` 事件供观测/回放。
 
 <a id="event-stream"></a>
@@ -91,7 +91,7 @@ interface EventStream {
   publish(event: RunEvent): void;
   clear(): void;
   getHistory(runId?: string): RunEvent[];
-  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown>;
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number; signal?: AbortSignal }): Promise<unknown>;
 }
 
 interface RunEvent {
@@ -99,10 +99,11 @@ interface RunEvent {
   run_id: string;
   data: EventPayload | Record<string, unknown>;
   ts: number;
+  seq?: number; // 同一 run 内单调递增；实时内存事件可缺省，trace 落盘由 FileTraceRecorder 分配（见 event-trace）
+  node_id?: string; // 来源节点；跨节点回灌/扇出由传输/gateway 边界填，消费方按 (node_id, run_id) 理解 seq、(node_id, seq) 去重
 }
 ```
 
-`MemoryEventStreamOptions`：**缺省 `maxHistory = 1000`**；显式 `0` = 不限制；
-`>0` = 环形缓冲，只保留最近 N 条。构造函数接受 `MemoryEventStreamOptions | number`，
-`replayRun` / `FileEventStore` 语义不变，`FileEventStore` 不自动轮转（ADR-045）。
+`MemoryEventStreamOptions`：**缺省 `maxHistory = 1000`**；显式 `0` = 不限制；`>0` = 环形缓冲，只保留最近 N 条。
+构造函数接受 `MemoryEventStreamOptions | number`；`replayRun` / `FileEventStore` 语义不变，`FileEventStore` 不自动轮转（ADR-045）。
 
