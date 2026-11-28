@@ -267,7 +267,9 @@ function collectCommitMessages(): string[] | null {
 function printSuggestion(suggestion: BumpSuggestion, chosen?: BumpKind): void {
   const { kind, counts, breaking, feats, total } = suggestion;
   if (kind === null) {
-    console.log(`[suggest] ${total} 条 commit 无 conventional 信号（feat/fix/breaking），不臆造建议`);
+    console.log(
+      `[suggest] ${total} 条 commit 无 conventional 信号（feat/fix/breaking），不臆造建议`,
+    );
     return;
   }
   console.log(
@@ -293,7 +295,8 @@ async function main(): Promise<void> {
   if (args.includes('--suggest-bump')) {
     if (args.length > 1) die('--suggest-bump 单独使用（不与 --bump / 显式版本 / 其他 flag 组合）');
     const messages = collectCommitMessages();
-    if (messages === null) die('git 不可用，无法读 commit history（L-057：收口/推导请在主 checkout 跑）');
+    if (messages === null)
+      die('git 不可用，无法读 commit history（L-057：收口/推导请在主 checkout 跑）');
     printSuggestion(suggestBumpFromCommits(messages));
     return;
   }

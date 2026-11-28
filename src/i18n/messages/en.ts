@@ -173,7 +173,8 @@ export const en: Record<MessageKey, string> = {
     'RPC methods not included (control plane unreachable); run vessel rpc list against a running gateway for the full list.',
   'help.search.missingQuery': 'Usage: vessel help --search <query> [--json]',
   'help.search.unknownArg': 'Unknown argument for help --search: {arg}',
-  'help.search.hint': 'vessel <command> --help for usage; vessel rpc list for the full RPC manifest.',
+  'help.search.hint':
+    'vessel <command> --help for usage; vessel rpc list for the full RPC manifest.',
   'help.group.agent': 'member lifecycle and message delivery',
   'help.group.config': 'read / write user configuration',
   'help.group.dev': 'development-only maintenance commands',

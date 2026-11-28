@@ -16,10 +16,7 @@
 
 import { t } from '../i18n';
 import { schemaSummary } from './commands/rpc-command';
-import {
-  type ControlPlaneTargetOptions,
-  resolveControlPlaneTarget,
-} from './control-plane-target';
+import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
 import type { CliHelpPlan } from './help';
 import { CLI_HELP_COMMANDS } from './help-spec';
 import { ui } from './output';
@@ -55,9 +52,7 @@ interface SearchRequest {
   readonly target: ControlPlaneTargetOptions;
 }
 
-type ParseOutcome =
-  | { ok: true; request: SearchRequest }
-  | { ok: false; error: string };
+type ParseOutcome = { ok: true; request: SearchRequest } | { ok: false; error: string };
 
 /** targeting flag 与 rpc list 同口径（--connect / --connect-token / --ca / --node / --instance / --data-dir）。 */
 const TARGET_FLAGS = new Set([
@@ -187,9 +182,7 @@ function didYouMean(entries: readonly SearchEntry[], query: string): string[] {
   const candidates = entries
     .filter((entry) => {
       const name = entry.name.toLowerCase();
-      return (
-        isSubsequence(q, name) || name.split(/[ .]/).some((segment) => nearMatch(q, segment))
-      );
+      return isSubsequence(q, name) || name.split(/[ .]/).some((segment) => nearMatch(q, segment));
     })
     .map((entry) => entry.name)
     .sort();
