@@ -2,6 +2,7 @@
  * 附件引用的形状归一（0.52）：`AgentService.dispatch` 与 `TeamService.post` 共用一份。
  *
  * 只认 `{kind, path}` 形状，逐条丢弃其余，条数封顶。
+ * file-ref-ux A1：`inline?` 同形透传（只写 true 键；缺省 = 不内联）。
  *
  * 这里**不做**权限判定，也不该做：引用是「用户想让我读这个」，加进来时就拒会把
  * 意图丢掉。路径边界统一在**读文件那一刻**校验（`read` / `media` 的
@@ -41,6 +42,9 @@ export function normalizeRefs(value: unknown): MessageRef[] {
     if (typeof record.bytes === 'number' && Number.isFinite(record.bytes) && record.bytes >= 0) {
       ref.bytes = Math.floor(record.bytes);
     }
+    // file-ref-ux A1：逐条内联开关同形透传。只写 `true` 键（false ≡ 缺省 = 不内联，
+    // 旧生产者形状逐字节不变）；入池闸在装配层按它判定，这里不做语义判定。
+    if (record.inline === true) ref.inline = true;
     refs.push(ref);
   }
   return refs;

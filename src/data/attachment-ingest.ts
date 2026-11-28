@@ -1,6 +1,9 @@
 /**
  * 附件入池的边界实现（0.56 决策 2：上传即落 blob）
  *
+ * file-ref-ux A1 限定决策 2：只有 `inline === true` 的图才入池（缺省 = 不内联，
+ * 只留路径）；已带 sha256 的历史引用幂等透传，不追溯剥夺。
+ *
  * ## 为什么这里只判「能不能读」，不判「能不能发」
  *
  * 入池发生在附件**到达节点**那一刻（`AgentService.admit`），此时还没有 provider、没有
@@ -64,17 +67,35 @@ export function createConfigAttachmentIngest(
   let cachedConfig: VesselConfig | undefined;
   let cachedBoundary: PathBoundary | undefined;
   return async (refs) => {
-    if (!refs.some((ref) => ref.kind === 'image' && ref.sha256 === undefined)) return [...refs];
+    // file-ref-ux A1（限定 0.56 决策 2）：只有 `inline === true` 的图才读文件落 blob；
+    // 缺省 = 不内联（只留路径，模型用 media 按需读）。只约束**新入池**：已带 sha256
+    // 的引用（历史 / 重放 / 迁移）不在候选里 ⇒ 幂等透传、继续内联，不追溯剥夺
+    // （历史前缀逐字节不变）。core ingest / plan 零改动，闸只在这一层。
+    const pendingIdx: number[] = [];
+    const pending: MessageRef[] = [];
+    refs.forEach((ref, i) => {
+      if (ref.kind === 'image' && ref.inline === true && ref.sha256 === undefined) {
+        pendingIdx.push(i);
+        pending.push(ref);
+      }
+    });
+    if (pending.length === 0) return [...refs];
     const config = options.getConfig();
     if (cachedBoundary === undefined || cachedConfig !== config) {
       cachedConfig = config;
       cachedBoundary = boundaryOf(config, resolveAgentCwd(config));
     }
     const boundary = cachedBoundary;
-    const result = await ingestImageRefs(refs, {
+    const result = await ingestImageRefs(pending, {
       allowPath: (target: string) => evaluatePath(canonicalPath(path.resolve(target)), boundary),
       ...(options.root !== undefined ? { root: options.root } : {}),
     });
-    return result.refs;
+    // ingestImageRefs 保序、逐条 push（失败也原样占位）⇒ 按索引回填，其余引用不动。
+    const out = [...refs];
+    result.refs.forEach((ref, j) => {
+      const idx = pendingIdx[j];
+      if (idx !== undefined) out[idx] = ref;
+    });
+    return out;
   };
 }

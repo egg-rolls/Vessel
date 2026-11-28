@@ -46,6 +46,16 @@ export interface MessageRef {
   mime?: string;
   /** 字节数（前端 stat 结果，不可信，仅供展示） */
   bytes?: number;
+  /**
+   * 逐条内联开关（additive，file-ref-ux A1）：`true` = 本条引用入池时读图落 blob、
+   * 请求期随消息内联；**缺省 = 不内联**（只留路径，模型用 media 工具按需读）。
+   *
+   * A1 限定 0.56 决策 2「上传即落」：入池闸只认 `inline === true`（装配层
+   * attachment-ingest 判定）。只约束**新入池**——已带 `sha256` 的引用（历史 /
+   * 重放 / 迁移）幂等透传、继续内联，不追溯剥夺（历史前缀逐字节不变）。
+   * 形状闸只在 `=== true` 时写键（false ≡ 缺省，旧生产者形状不变）。
+   */
+  inline?: boolean;
 }
 
 /** 消息 */

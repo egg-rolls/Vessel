@@ -47,7 +47,7 @@ kanban:
 
 ## `vision`（全部可选；故意没有 enable 键）
 
-能力问 `provider.vision`（插件 `VisionBackend` 描述符），配置只管运行期：
+能力问 `provider.vision`（插件 `VisionBackend` 描述符），配置只管运行期。逐条内联由 `refs[].inline` 控制（file-ref-ux A1：**缺省不内联**，`true` 才入池内联；见 [gateway-rpc](../architecture/gateway-rpc.md) refs 契约）——`vision.disabled` 是全局闸，优先于逐条开关。
 
 | 键 | 语义 |
 |---|---|
