@@ -208,6 +208,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.item.showArchived.title': 'Show archived / closed (pending removal)',
   'settings.item.showArchived.desc':
     'Archived Teams and closed agents are hidden by default (both are waiting to be pruned). On brings them back to the Team list, Agent list and member sidebar with an "archived / closed · pending removal" badge. Direct links are unaffected and always open.',
+  'settings.item.showRetiredSessions.title': 'Show retired sessions',
+  'settings.item.showRetiredSessions.desc':
+    'Retired sessions (old bodies from before a rotate, grey subtitle) are hidden from the session card list by default. On brings them back unchanged. Hiding is not deleting: search and direct links always open them.',
   'settings.item.errorLevel.title': 'Error level',
   'settings.item.showProcessErrors.title': 'Show process errors',
   'settings.item.askUser.title': 'Allow ask',

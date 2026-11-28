@@ -231,7 +231,8 @@ export async function configSetCommand(
     key === 'ui.showInternalEvents' ||
     key === 'ui.askUser' ||
     key === 'ui.expandCards' ||
-    key === 'ui.showArchived'
+    key === 'ui.showArchived' ||
+    key === 'ui.showRetiredSessions'
   ) {
     if (value !== 'true' && value !== 'false') {
       return {
