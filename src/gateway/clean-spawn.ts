@@ -11,7 +11,9 @@
  * 非 node）——scratch 实验 4 验证 parent 退出端口立即释放。stdio 落日志经
  * `cmd.exe /d /s /c "… >> log 2>&1"` 包装（WMI Create 无 stdio 重定向能力）；
  * 记录的 pid 是 cmd 包装进程（与编排者同生命周期，taskkill /T 语义一致）。
- * WMI 不可用 → 告警并回退旧 Bun.spawn detached（僵尸风险由 R-3 健康闸兜底）。
+ * WMI 不可用 → 告警并回退旧 Bun.spawn detached。回退路的僵尸风险已由
+ * socket-inherit-guard 在句柄级根治（监听 socket 创建即清 HANDLE_FLAG_INHERIT，
+ * 任何 spawn 路径都不可继承）；R-3 健康闸仍是兜底。
  * POSIX 无此问题，保留 Bun.spawn detached。
  *
  * 修复③：port_in_use 附 netstat 持有者 pid（含死 pid 归属陷阱提示）；编排者
@@ -132,7 +134,8 @@ export async function spawnDetachedClean(opts: CleanSpawnOptions): Promise<Clean
   } catch (error) {
     opts.warn?.(
       `WMI clean-parent spawn unavailable (${error instanceof Error ? error.message : String(error)}); ` +
-        'falling back to Bun.spawn detached — Windows Bun socket-handle inheritance may leave a zombie listener (R-5)',
+        'falling back to Bun.spawn detached — listening sockets are guarded non-inheritable at creation ' +
+        '(socket-inherit-guard, R-5); residual zombie risk is covered by the R-3 health gate',
     );
     return spawnBunDetached(opts);
   }
