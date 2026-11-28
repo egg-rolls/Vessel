@@ -223,7 +223,10 @@ export function hasBootRegistryKey(
     const read = readCredentialEnvelope(dataDir, resolved.credentialRef);
     // CHAIN-08：损坏 fail-loud（精确文案），不再静默折成「未配置 API Key」。
     if (read.kind === 'corrupt') throw corruptStoreError(read.reason);
-    return read.kind === 'ok';
+    if (read.kind === 'ok') return true;
+    // CHAIN-03：库值缺失时落 env 间接判定（env-only 凭证是一等形态：管理面
+    // credential_remove 容忍库值缺失、test 面 apiKeyForCredential 缺值回落 env）。
+    // 闸此前只查信封，env only 凭证被误判「未配置 API Key」而拒启动。
   }
   if (resolved.apiKeyEnv !== undefined) {
     const value = process.env[resolved.apiKeyEnv];
@@ -329,11 +332,22 @@ export async function createModelRegistryWiring(options: {
       return resolveEffectiveApiKey(config) ?? '';
     }
     if (resolved.credentialRef !== undefined) {
-      // fail-loud（D10）：引用了凭证却缺失 / 不可解密 → 明确本地错误，不发空 key 拿 401。
+      // CHAIN-03：env-only 凭证（库值缺失 + apiKeyEnv 间接非空）与启动闸 / 管理 test 面
+      // 同口径可用（apiKeyForCredential 对 unknown_credential 回落 env）。库值仍优先；
+      // 解密失败保持 D10 fail-loud，不回落 env（与 test 面同一纪律）。
       if (entry === undefined) {
+        const envValue =
+          resolved.apiKeyEnv !== undefined ? process.env[resolved.apiKeyEnv] : undefined;
+        if (typeof envValue === 'string' && envValue.trim() !== '') return envValue;
+        // fail-loud（D10）：库值与 env 间接皆无 → 明确本地错误，不发空 key 拿 401。
         throw new ProviderConfigError(
-          `Credential "${resolved.credentialRef}" is missing or unreadable in credentials.json; ` +
-            're-record it via the model-registry credential store.',
+          `Credential "${resolved.credentialRef}" has no stored value in credentials.json` +
+            (resolved.apiKeyEnv !== undefined
+              ? ` and environment variable "${resolved.apiKeyEnv}" is unset or empty`
+              : '') +
+            '; record it via the model-registry credential store' +
+            (resolved.apiKeyEnv !== undefined ? ' or set the environment variable' : '') +
+            '.',
         );
       }
       const value = decryptCredential(entry);
