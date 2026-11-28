@@ -23,16 +23,20 @@ import type {
   SourceModule,
   TargetResolution,
 } from '@vessel-agent/core';
+import { agentSubscriptionKey, isValidAgentTarget } from './agent.js';
 import { type DocSubscriptionConfig, isValidScriptName, resolveInput } from './config.js';
 import { healthSubscriptionKey, isValidHealthTarget } from './health.js';
 import {
   type BeforeLlmHookDeps,
+  observeAgentEntry,
   observeEntry,
   observeHealthEntry,
   processScriptEntry,
   type ScriptProcessOutcome,
 } from './hook.js';
 import {
+  AGENT_NOTICE_SCOPE,
+  formatAgentNotice,
   formatHealthNotice,
   formatScriptNotice,
   formatSubscriptionNotice,
@@ -143,10 +147,33 @@ export const scriptSource: SourceModule<SubscriptionEntry, ScriptDetectContext, 
   };
 
 /**
+ * agent 源 facade（q-sub-unify-p1 M4b）：原生按契约建（第四源），
+ * 纯委托 observeAgentEntry / formatAgentNotice；★D5 统一 agent 词。
+ */
+export const agentSource: SourceModule<SubscriptionEntry, BeforeLlmHookDeps> = {
+  source: AGENT_NOTICE_SCOPE,
+  resolveTarget(input: string): TargetResolution {
+    const target = input.trim();
+    if (!isValidAgentTarget(target)) return { ok: false, error: 'invalid_target' };
+    return { ok: true, key: agentSubscriptionKey(target), target };
+  },
+  async detect(entry, deps) {
+    const observed = await observeAgentEntry(entry, deps);
+    if (observed === undefined) return undefined;
+    return { rev: observed.rev, material: observed };
+  },
+  cursor: { kind: 'signature', sentinels: [''] },
+  format(changes: readonly string[], _budget: NoticeBudget): NoticePayload {
+    return { scope: AGENT_NOTICE_SCOPE, content: formatAgentNotice(changes, changes.length) };
+  },
+  delivery: 'ambient',
+};
+
+/**
  * 装配期断言（模块加载即跑，非测试形态）：facade 契约不变量。
  * 违反即 throw —— 装配失败可见，不静默降级。
  */
-for (const mod of [fileSource, healthSource, scriptSource]) {
+for (const mod of [fileSource, healthSource, scriptSource, agentSource]) {
   if (mod.delivery !== 'ambient') {
     throw new Error(`source-module invariant: ${mod.source} must be ambient in P1`);
   }

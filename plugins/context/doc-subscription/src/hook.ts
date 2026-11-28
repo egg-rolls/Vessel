@@ -34,6 +34,12 @@ import { readFile, stat } from 'node:fs/promises';
 import { evaluatePath, type PathBoundary, splitLines } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
 import {
+  type AgentSnapshot,
+  agentSignature,
+  agentSubscriptionKey,
+  readAgentSnapshot,
+} from './agent.js';
+import {
   type DocSubscriptionConfig,
   REGISTERED_SCRIPT_SCOPES,
   type ScriptSchedule,
@@ -48,6 +54,7 @@ import {
 } from './health.js';
 import { consumeClearedToolResults } from './lifecycle.js';
 import {
+  formatAgentNotice,
   formatHealthNotice,
   formatScriptNotice,
   formatSubscriptionNotice,
@@ -335,6 +342,38 @@ function healthNoticeLine(entry: SubscriptionEntry, snapshot: HealthSnapshot): s
   return `<node ${attrs.join(' ')} />`;
 }
 
+/**
+ * agent 源观察（q-sub-unify-p1）：读宿主落的活动快照文件，算变化签名。
+ * `undefined` = 跳过（快照缺失 / 读失败 / private fail-closed 无快照），不推进任何游标。
+ * 探测本身在宿主侧（agent-activity-watch 双流）；插件只消费事实，不 import 宿主模块。
+ */
+export async function observeAgentEntry(
+  entry: SubscriptionEntry,
+  deps: BeforeLlmHookDeps,
+): Promise<{ rev: string; snapshot: AgentSnapshot } | undefined> {
+  const snapshot = await readAgentSnapshot(deps.config.stateDir, entry.path);
+  if (snapshot === undefined) return undefined;
+  return { rev: agentSignature(snapshot), snapshot };
+}
+
+/**
+ * 单 agent 通知行：元数据（与文件 `<file … />` / health `<node … />` 同族）。
+ * state/presence 是核心信号；role / last_run_ts / name / team_id 只在快照有时附带。
+ */
+function agentNoticeLine(entry: SubscriptionEntry, snapshot: AgentSnapshot): string {
+  const attrs = [
+    `target="${escapeXmlAttr(entry.path)}"`,
+    `id="${escapeXmlAttr(entry.id)}"`,
+    `state="${escapeXmlAttr(snapshot.state ?? '-')}"`,
+  ];
+  if (snapshot.presence !== undefined) attrs.push(`presence="${escapeXmlAttr(snapshot.presence)}"`);
+  if (snapshot.role !== undefined) attrs.push(`role="${escapeXmlAttr(snapshot.role)}"`);
+  if (snapshot.last_run_ts !== undefined) attrs.push(`last_run_ts="${snapshot.last_run_ts}"`);
+  if (snapshot.name !== undefined) attrs.push(`name="${escapeXmlAttr(snapshot.name)}"`);
+  if (snapshot.team_id !== undefined) attrs.push(`team_id="${escapeXmlAttr(snapshot.team_id)}"`);
+  return `<agent ${attrs.join(' ')} />`;
+}
+
 /** script 源单条目处理结果 */
 export interface ScriptProcessOutcome {
   /** 更新后的条目（无变化时原引用） */
@@ -483,6 +522,8 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
   // health 源独立 run gate（q-health-subscription）：files / health 节奏可独立配置，
   // 互不拖累（files='off' 时 health 仍观察；反之亦然）。
   const processedHealthRuns = new Set<string>();
+  // agent 源独立 run gate（q-sub-unify-p1）：与 files / health 节奏互不拖累。
+  const processedAgentRuns = new Set<string>();
   // script 源独立 run gate（q-subscription-script）：schedule='run' 的 kickoff 时机。
   const processedScriptRuns = new Set<string>();
   // 执行器：装配层注入（dispose 可达）；裸宿主缺省自建。
@@ -538,6 +579,8 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       const filesCadence = config.envGranularity?.files ?? 'run';
       // health 检测节奏（同框架）：缺省 'run'；与 files 独立 gate。
       const healthCadence = config.envGranularity?.health ?? 'run';
+      // agent 检测节奏（q-sub-unify-p1，同框架）：缺省 'run'；与 files / health 独立 gate。
+      const agentCadence = config.envGranularity?.agent ?? 'run';
       // script 检测节奏（同框架）：per-scope（通用兜底词 script + 内置专词 doc-lag /
       // code-heaviness，案 B 注册制，q-subscription-script-p1），缺省 'run'；某词 off ⇒
       // 该词下订阅整段静默（不 kickoff / drain / 出卡），词与词互不拖累。
@@ -546,7 +589,13 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         (scope) => scriptScopeCadence(scope) !== 'off',
       );
       // off（P2 轴 A）：所有源都 off 才整段跳过（不观察、不产卡、不注入）。
-      if (filesCadence === 'off' && healthCadence === 'off' && !scriptAnyActive) return;
+      if (
+        filesCadence === 'off' &&
+        healthCadence === 'off' &&
+        agentCadence === 'off' &&
+        !scriptAnyActive
+      )
+        return;
       const runGate = (cadence: string, processed: Set<string>): boolean => {
         if (cadence === 'off') return false;
         if (cadence === 'request') return true;
@@ -557,6 +606,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       };
       const filesDue = runGate(filesCadence, processedRuns);
       const healthDue = runGate(healthCadence, processedHealthRuns);
+      const agentDue = runGate(agentCadence, processedAgentRuns);
       // script 段：drain 每请求（结果完成即投递，ambient）；kickoff 时机另按 schedule gate。
       // 便宜路径：run 边界必查；mid-run 只在 runner 有工作（drain）或 allowlist 声明了
       // request 调度（需每请求检查）时才 load —— 无脚本订阅时零额外开销。
@@ -567,7 +617,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       );
       const scriptHasWork =
         scriptAnyActive && (scriptRunDue || runner.hasWork() || scriptNeedsRequestCheck);
-      if (!filesDue && !healthDue && !scriptHasWork) return;
+      if (!filesDue && !healthDue && !agentDue && !scriptHasWork) return;
 
       const sessionId = ctx.session_id ?? 'default';
 
@@ -614,6 +664,9 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // health 源（q-health-subscription）：独立清单 / 计数，与 files 通知分发两条消息。
       const healthLines: string[] = [];
       let healthChangedCount = 0;
+      // agent 源（q-sub-unify-p1）：独立清单 / 计数，第三张卡（同 vessel:notice 通道）。
+      const agentLines: string[] = [];
+      let agentChangedCount = 0;
       // script 源（q-subscription-script）：按 scope 分组（案 B 专词 vs 通用兜底词），
       // 同 scope 折叠一条消息，不同 scope 各一张卡（q-subscription-script-p1）。
       const scriptNoticeGroups = new Map<string, { entries: ScriptNoticeEntry[]; total: number }>();
@@ -644,6 +697,35 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
             notified_rev: healthObservation.rev,
             notified_at: now,
             mtime_ms: healthObservation.snapshot.checked_at,
+          };
+          dirty = true;
+          continue;
+        }
+        // agent 分支（q-sub-unify-p1）：读活动快照 → 签名比对 → 游标推进；
+        // 照抄 health 分支（无自改抑制 / reads 机器）。muted ⇒ 观察推进但不出卡。
+        if (entry.source === 'agent') {
+          if (!agentDue) continue;
+          let agentObservation: Awaited<ReturnType<typeof observeAgentEntry>>;
+          try {
+            agentObservation = await observeAgentEntry(entry, effectiveDeps);
+          } catch {
+            agentObservation = undefined;
+          }
+          if (agentObservation === undefined) continue;
+          // 签名未变：不通知、不写盘（checked_at 不进签名，避免每 run 磁盘抖动）。
+          if (agentObservation.rev === entry.notified_rev) continue;
+          if (entry.muted !== true) {
+            agentChangedCount += 1;
+            if (agentLines.length < MAX_NOTICE_ENTRIES) {
+              agentLines.push(agentNoticeLine(entry, agentObservation.snapshot));
+            }
+          }
+          state.subscriptions[agentSubscriptionKey(entry.path)] = {
+            ...entry,
+            rev: agentObservation.rev,
+            notified_rev: agentObservation.rev,
+            notified_at: now,
+            mtime_ms: agentObservation.snapshot.checked_at,
           };
           dirty = true;
           continue;
@@ -844,6 +926,31 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
               run_id: runId,
               session_id: ctx.session_id,
               message: { ...message, message_id: `${runId}:health-notice:${String(now)}` },
+            },
+            ts: now,
+          });
+        } else {
+          ctx.messages = [...(ctx.messages ?? []), message];
+        }
+      }
+
+      // agent 通知（q-sub-unify-p1）：与 files / health 同一投递通道 / 同一 vessel:notice
+      // 消息名，scope 词 'agent' 决定卡头标签（★D5）；三源同 run 都变 ⇒ 三条消息各自一张卡。
+      if (agentChangedCount > 0) {
+        const message = {
+          role: 'user' as const,
+          name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+          content: formatAgentNotice(agentLines, agentChangedCount),
+          timestamp: now,
+        };
+        if (config.envChannels?.agent === 'ui-only' && ctx.emitFact !== undefined) {
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: ctx.session_id,
+              message: { ...message, message_id: `${runId}:agent-notice:${String(now)}` },
             },
             ts: now,
           });
