@@ -12,6 +12,7 @@ import type { DevCommandArgs } from './commands/dev-command';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
 import {
   ATTENTION_MAX_LIMIT,
+  DEFAULT_SERVE_PORT,
   HUB_ENV_NAME_RE,
   parseAttentionLimit,
   parseAttentionSelect,
@@ -25,8 +26,8 @@ import {
   parseTimeoutMs,
 } from './parse-validators';
 
-/** `--serve` 省略端口时的默认值 */
-export const DEFAULT_SERVE_PORT = 8642;
+/** `--serve` 省略端口时的默认值（移居 parse-validators；re-export 兼容既有消费） */
+export { DEFAULT_SERVE_PORT } from './parse-validators';
 
 export interface UpdateArgs {
   check: boolean;

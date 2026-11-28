@@ -4373,6 +4373,32 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       };
     },
   }),
+  // ── 入口 flag 触发的一次性命令（--tools / --resume-run 无值；cli.ts 按 globals 路由） ──
+  defineCommand({
+    path: ['tools'],
+    surface: 'entry',
+    hidden: true,
+    summary: 'help.cmd.tools',
+    load: async () => {
+      const { printTools } = await import('./command-support');
+      return {
+        run: async () => {
+          await printTools();
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['resume-run-list'],
+    surface: 'entry',
+    hidden: true,
+    summary: 'help.cmd.resumeRunList',
+    load: async () => {
+      const { runResumeList } = await import('./commands/resume-command');
+      return { run: async () => runResumeList({}) };
+    },
+  }),
 ];
 
 /** model 族连接校验（现 parseModelArgs 5052-5060：--connect 或 VESSEL_CONNECT env）。 */

@@ -32,6 +32,7 @@ import {
   type Globals,
   PURE_GROUP_ERRORS,
 } from './command-spec';
+import { DEFAULT_SERVE_PORT, parsePort } from './parse-validators';
 
 /** 引擎产物（flags 在 thunk 边界经 ParsedFlags 映射互锁；引擎内部为宽形状）。 */
 export interface EngineParsed {
@@ -384,12 +385,22 @@ export async function parseBySpec(argv: readonly string[]): Promise<EngineResult
       // 纯分组裸调用（fleet / session / permission 先例）：help 兜底 → 全局总览 exit 0。
       return { ok: true, parsed: { path, flags: {}, positionals: [], globals, help: true } };
     }
-    return { ok: true, parsed: { path, flags: {}, positionals: rest, globals, help: false } };
+    // 无命令路径命中：入口模式（REPL / serve / headless / 入口 flag）
+    const entry = await parseEntryFlags(userConfig.argv, globals);
+    if (!entry.ok) return entry;
+    const entryError = entryValidate(globals);
+    if (entryError !== null) return { ok: false, error: entryError };
+    return {
+      ok: true,
+      parsed: { path: [], flags: {}, positionals: [], globals, help: globals.help },
+    };
   }
 
   if (spec.removed !== undefined) return { ok: false, error: spec.removed };
   const state = parseCommandArgs(spec, rest, globals);
   if ('error' in state) return { ok: false, error: state.error };
+  // demo 入口：现 parseDemoArgs 口径（非 help 时置 demo）
+  if (spec.path[0] === 'demo' && !state.help) globals.demo = true;
   if (!state.help) {
     const positionalError = checkPositionals(spec, state.positionals);
     if (positionalError !== null) return { ok: false, error: positionalError };
@@ -406,4 +417,280 @@ export async function parseBySpec(argv: readonly string[]): Promise<EngineResult
       help: state.help,
     },
   };
+}
+
+// ── 入口模式层（S5：现 parseArgs 969-1250 机械转录；REPL/serve/headless 不是 schema 命令） ──
+
+/** 入口/全局 flag 解析（现主循环 switch 逐字转录；写 Globals）。 */
+async function parseEntryFlags(
+  argv: readonly string[],
+  g: Globals,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? '';
+    switch (a) {
+      case '--run':
+      case '--print':
+      case '-p': {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          g.runArg = next;
+          i++;
+        } else {
+          g.runArg = '';
+        }
+        break;
+      }
+      case '-c':
+      case '--continue':
+        g.continueArg = true;
+        break;
+      case '-r':
+      case '--resume': {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          g.resumeArg = next;
+          i++;
+        } else {
+          g.resumeArg = '';
+        }
+        break;
+      }
+      case '--pipe':
+        g.pipeMode = true;
+        break;
+      case '--session':
+      case '-s': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-')) {
+          return { ok: false, error: 'Missing value for --session' };
+        }
+        g.sessionArg = next;
+        i++;
+        break;
+      }
+      case '--serve': {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          const port = parsePort(next);
+          if (port === null) {
+            return { ok: false, error: `Invalid port for --serve: ${next}` };
+          }
+          g.servePort = port;
+          g.servePortExplicit = true;
+          i++;
+        } else {
+          g.servePort = DEFAULT_SERVE_PORT;
+          g.servePortExplicit = false;
+        }
+        break;
+      }
+      case '--serve-host': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --serve-host' };
+        }
+        g.serveHost = next;
+        i++;
+        break;
+      }
+      case '--allow-remote':
+        g.allowRemote = true;
+        break;
+      case '--tls-cert':
+      case '--tls-key': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: `Missing value for ${a}` };
+        }
+        if (a === '--tls-cert') g.tlsCert = next;
+        else g.tlsKey = next;
+        i++;
+        break;
+      }
+      case '--resume-run': {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          g.resumeRunArg = next;
+          i++;
+        } else {
+          g.resumeRunArg = '';
+        }
+        break;
+      }
+      case '--help':
+      case '-h':
+        g.help = true;
+        break;
+      case '--version':
+      case '-v':
+        g.version = true;
+        break;
+      case '--tools':
+        g.tools = true;
+        break;
+      case '--feishu':
+        g.feishu = true;
+        break;
+      case '--data-dir': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --data-dir' };
+        }
+        g.dataDirArg = next;
+        i++;
+        break;
+      }
+      case '--connect': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --connect' };
+        }
+        g.connectArg = next;
+        i++;
+        break;
+      }
+      case '--connect-token': {
+        const next = argv[i + 1];
+        if (next === undefined || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --connect-token' };
+        }
+        g.connectTokenArg = next;
+        i++;
+        break;
+      }
+      case '--ca':
+      case '--connect-ca': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: `Missing value for ${a}` };
+        }
+        g.caArg = next;
+        i++;
+        break;
+      }
+      case '--allowed-origin': {
+        const next = argv[i + 1];
+        if (next === undefined || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --allowed-origin' };
+        }
+        const { allowedOriginError } = await import('../../packages/config/src/index');
+        const message = allowedOriginError(next);
+        if (message !== null) {
+          return { ok: false, error: `Invalid --allowed-origin: ${message}` };
+        }
+        g.allowedOrigins.push(next);
+        i++;
+        break;
+      }
+      default:
+        return { ok: false, error: `Unknown argument: ${a}` };
+    }
+  }
+  return { ok: true };
+}
+
+/** 入口模式互斥校验（现 parseArgs 1125-1250 逐字转录）。 */
+function entryValidate(g: Globals): string | null {
+  if (g.connectArg !== null && g.servePort !== null) {
+    return '--connect cannot be combined with --serve';
+  }
+  const connectOnly = [
+    g.connectTokenArg !== null ? '--connect-token' : null,
+    g.caArg !== null ? '--ca' : null,
+  ].filter((v): v is string => v !== null);
+  if (
+    connectOnly.length > 0 &&
+    g.connectArg === null &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return `${connectOnly[0]} requires --connect`;
+  }
+  if (g.allowedOrigins.length > 0 && g.servePort === null) {
+    return '--allowed-origin requires --serve';
+  }
+  if (g.resumeRunArg !== null) {
+    const conflicts = [
+      g.runArg !== null ? '--run' : null,
+      g.pipeMode ? '--pipe' : null,
+      g.servePort !== null ? '--serve' : null,
+      g.sessionArg !== null ? '--session' : null,
+      g.continueArg ? '--continue' : null,
+      g.resumeArg !== null ? '--resume' : null,
+      g.tools ? '--tools' : null,
+    ].filter((v): v is string => v !== null);
+    if (conflicts.length > 0) {
+      return `--resume-run cannot be combined with ${conflicts.join('/')}`;
+    }
+  }
+  if (g.continueArg && g.resumeArg !== null) {
+    return '--continue cannot be combined with --resume';
+  }
+  if (g.continueArg && g.sessionArg !== null) {
+    return '--continue cannot be combined with --session';
+  }
+  if (g.resumeArg !== null && g.sessionArg !== null) {
+    return '--resume cannot be combined with --session';
+  }
+  if ((g.continueArg || g.resumeArg !== null) && g.servePort !== null) {
+    return '--continue/--resume cannot be combined with --serve';
+  }
+  if (g.continueArg && g.pipeMode) {
+    return '--continue cannot be combined with --pipe';
+  }
+  if (g.resumeArg === '') {
+    if (g.runArg !== null) {
+      return '--resume without an id cannot be combined with --run';
+    }
+    if (g.pipeMode) {
+      return '--resume without an id cannot be combined with --pipe';
+    }
+    if (g.feishu) {
+      return '--resume without an id cannot be combined with --feishu';
+    }
+  }
+  if ((g.tlsCert !== null) !== (g.tlsKey !== null)) {
+    return '--tls-cert and --tls-key must be provided together';
+  }
+  const serveOnly = [
+    g.serveHost !== null ? '--serve-host' : null,
+    g.allowRemote ? '--allow-remote' : null,
+    g.tlsCert !== null ? '--tls-cert' : null,
+    g.tlsKey !== null ? '--tls-key' : null,
+  ].filter((v): v is string => v !== null);
+  if (serveOnly.length > 0 && g.servePort === null) {
+    return `${serveOnly[0]} requires --serve`;
+  }
+  const oneShot = [
+    g.help ? '--help' : null,
+    g.version ? '--version' : null,
+    g.tools ? '--tools' : null,
+  ].filter((v): v is string => v !== null);
+  if (oneShot.length > 1) {
+    return `Cannot combine ${oneShot.join(' and ')}`;
+  }
+  if (
+    oneShot.length === 1 &&
+    (g.runArg !== null ||
+      g.pipeMode ||
+      g.servePort !== null ||
+      g.continueArg ||
+      g.resumeArg !== null)
+  ) {
+    return `${oneShot[0]} cannot be combined with --run/--serve/--continue`;
+  }
+  if (g.feishu) {
+    const conflicts = [
+      g.runArg !== null ? '--run' : null,
+      g.pipeMode ? '--pipe' : null,
+      g.resumeRunArg !== null ? '--resume-run' : null,
+      g.tools ? '--tools' : null,
+      g.version ? '--version' : null,
+      g.help ? '--help' : null,
+    ].filter((v): v is string => v !== null);
+    if (conflicts.length > 0) {
+      return `--feishu cannot be combined with ${conflicts.join('/')}`;
+    }
+  }
+  return null;
 }

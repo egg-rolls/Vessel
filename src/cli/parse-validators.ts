@@ -148,3 +148,8 @@ const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export function parsePluginName(raw: string): string | null {
   return PLUGIN_NAME_RE.test(raw) ? raw : null;
 }
+
+// ── 入口常量 ─────────────────────────────────────
+
+/** `--serve` 省略端口时的默认值 */
+export const DEFAULT_SERVE_PORT = 8642;
