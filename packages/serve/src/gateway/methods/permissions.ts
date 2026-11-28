@@ -112,7 +112,7 @@ function assertKnownTool(
   commonToolNames: readonly string[] = [],
 ): void {
   if (host === undefined) {
-    throw new RpcError('not_found', 'Tool host is not available');
+    throw new RpcError('not_supported', 'Tool host is not available');
   }
   const known = new Set([
     ...host.listTools().map((definition) => definition.name),
@@ -299,6 +299,8 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
           }
           if (status === undefined) {
             throw new RpcError('not_found', `Member not found: ${memberId}`, {
+              resource: 'agent',
+              id: memberId,
               member_id: memberId,
             });
           }
@@ -315,6 +317,8 @@ export function createPermissionsMethods(deps: PermissionsMethodsDeps): RpcMetho
             const memberTools = await agent.toolSurface(memberId);
             if (memberTools === undefined) {
               throw new RpcError('not_found', `Member not found: ${memberId}`, {
+                resource: 'agent',
+                id: memberId,
                 member_id: memberId,
               });
             }

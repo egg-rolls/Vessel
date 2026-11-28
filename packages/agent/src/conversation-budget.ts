@@ -20,6 +20,7 @@ import {
   type StoredConversation,
   type StoredConversationEdge,
 } from './conversation-store.js';
+import { errorText } from './error-text.js';
 import { RESERVED_PRINCIPALS } from './team-address.js';
 import {
   AgentError,
@@ -126,10 +127,6 @@ export function resolveBudgetLimits(policy: TeamPolicy | undefined): ResolvedLim
 
 function isAgentId(value: string): boolean {
   return value !== '' && !NON_AGENT_IDS.has(value);
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export class ConversationBudget implements ConversationBudgetPort {

@@ -40,7 +40,7 @@ export function createMcpMethods(deps: McpMethodsDeps): RpcMethodDefinition[] {
         },
       },
       handler: async () => {
-        if (!mcp) throw new RpcError('not_found', 'MCP is not enabled');
+        if (!mcp) throw new RpcError('not_supported', 'MCP is not enabled');
         try {
           return { servers: normalizeMcpServers(await mcp.listServers()) };
         } catch {
@@ -65,7 +65,7 @@ export function createMcpMethods(deps: McpMethodsDeps): RpcMethodDefinition[] {
       },
       handler: async (params) => {
         if (!mcp?.reconnect) {
-          throw new RpcError('not_found', 'MCP reconnect is not available');
+          throw new RpcError('not_supported', 'MCP reconnect is not available');
         }
         await mcp.reconnect(stringParam(params, 'name'));
         return { ok: true };

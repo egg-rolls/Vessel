@@ -16,6 +16,11 @@ export type {
   ToolNameViolation,
 } from '../types/tool-name.js';
 export { toErrorEnvelope } from './error-envelope.js';
+export {
+  type ErrorSummary,
+  type ErrorSummaryLink,
+  errorSummary,
+} from './error-summary.js';
 export { CONTEXT_PRESSURE_WARN_RATIO, ExecutionUnit } from './execution-unit.js';
 export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';

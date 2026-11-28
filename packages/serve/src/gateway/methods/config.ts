@@ -280,7 +280,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
   } = deps;
 
   function configControl(): ConfigGatewayOptionsLike {
-    if (!config) throw new RpcError('not_found', 'Config view is not available');
+    if (!config) throw new RpcError('not_supported', 'Config view is not available');
     return config;
   }
 
@@ -488,7 +488,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       handler: async (params) => {
         const control = configControl();
         if (typeof control.set !== 'function') {
-          throw new RpcError('not_found', 'Config write is not available');
+          throw new RpcError('not_supported', 'Config write is not available');
         }
         const key = stringParam(params, 'key');
         const value = normalizeConfigValue(key, params.value);
@@ -606,7 +606,11 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
         const tools = await resolve.call(agent, agentId);
         // 有透传但这个 id 答不出（未知成员 / 老执行内核）：not_found，绝不静默返回空列表。
         if (tools === undefined) {
-          throw new RpcError('not_found', `Agent not found: ${agentId}`, { agent_id: agentId });
+          throw new RpcError('not_found', `Agent not found: ${agentId}`, {
+            resource: 'agent',
+            id: agentId,
+            agent_id: agentId,
+          });
         }
         return { tools };
       },
@@ -797,7 +801,10 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
         const key = stringParam(params, 'key');
         const spec = deps.pluginSettingSpec?.(plugin);
         if (spec === undefined) {
-          throw new RpcError('not_found', `Plugin "${plugin}" is not registered.`);
+          throw new RpcError('not_found', `Plugin "${plugin}" is not registered.`, {
+            resource: 'plugin',
+            id: plugin,
+          });
         }
         const item = spec.settings[key];
         if (item === null || typeof item !== 'object') {
@@ -839,7 +846,7 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
           }
         }
         if (deps.pluginsConfigSet === undefined) {
-          throw new RpcError('not_found', 'Plugin config write is not available.');
+          throw new RpcError('not_supported', 'Plugin config write is not available.');
         }
         try {
           await deps.pluginsConfigSet(plugin, key, value as string | number | boolean);

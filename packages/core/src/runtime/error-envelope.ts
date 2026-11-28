@@ -14,6 +14,7 @@ import type {
   ErrorPhase,
   ToErrorEnvelopeOptions,
 } from '../types/error.js';
+import { type ErrorCodeMeta, lookupErrorCode } from '../types/error-registry.js';
 import { RunAlreadyRunningError, RunResumeError } from '../types/run-record-store.js';
 import { PermissionAbortedError, PermissionTimeoutError } from './permission-policy.js';
 
@@ -44,30 +45,10 @@ const PROVIDER_NETWORK_PATTERN =
 const PROVIDER_TIMEOUT_PATTERN = /\btimed?\s*out\b|timeout/i;
 const PROVIDER_UNAVAILABLE_PATTERN = /no response from|returned no stream body/i;
 
-/** 通用 `code` 错误的分类/可重试性；未知 code 保持原值、默认不可重试。 */
-const CODE_META: Readonly<
-  Record<string, { category: ErrorCategory; retryable: boolean; phase?: ErrorPhase }>
-> = {
-  run_already_running: { category: 'internal', retryable: true, phase: 'input' },
-  run_not_found: { category: 'internal', retryable: false, phase: 'input' },
-  run_not_resumable: { category: 'internal', retryable: false, phase: 'input' },
-  run_store_required: { category: 'internal', retryable: false, phase: 'input' },
-  agent_not_found: { category: 'internal', retryable: false, phase: 'input' },
-  session_corrupt: { category: 'internal', retryable: false, phase: 'input' },
-  atomic_write_failed: { category: 'internal', retryable: true, phase: 'checkpoint' },
-  conflict: { category: 'internal', retryable: false, phase: 'input' },
-  limit_blocked: { category: 'internal', retryable: false, phase: 'run' },
-  // q-empty-exhaust：空响应兜底耗尽（seamless + nudge 仍空）。category=internal 而非
-  // provider ⇒ 不触发 0.55 硬错误闸（parent 催续可直接接单）；retryable=false：
-  // 同一份请求重发大概率再空，下一步靠 parent 催续 / 人介入。
-  empty_response_exhausted: { category: 'internal', retryable: false, phase: 'llm' },
-  // 0.52 PII 句柄：三档失败原因 + 未审批的 reveal。都是**动作错误**：
-  // 同一个占位符重试必然再失败 ⇒ retryable 一律 false，下一步靠错误文本给。
-  pii_unknown_handle: { category: 'tool', retryable: false, phase: 'tool' },
-  pii_expired_handle: { category: 'tool', retryable: false, phase: 'tool' },
-  pii_invalidated_handle: { category: 'tool', retryable: false, phase: 'tool' },
-  pii_reveal_denied: { category: 'permission', retryable: false, phase: 'permission' },
-};
+// q-error-e1（设计 §3.1 / D1）：原 CODE_META 硬编码表收敛为查单一注册表
+// （types/error-registry.ts）。既有 14 码的 category/retryable/phase 在注册表里
+// 逐字冻结（empty_response_exhausted 的 internal 分类涉 0.55 硬错误闸，绝不动）；
+// 未注册码走兜底且标 classified_by:'registry-miss'（可观测漂移信号）。
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -272,6 +253,7 @@ export function toErrorEnvelope(
         category: 'permission',
         phase: 'permission',
         retryable: false,
+        classified_by: 'type',
       },
       details,
     );
@@ -283,6 +265,7 @@ export function toErrorEnvelope(
         category: 'permission',
         phase: 'permission',
         retryable: false,
+        classified_by: 'type',
       },
       details,
     );
@@ -296,6 +279,7 @@ export function toErrorEnvelope(
         category: 'internal',
         phase: 'input',
         retryable: true,
+        classified_by: 'type',
       },
       details,
     );
@@ -307,6 +291,7 @@ export function toErrorEnvelope(
         category: 'internal',
         phase: 'input',
         retryable: false,
+        classified_by: 'type',
       },
       details,
     );
@@ -320,6 +305,7 @@ export function toErrorEnvelope(
         category: 'internal',
         phase: 'checkpoint',
         retryable: true,
+        classified_by: 'message',
       },
       details,
     );
@@ -333,6 +319,7 @@ export function toErrorEnvelope(
         category: 'permission',
         phase: 'permission',
         retryable: false,
+        classified_by: 'message',
       },
       details,
     );
@@ -343,9 +330,9 @@ export function toErrorEnvelope(
     typeof error === 'object' && error !== null
       ? (error as Record<string, unknown>).code
       : undefined;
-  const metadata =
+  const metadata: ErrorCodeMeta | undefined =
     typeof genericCode === 'string' && /^[a-z][a-z0-9_]*$/.test(genericCode)
-      ? CODE_META[genericCode]
+      ? lookupErrorCode(genericCode)
       : undefined;
 
   const category = resolveCategory(message, options, metadata);
@@ -359,12 +346,17 @@ export function toErrorEnvelope(
         category: metadata.category,
         phase,
         retryable: metadata.retryable,
+        classified_by: 'registry',
+        // additive（裁定 D）：结构化状态码透传，不再只靠文本兜底读取。
+        ...(status !== undefined ? { http_status: status } : {}),
       },
       details,
     );
   }
 
   let classification: Classification;
+  // 文本/状态兜底分类必须留痕（D2）；未注册 snake_case 码标 registry-miss（漂移信号）。
+  let classifiedBy: 'registry-miss' | 'message' = 'message';
   switch (category) {
     case 'provider':
       classification = classifyProvider(message, status);
@@ -388,6 +380,7 @@ export function toErrorEnvelope(
           category: 'internal',
           retryable: false,
         };
+        classifiedBy = 'registry-miss';
       } else {
         classification = { error_code: 'internal_error', category: 'internal', retryable: false };
       }
@@ -399,6 +392,7 @@ export function toErrorEnvelope(
       category: classification.category,
       phase: classification.phase ?? phase,
       retryable: classification.retryable,
+      classified_by: classifiedBy,
       ...(classification.http_status !== undefined
         ? { http_status: classification.http_status }
         : {}),

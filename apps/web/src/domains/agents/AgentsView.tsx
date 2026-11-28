@@ -63,7 +63,7 @@ const PRESENCE_OPTIONS = ['live', 'gone'] as const;
 /** 节点级失败按稳定 code 映射；其它错误保留原始 message。 */
 function nodeErrorText(roster: NodeRoster): string {
   if (roster.code === 'forbidden') return t('teams.error.forbidden');
-  if (roster.code === 'not_found') return t('teams.error.notEnabled');
+  if (roster.code === 'not_supported') return t('teams.error.notEnabled');
   return roster.error ?? t('common.loadFailed');
 }
 
@@ -300,7 +300,7 @@ export function AgentsView({ route, navigate }: AgentsViewProps) {
   let body: ReactNode;
   if (!loaded) {
     body = <LoadingState label={t('agents.loadingRosters')} rows={3} />;
-  } else if (agents.length === 0 && allFailed && rosters[0]?.code === 'not_found') {
+  } else if (agents.length === 0 && allFailed && rosters[0]?.code === 'not_supported') {
     body = (
       <NotEnabledState
         title={t('teams.error.notEnabled')}

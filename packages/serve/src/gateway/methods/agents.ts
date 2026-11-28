@@ -199,7 +199,7 @@ function publicAgentCard(
 /** 未注入按 `not_found` 处理。 */
 function requireAgentControl(agent: AgentControlLike | undefined): AgentControlLike {
   if (!agent) {
-    throw new RpcError('not_found', 'Agent control is not available');
+    throw new RpcError('not_supported', 'Agent control is not available');
   }
   return agent;
 }
@@ -692,7 +692,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         const agents = await visibleAgents(deps, ctx);
         const agent = agents.find((entry) => entry.id === agentId);
         if (!agent) {
-          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+          throw new RpcError('not_found', `agent not found: ${agentId}`, {
+            resource: 'agent',
+            id: agentId,
+            agent_id: agentId,
+          });
         }
         return { agent };
       },
@@ -777,13 +781,19 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           const resolved = await control.resolve(sessionId as string);
           if (resolved === undefined) {
             throw new RpcError('not_found', `session not found: ${sessionId}`, {
+              resource: 'session',
+              id: sessionId,
               session_id: sessionId,
             });
           }
           agentId = resolved.id;
         }
         if (!agents.some((entry) => entry.id === agentId)) {
-          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+          throw new RpcError('not_found', `agent not found: ${agentId}`, {
+            resource: 'agent',
+            id: agentId,
+            agent_id: agentId,
+          });
         }
         const messageIds = Array.isArray(params.message_ids)
           ? params.message_ids.filter((id): id is string => typeof id === 'string')
@@ -863,7 +873,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         // 可见性口径与 agents.list / agents.get / agents.inbox 完全一致。
         const agents = await visibleAgents(deps, ctx);
         if (!agents.some((entry) => entry.id === agentId)) {
-          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+          throw new RpcError('not_found', `agent not found: ${agentId}`, {
+            resource: 'agent',
+            id: agentId,
+            agent_id: agentId,
+          });
         }
         const control = requireAgentControl(deps.agent);
         if (control.recall === undefined) {
@@ -931,7 +945,11 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
         // 可见性口径与 agents.list / agents.get / agents.inbox / agents.recall 完全一致。
         const agents = await visibleAgents(deps, ctx);
         if (!agents.some((entry) => entry.id === agentId)) {
-          throw new RpcError('not_found', `agent not found: ${agentId}`, { agent_id: agentId });
+          throw new RpcError('not_found', `agent not found: ${agentId}`, {
+            resource: 'agent',
+            id: agentId,
+            agent_id: agentId,
+          });
         }
         const control = requireAgentControl(deps.agent);
         if (control.claim === undefined) {

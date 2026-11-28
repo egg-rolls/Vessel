@@ -459,6 +459,9 @@ export function statusForRpcCode(code: string): number {
       return 403;
     case 'not_found':
       return 404;
+    // q-error-e1（D4）：未知方法专用码，HTTP 路径面语义与 not_found 一致（additive）。
+    case 'method_not_found':
+      return 404;
     case 'invalid_params':
       return 400;
     case 'conflict':

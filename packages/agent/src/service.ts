@@ -63,6 +63,7 @@ import {
   DISTRESS_SPAWN_FAILED,
   renderDistressContent,
 } from './distress.js';
+import { errorText } from './error-text.js';
 import {
   type AgentInboxChange,
   type AgentInboxDelivery,
@@ -635,10 +636,6 @@ interface AdmitOutcome {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function nonEmpty(value: unknown): value is string {

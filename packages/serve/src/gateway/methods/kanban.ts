@@ -94,7 +94,7 @@ const kanbanBoardSchema = {
 
 function requireBoardPath(boardPath: string | undefined): string {
   if (boardPath === undefined || boardPath === '') {
-    throw new RpcError('not_found', 'Kanban board path is not configured');
+    throw new RpcError('not_supported', 'Kanban board path is not configured');
   }
   return boardPath;
 }
@@ -124,12 +124,18 @@ async function statBoard(boardPath: string): Promise<Stats> {
     st = await stat(boardPath);
   } catch (error) {
     if (errnoOf(error) === 'ENOENT') {
-      throw new RpcError('not_found', `kanban board not found: ${boardPath}`);
+      throw new RpcError('not_found', `kanban board not found: ${boardPath}`, {
+        resource: 'kanban_board',
+        id: boardPath,
+      });
     }
     throw new RpcError('internal', `kanban board stat failed (${boardPath}): ${messageOf(error)}`);
   }
   if (!st.isFile()) {
-    throw new RpcError('not_found', `kanban board is not a file: ${boardPath}`);
+    throw new RpcError('not_found', `kanban board is not a file: ${boardPath}`, {
+      resource: 'kanban_board',
+      id: boardPath,
+    });
   }
   return st;
 }
@@ -139,7 +145,10 @@ async function readBoardText(boardPath: string): Promise<string> {
     return await readFile(boardPath, 'utf8');
   } catch (error) {
     if (errnoOf(error) === 'ENOENT') {
-      throw new RpcError('not_found', `kanban board not found: ${boardPath}`);
+      throw new RpcError('not_found', `kanban board not found: ${boardPath}`, {
+        resource: 'kanban_board',
+        id: boardPath,
+      });
     }
     throw new RpcError('internal', `kanban board read failed (${boardPath}): ${messageOf(error)}`);
   }
@@ -468,7 +477,10 @@ export function createKanbanMethods(deps: KanbanMethodsDeps): RpcMethodDefinitio
         const { board, raw, st } = await loadBoard(boardPath);
         // 归一化判存在（重复 id 取首条，与 get/archive 同口径），返回原始全字段。
         if (!board.tasks.some((task) => task.id === id)) {
-          throw new RpcError('not_found', `kanban task not on board: ${id}`);
+          throw new RpcError('not_found', `kanban task not on board: ${id}`, {
+            resource: 'kanban_task',
+            id,
+          });
         }
         const rawTask = (raw.tasks as unknown[]).find((item) => entryHasId(item, id));
         const meta: Record<string, unknown> = { board: board.board };
@@ -515,7 +527,10 @@ export function createKanbanMethods(deps: KanbanMethodsDeps): RpcMethodDefinitio
           const board = normalizeBoard(raw);
           const task = board.tasks.find((item) => item.id === id);
           if (!task) {
-            throw new RpcError('not_found', `kanban task not on board: ${id}`);
+            throw new RpcError('not_found', `kanban task not on board: ${id}`, {
+              resource: 'kanban_task',
+              id,
+            });
           }
           const rawTasks = raw.tasks as unknown[];
           const rawTask = rawTasks.find((item) => entryHasId(item, id));

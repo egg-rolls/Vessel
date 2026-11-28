@@ -181,13 +181,13 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
         const source = params.source === 'trace' ? 'trace' : 'live';
         if (source === 'trace') {
           if (!metricsControl?.rebuild) {
-            throw new RpcError('not_found', 'Trace metrics rebuild is not available');
+            throw new RpcError('not_supported', 'Trace metrics rebuild is not available');
           }
           const snapshot = await metricsControl.rebuild();
           return { metrics: normalizeMetricsSnapshot(snapshot), source };
         }
         const provider = metricsProvider();
-        if (!provider) throw new RpcError('not_found', 'Metrics are not available');
+        if (!provider) throw new RpcError('not_supported', 'Metrics are not available');
         return { metrics: normalizeMetricsSnapshot(provider()), source };
       },
     },
@@ -202,7 +202,7 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
       },
       handler: () => {
         if (!metricsControl?.reset) {
-          throw new RpcError('not_found', 'Metrics reset is not available');
+          throw new RpcError('not_supported', 'Metrics reset is not available');
         }
         metricsControl.reset();
         return { ok: true };
@@ -236,7 +236,7 @@ export function createTraceMethods(deps: ObservabilityMethodsDeps): RpcMethodDef
         },
       },
       handler: async (params) => {
-        if (!trace?.prune) throw new RpcError('not_found', 'Trace prune is not available');
+        if (!trace?.prune) throw new RpcError('not_supported', 'Trace prune is not available');
         return trace.prune(params);
       },
     },

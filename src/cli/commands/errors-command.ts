@@ -205,7 +205,7 @@ export async function errorsCommand(options: ErrorsCommandOptions = {}): Promise
     } catch (error) {
       if (
         error instanceof RpcClientError &&
-        (error.code === 'not_found' || error.code === 'not_supported')
+        (error.code === 'method_not_found' || error.code === 'not_supported')
       ) {
         return {
           exitCode: 1,

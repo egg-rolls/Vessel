@@ -186,14 +186,14 @@ export function KanbanView() {
     <div className="flex min-h-0 flex-1 flex-col overflow-x-clip overflow-y-auto overscroll-contain">
       <PageScaffold title={t('nav.domain.kanban')} subtitle={t('kanban.subtitle')}>
         {resource.state.status === 'loading' && !data && <LoadingState />}
-        {error && !data && errorCode === 'not_found' && (
+        {error && !data && (errorCode === 'not_found' || errorCode === 'not_supported') && (
           <EmptyState
             title={t('kanban.notFound')}
             description={error}
             action={<Button onClick={manualRefresh}>{t('common.retry')}</Button>}
           />
         )}
-        {error && !data && errorCode !== 'not_found' && (
+        {error && !data && errorCode !== 'not_found' && errorCode !== 'not_supported' && (
           <ErrorState message={error} onRetry={manualRefresh} />
         )}
         {board && (

@@ -57,8 +57,9 @@ const SESSION_CODES: ReadonlySet<string> = new Set([
 /** Origin / Host 白名单拒绝（部署配置问题；重新登录不会好）。 */
 const ORIGIN_CODES: ReadonlySet<string> = new Set(['forbidden_origin', 'invalid_host']);
 
-/** 旧 gateway 根本没有这个方法（404 / 405 / method_not_allowed）：不是失败，是「不支持」。 */
-const UNSUPPORTED_CODES: ReadonlySet<string> = new Set(['method_not_allowed', 'not_found']);
+/** 旧 gateway 根本没有这个方法（404 / 405 / method_not_allowed / method_not_found）：不是失败，是「不支持」。
+ * q-error-e1（D4）：资源 not_found 不再触发「不支持」判定——会话不存在就报「会话不存在」。 */
+const UNSUPPORTED_CODES: ReadonlySet<string> = new Set(['method_not_allowed', 'method_not_found']);
 
 interface ErrorShape {
   code?: unknown;

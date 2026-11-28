@@ -9,6 +9,7 @@ import {
   formatClearedToolResult,
   indexToolCalls,
   isClearedToolResult,
+  lookupErrorCode,
   type Message,
   type ProjectionMode,
   ProjectionPolicyError,
@@ -778,7 +779,7 @@ export interface SessionMethodsDeps {
   compactRuntime?(): unknown;
   /**
    * CREATE-0.39：agent 控制面（app 注入 AgentService 适配器）。
-   * 缺省 = `sessions.create|restart|activate` 仍进 manifest，但 handler 返回 `not_found`。
+   * 缺省 = `sessions.create|restart|activate` 仍进 manifest，但 handler 返回 `not_supported`（q-error-e1 D4）。
    */
   agent?: AgentControlLike;
   sessionData?: {
@@ -1219,7 +1220,9 @@ const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
 
 function requireSessionAgentControl(control: AgentControlLike | undefined): AgentControlLike {
   if (!control) {
-    throw new RpcError('not_found', 'Agent control is not available');
+    // q-error-e1（D4）：能力端口未注入 = not_supported（既有冻结码本义），
+    // 不再与资源不存在共用 not_found。
+    throw new RpcError('not_supported', 'Agent control is not available');
   }
   return control;
 }
@@ -1316,82 +1319,83 @@ function agentErrorMessage(error: unknown): string {
 /**
  * CREATE-0.39 §2.4 / §3.1.1 / §4.1.1：把 AgentError 业务失败映射到冻结 RPC 码。
  *
- * 不新增 `RpcErrorCode`：`not_visible` 用 `not_found` + `details.reason` 表达；
+ * q-error-e1（设计 §3.1 / D2）：分类收敛为查单一注册表（lookupErrorCode → rpcCode），
+ * 不再 switch 硬编码；wire message/details 特例是线上契约不是分类，保留为后处理。
+ * 不新增 `RpcErrorCode`：`not_visible` 用 `not_found` + `details.reason` 表达（安全裁定②）；
  * `restart_failed` / `restart_rollback_failed` / `activate_failed` / `create_failed`
  * 只作为 `internal` 的 message reason，不泄漏原始 `invalid_input`。
  * r10：`run_in_progress: <runId|spawn>` 的 wire message 固定为 `run_in_progress`，
  * 真实 runId 只进 `details.run_id`。
+ * 文本兜底保留但必须标 `classified_by:'message'`；未注册码标 `'registry-miss'`。
  */
 function mapSessionControlError(error: unknown): never {
   if (error instanceof RpcError) throw error;
   const code = agentErrorCode(error);
   const message = agentErrorMessage(error);
+  const meta = code !== undefined ? lookupErrorCode(code) : undefined;
 
-  switch (code) {
-    case 'unknown_member':
-      if (message.includes('session_not_found')) {
-        throw new RpcError('session_not_found', 'Session not found');
-      }
-      throw new RpcError('not_found', message);
-    case 'member_not_visible':
-      throw new RpcError('not_found', message, { reason: 'not_visible' });
-    case 'invalid_input':
-      throw new RpcError('invalid_params', message);
-    case 'conflict': {
-      const running = runInProgressReason(message);
-      if (running !== undefined) {
-        throw new RpcError(
-          'conflict',
-          'run_in_progress',
-          running.runId !== undefined ? { run_id: running.runId } : undefined,
-        );
-      }
-      throw new RpcError('conflict', message);
-    }
-    case 'member_closed':
+  // ── wire 特例（message/details 契约，先于查表） ──
+  if (code === 'unknown_member' && message.includes('session_not_found')) {
+    throw new RpcError('session_not_found', 'Session not found');
+  }
+  if (code === 'member_not_visible') {
+    throw new RpcError('not_found', message, { reason: 'not_visible' });
+  }
+  if (code === 'conflict') {
+    const running = runInProgressReason(message);
+    if (running !== undefined) {
       throw new RpcError(
         'conflict',
-        message.includes('agent_closed') ? message : `agent_closed: ${message}`,
+        'run_in_progress',
+        running.runId !== undefined ? { run_id: running.runId } : undefined,
       );
-    case 'team_frozen':
-    case 'team_full':
-      throw new RpcError('conflict', message.includes(code) ? message : `${code}: ${message}`);
-    case 'spawn_failed':
-      // create_failed / restart_failed / restart_rollback_failed / activate_failed
-      throw new RpcError('internal', message);
-    case 'quota_exceeded':
-      throw new RpcError('quota_exceeded', message);
-    case 'not_supported':
-    case 'invalid_params':
-    case 'not_found':
-    case 'internal':
-      throw new RpcError(code, message);
-    case 'session_not_found':
-      throw new RpcError('session_not_found', message);
-    default:
-      // 无稳定 code（或 adapter 直接 reject Error）时按 reason token 兜底。
-      if (message.includes('session_not_found')) {
-        throw new RpcError('session_not_found', 'Session not found');
-      }
-      if (message.includes('not_primary')) {
-        throw new RpcError('conflict', 'not_primary');
-      }
-      if (message.includes('run_in_progress')) {
-        const running = runInProgressReason(message) ?? {};
-        throw new RpcError(
-          'conflict',
-          'run_in_progress',
-          running.runId !== undefined ? { run_id: running.runId } : undefined,
-        );
-      }
-      if (message.includes('source_private')) {
-        throw new RpcError('invalid_params', 'source_private');
-      }
-      if (message.includes('agent_closed')) {
-        throw new RpcError('conflict', 'agent_closed');
-      }
-      throw new RpcError('internal', message);
+    }
   }
+  if (code === 'member_closed') {
+    throw new RpcError(
+      'conflict',
+      message.includes('agent_closed') ? message : `agent_closed: ${message}`,
+    );
+  }
+  if (code === 'team_frozen' || code === 'team_full') {
+    throw new RpcError('conflict', message.includes(code) ? message : `${code}: ${message}`);
+  }
+
+  // ── 查注册表：领域码 → 冻结码唯一映射口 ──
+  if (meta?.rpcCode !== undefined) {
+    throw new RpcError(meta.rpcCode, message, {
+      domain_code: code,
+      classified_by: 'registry',
+      ...(code === 'unknown_member' ? { resource: 'agent' } : {}),
+    });
+  }
+
+  // ── 文本兜底（无稳定 code / 注册码无 rpcCode / adapter 直接 reject Error）：
+  //    按 reason token 判定，产物必须标 classified_by:'message'（D2 留痕）。 ──
+  if (message.includes('session_not_found')) {
+    throw new RpcError('session_not_found', 'Session not found', { classified_by: 'message' });
+  }
+  if (message.includes('not_primary')) {
+    throw new RpcError('conflict', 'not_primary', { classified_by: 'message' });
+  }
+  if (message.includes('run_in_progress')) {
+    const running = runInProgressReason(message) ?? {};
+    throw new RpcError('conflict', 'run_in_progress', {
+      ...(running.runId !== undefined ? { run_id: running.runId } : {}),
+      classified_by: 'message',
+    });
+  }
+  if (message.includes('source_private')) {
+    throw new RpcError('invalid_params', 'source_private', { classified_by: 'message' });
+  }
+  if (message.includes('agent_closed')) {
+    throw new RpcError('conflict', 'agent_closed', { classified_by: 'message' });
+  }
+  throw new RpcError('internal', message, {
+    ...(code !== undefined ? { domain_code: code } : {}),
+    classified_by:
+      meta !== undefined ? 'registry' : code !== undefined ? 'registry-miss' : 'message',
+  });
 }
 
 const sessionCreateResultSchema = {
@@ -1679,7 +1683,7 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
   function requireSession(): SessionStore {
     const resolved = sessionFor();
     if (!resolved) {
-      throw new RpcError('not_found', 'No session backend configured');
+      throw new RpcError('not_supported', 'No session backend configured');
     }
     return resolved;
   }
@@ -1810,8 +1814,14 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       },
       handler: async (params) => {
         const backend = requireSession();
-        const state = await loadSessionForRead(backend, stringParam(params, 'session_id'));
-        if (!state) throw new RpcError('not_found', 'Session not found');
+        const sessionId = stringParam(params, 'session_id');
+        const state = await loadSessionForRead(backend, sessionId);
+        if (!state) {
+          throw new RpcError('not_found', 'Session not found', {
+            resource: 'session',
+            id: sessionId,
+          });
+        }
         const runStore = runStoreFor?.();
         // 最后一次 run 的检查点：**在这里起意、不 await**，与下面那批派生值一起收口
         // （0.57）。早先是「先 await 一次 `runStore.load()`，再开那批并发」—— 那一次
@@ -1967,7 +1977,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 0.56：这条路径**不读壳**（时间线是唯一读源），存在性只值一次 stat。
         const exists = await sessionExists(backend, sessionId);
         if (!exists) {
-          throw new RpcError('not_found', 'Session not found');
+          throw new RpcError('not_found', 'Session not found', {
+            resource: 'session',
+            id: sessionId,
+          });
         }
         const sinceSeq = parseSinceSeq(params.since_seq);
         const limit = parseSessionEventsLimit(params.limit);
@@ -2070,7 +2083,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         // 存在性 / 授权与 sessions.get / sessions.events 同一条口径。
         const exists = await sessionExists(backend, sessionId);
         if (!exists) {
-          throw new RpcError('not_found', 'Session not found');
+          throw new RpcError('not_found', 'Session not found', {
+            resource: 'session',
+            id: sessionId,
+          });
         }
         const port = deps.composition;
         if (port === undefined) {
@@ -2176,7 +2192,12 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         const sessionId = stringParam(params, 'session_id');
         const title = stringParam(params, 'title');
         const state = await backend.load(sessionId);
-        if (!state) throw new RpcError('not_found', 'Session not found');
+        if (!state) {
+          throw new RpcError('not_found', 'Session not found', {
+            resource: 'session',
+            id: sessionId,
+          });
+        }
         // Human rename marks the title as manual: automatic AI naming must never
         // overwrite it again (SessionState.title_source, additive).
         await backend.save({
@@ -2339,7 +2360,10 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         if (scope !== undefined) {
           const target = fromSessionId ?? agentId;
           if (target === undefined || !(await inTeamScope(control, scope, target))) {
-            throw new RpcError('not_found', `agent not found: ${target ?? ''}`);
+            throw new RpcError('not_found', `agent not found: ${target ?? ''}`, {
+              resource: 'agent',
+              ...(target !== undefined ? { id: target } : {}),
+            });
           }
         }
 

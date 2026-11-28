@@ -34,16 +34,24 @@ export function createEvalMethods(deps: EvalMethodsDeps): RpcMethodDefinition[] 
         if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(suite) || suite.includes('..')) {
           throw new RpcError('invalid_params', 'Invalid suite name');
         }
-        if (!evals) throw new RpcError('not_found', 'Eval report not found');
+        // q-error-e1（D4）：evals 端口未注入 = 能力缺失（not_supported），不是报告不存在。
+        if (!evals) throw new RpcError('not_supported', 'Eval report not found');
         try {
           const report = await evals.latest(suite);
           const normalized = report ? normalizeEvalReport(report) : null;
-          if (!normalized) throw new RpcError('not_found', `Eval report not found: ${suite}`);
+          if (!normalized) {
+            throw new RpcError('not_found', `Eval report not found: ${suite}`, {
+              resource: 'eval_report',
+              id: suite,
+            });
+          }
           return { report: normalized };
         } catch (error) {
           if (error instanceof RpcError) throw error;
           const code = (error as { code?: unknown }).code;
-          if (code === 'eval_not_found') throw new RpcError('not_found', String(error));
+          if (code === 'eval_not_found') {
+            throw new RpcError('not_found', String(error), { resource: 'eval_report', id: suite });
+          }
           if (code === 'eval_invalid') throw new RpcError('invalid_params', String(error));
           throw new RpcError('internal', 'Failed to read eval report');
         }
@@ -63,7 +71,7 @@ export function createEvalMethods(deps: EvalMethodsDeps): RpcMethodDefinition[] 
         properties: { report: evalReportSchema },
       },
       handler: async (params) => {
-        if (!evals?.run) throw new RpcError('not_found', 'Evals runner is not available');
+        if (!evals?.run) throw new RpcError('not_supported', 'Evals runner is not available');
         const suite = stringParam(params, 'suite');
         return { report: normalizeEvalReport(await evals.run(suite)) };
       },
