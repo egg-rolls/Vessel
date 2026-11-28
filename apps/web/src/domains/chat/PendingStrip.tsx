@@ -1176,12 +1176,12 @@ export function PendingStrip({
                 </div>
               </div>
               {/* 仍在跑的异步作业占位卡沉底（q-async-bash-viz，kind 无关）：AsyncJobCard 按
-                  kind 分派（bash 科技蓝命令卡 / ask 未来问题卡），不参与同源折叠，随条带开合。
+                  kind 分派（bash 输入/输出两块 / ask 未来问题卡），不参与同源折叠，随条带开合。
                   running 不可消费 ⇒ 无认领键；done/failed 已走上方通用行路径（同步卡功能）。 */}
               {jobRows.length > 0 && (
                 <div className="mt-1.5 flex flex-col gap-1.5">
                   {jobRows.map((entry) => (
-                    <AsyncJobCard key={entry.message_id} entry={entry} client={client} />
+                    <AsyncJobCard key={entry.message_id} entry={entry} />
                   ))}
                 </div>
               )}
