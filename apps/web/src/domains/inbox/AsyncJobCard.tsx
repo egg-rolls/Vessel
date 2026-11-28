@@ -12,10 +12,11 @@
  * 本卡不给「取消 / 我已处理」（running 占位不可消费；done/failed 结果由模型读走）。
  */
 import { useEffect, useState } from 'react';
-import { Badge, Button, CardShell } from '../../components/ui';
+import { Badge, Button } from '../../components/ui';
 import type { GatewayClient } from '../../gateway/client';
 import { t } from '../../i18n';
 import { shortSenderId } from '../chat/pending-strip';
+import { StreamCard } from '../chat/StreamCard';
 
 /** 异步作业占位元数据（与服务端 inbox async_job / web AgentInboxEntry.async_job 同形）。 */
 export interface AsyncJobMeta {
@@ -38,6 +39,13 @@ export interface AsyncJobCardEntry {
 function toneOf(status: AsyncJobMeta['status']): 'info' | 'success' | 'danger' {
   return status === 'running' ? 'info' : status === 'done' ? 'success' : 'danger';
 }
+
+/** 状态点底色（复用 toneOf 口径）：running 科技蓝 / done 绿 / failed 红；脉冲另挂。 */
+const DOT_CLASS: Record<ReturnType<typeof toneOf>, string> = {
+  info: 'bg-info',
+  success: 'bg-success',
+  danger: 'bg-danger',
+};
 
 /** 状态文案（kind 无关）。 */
 function statusLabel(status: AsyncJobMeta['status']): string {
@@ -218,6 +226,13 @@ function GenericJobBody({
 /**
  * 通用异步作业卡入口：按 `async_job.kind` 分派专属卡体。bash→命令卡（BashJobBody）；
  * 其余 kind→通用卡（GenericJobBody，ask 问题卡未来在此接入）。
+ *
+ * 表面 = StreamCard 折叠壳（与 agent 排队黄条 QueuedNotice 同一基座，同形同高）：
+ * **默认收缩**（running/done/failed 皆然），卡头单行 = 状态点（running 脉冲）+ kind
+ * 身份槽 + 短 jobId + 耗时（running 跳秒零 RPC）+ exit code + 命令预览 ellipsis + chevron；
+ * 展开才显完整 JobHeader / 命令 / ResultBody / log tail（原有卡体整体进 children，逻辑不动）。
+ * 色调走 notice-block 家族中性档（照 agent 条口径 tone neutral），状态色只留在状态点上；
+ * 家族身份圆点不叠（状态点已画在 title 槽，见 chat.css `.stream-card-job`）。
  */
 export function AsyncJobCard({
   entry,
@@ -231,15 +246,53 @@ export function AsyncJobCard({
   const liveElapsed = useLiveElapsed(job.started_at, running);
   const elapsed = running ? liveElapsed : (job.ended_at ?? Date.now()) - job.started_at;
 
+  const payload = job.payload ?? {};
+  const command = typeof payload.command === 'string' ? payload.command : undefined;
+  const exitCode =
+    typeof payload.exit_code === 'number' || payload.exit_code === null
+      ? (payload.exit_code as number | null)
+      : undefined;
+
   return (
-    // 表面走共享 CardShell（q-media-image-card 抽出：与工具图片卡 / 未来工具卡同一基座）；
-    // class 串逐字等于原 article 表面，像素不变。
-    <CardShell>
+    <StreamCard
+      // 卡宽跟列一致（照 QueuedNotice 口径）；notice-block 家族卡面 + 作业卡 scoped 类。
+      className="notice-block stream-card-job w-full min-w-0 max-w-full"
+      defaultOpen={false}
+      ariaLabel={`${job.kind} ${shortSenderId(job.job_id)}`}
+      // 状态点 + kind 身份槽：点色复用 toneOf，running 加脉冲（与 JobHeader 同一口径）。
+      title={
+        <>
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${DOT_CLASS[toneOf(job.status)]}${
+              running ? ' animate-pulse' : ''
+            }`}
+          />
+          {job.kind}
+        </>
+      }
+      // 短 jobId + 耗时 + exit code（meta 槽天生等宽小字 + 弱化色）。
+      meta={
+        <span className="inline-flex items-center gap-2">
+          <span title={`${job.kind}:${job.job_id}`}>{shortSenderId(job.job_id)}</span>
+          <span>{formatElapsed(elapsed)}</span>
+          {exitCode !== undefined && exitCode !== null && <span>exit {exitCode}</span>}
+        </span>
+      }
+      // 单行预览：bash 给命令（等宽小字，与展开体命令行同款），其余 kind 给结果摘要；
+      // 长内容由 .event-block-preview ellipsis 截断，展开看全文。
+      summary={
+        job.kind === 'bash' && command !== undefined ? (
+          <span className="font-mono text-xs">$ {command}</span>
+        ) : (
+          entry.summary
+        )
+      }
+    >
       {job.kind === 'bash' ? (
         <BashJobBody job={job} entry={entry} client={client} elapsed={elapsed} />
       ) : (
         <GenericJobBody job={job} entry={entry} elapsed={elapsed} />
       )}
-    </CardShell>
+    </StreamCard>
   );
 }
