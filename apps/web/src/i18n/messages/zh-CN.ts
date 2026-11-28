@@ -1462,6 +1462,12 @@ export const messages = {
   'chat.toolImage.unavailable': '预览不可用',
   'chat.toolImage.raw': '原始通知',
   'chat.toolImage.close': '关闭预览',
+  // q-block-cardshell-unify：统一文件卡（正文 vessel-ref token 提升；CardShell 表面）。
+  // 放大 / 加载文案复用上面 chat.toolImage.*；投递 chip 复用 chat.refs.image.*。
+  'chat.refCard.copyPath': '复制路径',
+  'chat.refCard.pathCopied': '路径已复制',
+  'chat.refCard.expired': '已过期',
+  'chat.refCard.temporary': '临时',
   // 0.52：引用加入 / 发送时的拒绝文案（服务端只给稳定码，人看到的在这里）
   'chat.refs.reject.absolute': '只能引用绝对路径：{path}',
   'chat.refs.reject.tooLong': '引用路径超过 {max} 个字符',

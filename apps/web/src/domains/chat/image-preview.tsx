@@ -81,6 +81,64 @@ export function useImageBlob(
   return state;
 }
 
+/** path 寻址预览的状态（attachments.preview；gone = 暂存副本已过期）。 */
+export interface AttachmentPreviewState {
+  status: 'loading' | 'ready' | 'unavailable' | 'gone';
+  /** data URL（ready 时有）。 */
+  url?: string;
+  /** 暂存副本（未入池）；过期探针随预览一起返回。 */
+  staging?: boolean;
+}
+
+/**
+ * 按**路径**取预览（`attachments.preview`，file-ref-ux A4 同一 RPC；插件
+ * FileRefLinkCard 的宿主侧等价）。与 `useImageBlob`（sha256 寻址 + 会话闸）语义
+ * 不同，**不合并**（设计稿 §2.6 裁定）：这里给「正文 token 没有匹配结构化 ref」
+ * 的卡用 —— 有 ref 时优先走 useImageBlob（内容寻址，缓存命中零 RPC）。
+ *
+ * `enabled=false` / 无路径 / 无连接 ⇒ 不发 RPC，直接 unavailable（非图片种类
+ * 服务端返 not_image，调用方按 kind 门控，不浪费请求）。
+ */
+export function useAttachmentPreview(
+  path: string | undefined,
+  enabled: boolean,
+): AttachmentPreviewState {
+  const connection = useContext(ConnectionContext);
+  const client = connection?.client;
+  const [state, setState] = useState<AttachmentPreviewState>({ status: 'unavailable' });
+
+  useEffect(() => {
+    if (!enabled || path === undefined || path.length === 0 || client === undefined) {
+      setState({ status: 'unavailable' });
+      return;
+    }
+    let stale = false;
+    setState({ status: 'loading' });
+    void client
+      .previewAttachment(path)
+      .then((result) => {
+        if (stale) return;
+        if (result.status === 'ok' && result.dataUrl !== undefined) {
+          setState({
+            status: 'ready',
+            url: result.dataUrl,
+            ...(result.staging === true ? { staging: true } : {}),
+          });
+          return;
+        }
+        setState({ status: result.status === 'gone' ? 'gone' : 'unavailable' });
+      })
+      .catch(() => {
+        if (!stale) setState({ status: 'unavailable' });
+      });
+    return () => {
+      stale = true;
+    };
+  }, [client, enabled, path]);
+
+  return state;
+}
+
 /**
  * 缩略图（可点放大）。loading 画骨架屏；unavailable 画占位（图标 + 一句话）。
  * 放大入口只在 ready 时给 —— 没有字节就没有可放大的东西。

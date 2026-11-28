@@ -67,11 +67,16 @@ export function PendingBubble({
       ? Math.floor((Date.now() - pending.createdAt) / 60_000)
       : 0;
   // 块提升（块 P0）：发送文本里的信封提升成块，与落盘后的气泡同形（同一管线）。
-  const { blocks, body } = liftBlocks({ role: 'user', content: pending.text });
+  // refs 一并交给管线（q-block-cardshell-unify）：token 卡 + chip 同一份去重。
+  const { blocks, body } = liftBlocks({
+    role: 'user',
+    content: pending.text,
+    ...(pending.refs !== undefined ? { refs: [...pending.refs] } : {}),
+  });
   return (
     <div className="msg-user msg-pending msg-enter">
       <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
-      <div className="msg-bubble msg-pending-bubble">{body}</div>
+      {body.length > 0 && <div className="msg-bubble msg-pending-bubble">{body}</div>}
       <div className="msg-pending-meta">
         {failed ? (
           <>
