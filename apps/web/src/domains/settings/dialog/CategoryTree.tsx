@@ -1,6 +1,7 @@
 /**
- * 设置分类树（vscode-settings-design §3.4）：名称 + 命中计数；「常用」是 curated
- * 视图节点；扩展组动态追加插件子节点（S3）。compact = 顶部横向 chips（可横滑）。
+ * 设置分类树（vscode-settings-design §3.4）：名称 + 命中计数；分类即唯一归属
+ * （q-settings-remove-common：「常用」聚合视图退役）；扩展组动态追加插件子节点（S3）。
+ * compact = 顶部横向 chips（可横滑）。
  * 折叠态持久化 vessel.settings.tree.collapsed（父级负责读写）。
  */
 import { CountBadge } from '../../../components/ui';
