@@ -479,6 +479,28 @@ export function TranscriptWindow({
     return runs;
   }, [items, showReasoning]);
 
+  // 「每个 run 的最后一段正文」（q-message-toolbar）：run 结束消息的工具栏保持正文
+  // 下方一行，中间段（只有复制）浮在卡右上角（side 档）。判据与历史侧同源：中间段
+  // 落盘后带 tool_calls，最后一段不带（Transcript.tsx 的 isRunEnd）。
+  // 与 reasoningRuns 同款引用稳定策略：流式期 items 每帧新引用，但「每个 run 的最后
+  // 一段是哪条」几乎从不变 —— 引用不变才能让读它的行级 memo 命中。
+  const lastTextKeyByRunRef = useRef<Map<string, string>>(new Map());
+  const lastTextKeyByRun = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of items) {
+      if (item.kind === 'run-text') map.set(item.runId, item.key);
+    }
+    const previous = lastTextKeyByRunRef.current;
+    if (
+      previous.size === map.size &&
+      [...map].every(([runId, key]) => previous.get(runId) === key)
+    ) {
+      return previous;
+    }
+    lastTextKeyByRunRef.current = map;
+    return map;
+  }, [items]);
+
   // 「正在思考」：run 已经在跑、但这一轮**还没有任何可见内容**（正文 / 思考 / 工具卡）
   // 时的那一行状态。主会话页以前完全没有这句话 —— 只有子 agent transcript 里有，
   // 于是「发出去还没吐字」的那几秒页面上什么都没有，只能看输入框有没有「停止」。
@@ -636,13 +658,16 @@ export function TranscriptWindow({
           // 折叠与入场也收在 AssistantText 里（`entering` = 事件流追加的新 item；
           // 容器在 streaming 翻转前后不变，所以 `.msg-enter` 只播挂载那一次）。
           //
-          // `actions`：这一段的工具栏（复制正文），落在正文**下方一行、左对齐**
-          // （`mt-1`）；显隐（hover / focus-within / 触屏常显）由
+          // `actions`：这一段的工具栏（复制正文）。摆放按「是不是 run 结束消息」分档
+          // （q-message-toolbar）：最后一段（lastTextKeyByRun）保持正文**下方一行、
+          // 左对齐**（`mt-1`）；中间段只有复制，用 `placement="side"` 浮在卡右上角
+          // 内部，不占下方空间。显隐（hover / focus-within / 触屏常显）由
           // `MessageActions` 自己负责，这里不写。思考卡上不挂工具栏。
           //
           // 时间：这一轮**有**思考卡 ⇒ 时间只在卡头（见 `reasoningRuns`），正文下方
           // 不重复；没有思考卡的那一轮才把时间放回工具栏的 meta。
           const clock = reasoningRuns.has(item.runId) ? '' : formatClock(item.ts);
+          const isRunEnd = lastTextKeyByRun.get(item.runId) === item.key;
           return (
             <AssistantText
               text={item.text}
@@ -651,7 +676,8 @@ export function TranscriptWindow({
               actions={
                 item.text.trim().length > 0 ? (
                   <MessageActions
-                    className="mt-1"
+                    className={isRunEnd ? 'mt-1' : undefined}
+                    placement={isRunEnd ? 'bottom' : 'side'}
                     actions={[
                       {
                         id: 'copy',
@@ -790,6 +816,7 @@ export function TranscriptWindow({
       isEntering,
       copy,
       reasoningRuns,
+      lastTextKeyByRun,
       agentNames,
       verbosity,
       messageVisibility,
