@@ -20,6 +20,7 @@
 
 import type { MessageKey } from '../i18n';
 import {
+  parseAttentionLimit,
   parseAttentionSelect,
   parseHubEnvName,
   parseInstanceName,
@@ -205,6 +206,9 @@ export const FLAG_DEFS = {
   '--stop-nodes': { flag: '--stop-nodes', value: { kind: 'boolean' } },
   // node token --print：独立布尔 flag（异于入口 --print = --run 别名；引擎按命令字面量优先）
   '--print': { flag: '--print', value: { kind: 'boolean' }, help: 'flag.nodeTokenPrint' },
+  // restart 内部 flag（不对人类暴露；各命令 hidden 覆盖）
+  '--orchestrate': { flag: '--orchestrate', value: { kind: 'boolean' } },
+  '--handoff': { flag: '--handoff', value: { kind: 'string', placeholder: '<path>' } },
   '--force': { flag: '--force', value: { kind: 'boolean' }, help: 'flag.force' },
   '--yes': { flag: '--yes', aliases: ['-y'], value: { kind: 'boolean' }, help: 'flag.yes' },
   '--check': { flag: '--check', value: { kind: 'boolean' }, help: 'flag.check' },
@@ -810,6 +814,8 @@ export interface CommandSpecBase {
   readonly required?: readonly FlagLiteral[];
   /** 必填缺失错误文案（migrate 先例；缺省 Missing required flag: X） */
   readonly requiredError?: (flag: string) => string;
+  /** 未知 flag 错误文案（attention 形态限制先例；缺省 Unknown argument: X） */
+  readonly unknownFlagError?: (token: string) => string;
   /** 命令级覆盖（现 flagValue/flagHelp + 每命令解析差异：--limit/--ttl 错误文案先例） */
   readonly flagOverrides?: Readonly<
     Partial<
@@ -2997,6 +3003,1376 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     removed: 'vessel hub node add was removed; use vessel hub join-code then vessel hub join',
     load: async () => ({ run: async () => 2 }),
   }),
+  // ── 批 C1：舰队 stop / restart（S4） ──
+  defineCommand({
+    path: ['stop'],
+    surface: 'one-shot',
+    flags: [
+      '--yes',
+      '--force',
+      '--timeout',
+      '--instance',
+      '--port',
+      '--all',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--data-dir',
+    ],
+    flagOverrides: {
+      '--port': gatewayPortOverride('stop'),
+      '--timeout': { invalidError: (raw) => `Invalid --timeout: ${raw} (expected e.g. 10s)` },
+    },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('stop'),
+    positionalErrors: { extra: (token) => `Unknown argument for stop: ${token}` },
+    validate: (p) => {
+      const g = p.globals;
+      const f = p.flags;
+      const hasSelector =
+        f['--instance'] !== undefined || f['--port'] !== undefined || f['--all'] === true;
+      if (g.connectArg !== null && hasSelector) {
+        return 'stop --connect cannot be combined with --instance, --port, or --all';
+      }
+      // 破坏性命令不认 VESSEL_CONNECT env 兜底（比 model 先例更严）
+      const connectOnly =
+        g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+      if (connectOnly !== null && g.connectArg === null) {
+        return `${connectOnly} requires --connect`;
+      }
+      return null;
+    },
+    load: async () => {
+      const { stopFleetCommand } = await import('./commands/fleet/stop-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return stopFleetCommand({
+            yes: f['--yes'],
+            selector: g.connectArg === null ? normalizedSelector(f) : selectorFromFlags(f),
+            ...(f['--timeout'] !== undefined ? { timeoutMs: f['--timeout'] } : {}),
+            ...(f['--force'] === true ? { force: true } : {}),
+            connectUrl: g.connectArg,
+            connectToken: g.connectTokenArg,
+            caFile: g.caArg,
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['restart'],
+    surface: 'one-shot',
+    flags: [
+      '--yes',
+      '--force',
+      '--timeout',
+      '--instance',
+      '--port',
+      '--all',
+      '--data-dir',
+      '--self',
+      '--prompt',
+      '--session',
+      '--run',
+      '--wait-timeout',
+      '--orchestrate',
+      '--handoff',
+    ],
+    flagOverrides: {
+      '--port': gatewayPortOverride('restart'),
+      '--timeout': { invalidError: (raw) => `Invalid --timeout: ${raw} (expected e.g. 10s)` },
+      // restart --run = 触发者 run id（必填值），异于入口 --run 可省略
+      '--run': { value: { kind: 'string', placeholder: '<id>' } },
+      '--orchestrate': { hidden: true },
+      '--handoff': { hidden: true },
+    },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('restart'),
+    positional: '[<name>]',
+    positionalErrors: { extra: () => 'restart accepts at most one name' },
+    validate: (p) => {
+      const f = p.flags;
+      const name = p.positionals[0];
+      if (f['--self'] === true && f['--force'] === true) {
+        return 'restart --self cannot be combined with --force (self-restart is always graceful)';
+      }
+      if (f['--self'] === true && f['--prompt'] === undefined) {
+        return 'restart --self requires --prompt <continuation text>';
+      }
+      if (f['--self'] === true && name !== undefined) {
+        return 'restart --self does not accept a name (targets the fleet of the resolved dataDir)';
+      }
+      const hasSelector =
+        f['--instance'] !== undefined || f['--port'] !== undefined || f['--all'] === true;
+      if (name !== undefined && hasSelector) {
+        return 'restart <name> cannot be combined with --instance, --port, or --all';
+      }
+      return null;
+    },
+    load: async () => {
+      const { restartFleetCommand } = await import('./commands/fleet/restart-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const name = parsed.positionals[0];
+          return restartFleetCommand({
+            ...(name !== undefined ? { name } : {}),
+            yes: f['--yes'],
+            selector: name === undefined ? normalizedSelector(f) : selectorFromFlags(f),
+            ...(f['--timeout'] !== undefined ? { timeoutMs: f['--timeout'] } : {}),
+            ...(f['--force'] === true ? { force: true } : {}),
+            ...(f['--self'] === true ? { self: true } : {}),
+            ...(f['--prompt'] !== undefined ? { prompt: f['--prompt'] } : {}),
+            ...(f['--session'] !== undefined ? { session: f['--session'] } : {}),
+            ...(f['--run'] !== undefined ? { run: f['--run'] } : {}),
+            ...(f['--wait-timeout'] !== undefined ? { waitTimeoutMs: f['--wait-timeout'] } : {}),
+            ...(f['--orchestrate'] === true ? { orchestrate: true } : {}),
+            ...(f['--handoff'] !== undefined ? { handoff: f['--handoff'] } : {}),
+          });
+        },
+      };
+    },
+  }),
+  // ── 批 C2：agent 族（S4；targeting 前置摘出语义） ──
+  defineCommand({
+    path: ['agent'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.agent',
+    positionalErrors: { extra: (token) => `Unknown agent subcommand: ${token}` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'create'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--name',
+      '--model',
+      '--visibility',
+      '--system-prompt',
+      '--startup-prompt',
+      '--startup-prompt-file',
+      '--workspace',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--node',
+    ],
+    flagOverrides: {
+      '--visibility': {
+        invalidError: (raw) => `Invalid --visibility: ${raw} (expected private|team|tenant)`,
+      },
+    },
+    exclusive: [['--startup-prompt', '--startup-prompt-file']],
+    exclusiveError: 'Use only one of --startup-prompt / --startup-prompt-file',
+    positionalErrors: { extra: (token) => `Unknown argument for agent create: ${token}` },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runAgentCommand } = await import('./commands/agent/agent-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runAgentCommand(
+              {
+                kind: 'create',
+                json: f['--json'],
+                ...(f['--name'] !== undefined ? { name: f['--name'] } : {}),
+                ...(f['--model'] !== undefined ? { model: f['--model'] } : {}),
+                ...(f['--visibility'] !== undefined ? { visibility: f['--visibility'] } : {}),
+                ...(f['--system-prompt'] !== undefined
+                  ? { systemPrompt: f['--system-prompt'] }
+                  : {}),
+                ...(f['--startup-prompt'] !== undefined
+                  ? { startupPrompt: f['--startup-prompt'] }
+                  : {}),
+                ...(f['--startup-prompt-file'] !== undefined
+                  ? { startupPromptFile: f['--startup-prompt-file'] }
+                  : {}),
+                ...(f['--workspace'] !== undefined ? { workspace: f['--workspace'] } : {}),
+              },
+              {
+                dataDir: await resolveCommandDataDir(),
+                connectUrl: g.connectArg,
+                connectToken: g.connectTokenArg,
+                caFile: g.caArg,
+                nodeId: g.nodeTargetArg,
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'send'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--interrupt',
+      '--message-id',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--node',
+    ],
+    positional: '<member> <content...>',
+    positionalErrors: { missing: 'agent send requires <member> <content...>' },
+    validate: (p) => {
+      const targeting = targetingError(p.globals);
+      if (targeting !== null) return targeting;
+      const f = p.flags;
+      const content = p.positionals.slice(1).join(' ');
+      const messageId = f['--message-id'];
+      const interrupt = f['--interrupt'] === true;
+      if (messageId !== undefined && !interrupt) {
+        return 'agent send --message-id requires --interrupt';
+      }
+      if (interrupt) {
+        if (content !== '' && messageId !== undefined) {
+          return 'agent send: pass either content or --message-id, not both';
+        }
+        if (content === '' && messageId === undefined) {
+          return 'agent send --interrupt requires <content...> or --message-id <id>';
+        }
+      } else if (content === '') {
+        return 'agent send requires non-empty <content...>';
+      }
+      return null;
+    },
+    load: async () => {
+      const { runAgentCommand } = await import('./commands/agent/agent-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runAgentCommand(
+              {
+                kind: 'send',
+                json: f['--json'],
+                member: parsed.positionals[0] ?? '',
+                content: parsed.positionals.slice(1).join(' '),
+                ...(f['--interrupt'] === true ? { interrupt: true } : {}),
+                ...(f['--message-id'] !== undefined ? { messageId: f['--message-id'] } : {}),
+              },
+              {
+                dataDir: await resolveCommandDataDir(),
+                connectUrl: g.connectArg,
+                connectToken: g.connectTokenArg,
+                caFile: g.caArg,
+                nodeId: g.nodeTargetArg,
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'inbox'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<member>',
+    positionalErrors: {
+      missing: 'agent inbox requires <member>',
+      extra: (token) => `Unknown argument for agent inbox: ${token}`,
+    },
+    validate: (p) => {
+      const g = p.globals;
+      if (g.connectArg !== null || g.nodeTargetArg !== null) {
+        return 'agent inbox is local-only; --connect/--node are not supported';
+      }
+      return targetingError(g);
+    },
+    load: async () => {
+      const { runAgentInboxCommand } = await import('./commands/agent/agent-inbox-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runAgentInboxCommand(
+              { kind: 'inbox', json: parsed.flags['--json'], member: parsed.positionals[0] ?? '' },
+              { dataDir: await resolveCommandDataDir() },
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'close'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<member...>',
+    positionalErrors: { missing: 'agent close requires at least one <member>' },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runAgentCommand } = await import('./commands/agent/agent-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runAgentCommand(
+              { kind: 'close', json: parsed.flags['--json'], members: [...parsed.positionals] },
+              {
+                dataDir: await resolveCommandDataDir(),
+                connectUrl: g.connectArg,
+                connectToken: g.connectTokenArg,
+                caFile: g.caArg,
+                nodeId: g.nodeTargetArg,
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--visibility', '--state', '--connect', '--connect-token', '--ca', '--node'],
+    flagOverrides: {
+      '--visibility': {
+        invalidError: (raw) => `Invalid --visibility: ${raw} (expected private|team|tenant)`,
+      },
+      '--state': { invalidError: (raw) => `Invalid --state: ${raw}` },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for agent list: ${token}` },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runAgentCommand } = await import('./commands/agent/agent-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runAgentCommand(
+              {
+                kind: 'list',
+                json: f['--json'],
+                ...(f['--visibility'] !== undefined ? { visibility: f['--visibility'] } : {}),
+                ...(f['--state'] !== undefined ? { state: f['--state'] } : {}),
+              },
+              {
+                dataDir: await resolveCommandDataDir(),
+                connectUrl: g.connectArg,
+                connectToken: g.connectTokenArg,
+                caFile: g.caArg,
+                nodeId: g.nodeTargetArg,
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['agent', 'dispatch'],
+    surface: 'one-shot',
+    flags: ['--json', '--allow-auto-create', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<to> <content...>',
+    positionalErrors: { missing: 'agent dispatch requires <to> <content...>' },
+    validate: (p) => {
+      const targeting = targetingError(p.globals);
+      if (targeting !== null) return targeting;
+      return p.positionals.slice(1).join(' ') === ''
+        ? 'agent dispatch requires <to> <content...>'
+        : null;
+    },
+    load: async () => {
+      const { runAgentCommand } = await import('./commands/agent/agent-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runAgentCommand(
+              {
+                kind: 'dispatch',
+                json: f['--json'],
+                to: parsed.positionals[0] ?? '',
+                content: parsed.positionals.slice(1).join(' '),
+                ...(f['--allow-auto-create'] === true ? { allowAutoCreate: true } : {}),
+              },
+              {
+                dataDir: await resolveCommandDataDir(),
+                connectUrl: g.connectArg,
+                connectToken: g.connectTokenArg,
+                caFile: g.caArg,
+                nodeId: g.nodeTargetArg,
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  // ── 批 C3：team 族（S4） ──
+  defineCommand({
+    path: ['team'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.team',
+    positionalErrors: { extra: (token) => `Unknown team subcommand: ${token}` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positionalErrors: { extra: (token) => `Unknown argument for team list: ${token}` },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              { kind: 'list', json: parsed.flags['--json'] },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'create'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--name',
+      '--description',
+      '--policy',
+      '--policy-file',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--node',
+    ],
+    flagOverrides: { '--policy': { value: policyValue() } },
+    exclusive: [['--policy', '--policy-file']],
+    exclusiveError: 'Use only one of --policy / --policy-file',
+    positional: '<workspace>',
+    positionalErrors: {
+      missing: 'team create requires <workspace>',
+      extra: (token) => `Unknown argument for team create: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'create',
+                workspace: parsed.positionals[0] ?? '',
+                ...(f['--name'] !== undefined ? { name: f['--name'] } : {}),
+                ...(f['--description'] !== undefined ? { description: f['--description'] } : {}),
+                ...(f['--policy'] !== undefined
+                  ? { policy: f['--policy'] as unknown as Record<string, unknown> }
+                  : {}),
+                ...(f['--policy-file'] !== undefined ? { policyFile: f['--policy-file'] } : {}),
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'update'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--name',
+      '--description',
+      '--clear-description',
+      '--policy',
+      '--policy-file',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--node',
+    ],
+    flagOverrides: { '--policy': { value: policyValue() } },
+    exclusive: [['--policy', '--policy-file']],
+    exclusiveError: 'Use only one of --policy / --policy-file',
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team update requires <team_id>',
+      extra: (token) => `Unknown argument for team update: ${token}`,
+    },
+    validate: (p) => {
+      const targeting = targetingError(p.globals);
+      if (targeting !== null) return targeting;
+      const f = p.flags;
+      if (
+        f['--name'] === undefined &&
+        f['--description'] === undefined &&
+        f['--clear-description'] !== true &&
+        f['--policy'] === undefined &&
+        f['--policy-file'] === undefined
+      ) {
+        return 'team update requires at least one field flag';
+      }
+      return null;
+    },
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          const description = f['--clear-description'] === true ? null : f['--description'];
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'update',
+                teamId: parsed.positionals[0] ?? '',
+                ...(f['--name'] !== undefined ? { name: f['--name'] } : {}),
+                ...(description !== undefined ? { description } : {}),
+                ...(f['--policy'] !== undefined
+                  ? { policy: f['--policy'] as unknown as Record<string, unknown> }
+                  : {}),
+                ...(f['--policy-file'] !== undefined ? { policyFile: f['--policy-file'] } : {}),
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'archive'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team archive requires <team_id>',
+      extra: (token) => `Unknown argument for team archive: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'archive',
+                teamId: parsed.positionals[0] ?? '',
+                json: parsed.flags['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'freeze'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team freeze requires <team_id>',
+      extra: (token) => `Unknown argument for team freeze: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              { kind: 'freeze', teamId: parsed.positionals[0] ?? '', json: parsed.flags['--json'] },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'unfreeze'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team unfreeze requires <team_id>',
+      extra: (token) => `Unknown argument for team unfreeze: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'unfreeze',
+                teamId: parsed.positionals[0] ?? '',
+                json: parsed.flags['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'get'],
+    surface: 'one-shot',
+    flags: ['--json', '--limit', '--members', '--connect', '--connect-token', '--ca', '--node'],
+    flagOverrides: {
+      '--members': {
+        value: {
+          kind: 'number',
+          placeholder: '<n>',
+          parse: (raw) => {
+            if (!/^\d+$/.test(raw)) return null;
+            const v = Number.parseInt(raw, 10);
+            return v >= 1 && v <= 100 ? v : null;
+          },
+        },
+      },
+    },
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team get requires <team_id>',
+      extra: (token) => `Unknown argument for team get: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'get',
+                teamId: parsed.positionals[0] ?? '',
+                ...(f['--limit'] !== undefined ? { limit: f['--limit'] } : {}),
+                ...(f['--members'] !== undefined ? { members: f['--members'] } : {}),
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'show'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id|slug>',
+    positionalErrors: {
+      missing: 'team show requires <team_id|slug>',
+      extra: (token) => `Unknown argument for team show: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              { kind: 'show', team: parsed.positionals[0] ?? '', json: parsed.flags['--json'] },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'mine'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positionalErrors: { extra: (token) => `Unknown argument for team mine: ${token}` },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              { kind: 'mine', json: parsed.flags['--json'] },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'post'],
+    surface: 'one-shot',
+    flags: ['--json', '--mention', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id> <content...>',
+    positionalErrors: { missing: 'team post requires <team_id> <content...>' },
+    validate: (p) => {
+      const targeting = targetingError(p.globals);
+      if (targeting !== null) return targeting;
+      return p.positionals.slice(1).join(' ') === ''
+        ? 'team post requires <team_id> <content...>'
+        : null;
+    },
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'post',
+                teamId: parsed.positionals[0] ?? '',
+                content: parsed.positionals.slice(1).join(' '),
+                mentions: f['--mention'] ?? [],
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'members'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id> <action> <member>',
+    positionalErrors: {
+      missing: 'team members requires <team_id> add|remove <member>',
+      extra: (token) => `Unknown argument for team members: ${token}`,
+    },
+    validate: (p) => {
+      const targeting = targetingError(p.globals);
+      if (targeting !== null) return targeting;
+      const action = p.positionals[1];
+      if (action !== 'add' && action !== 'remove') {
+        return `Invalid team members action: ${action} (expected add|remove)`;
+      }
+      return null;
+    },
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'members',
+                teamId: parsed.positionals[0] ?? '',
+                action: (parsed.positionals[1] ?? 'add') as 'add' | 'remove',
+                member: parsed.positionals[2] ?? '',
+                json: parsed.flags['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'budget'],
+    surface: 'one-shot',
+    flags: ['--json', '--conversation', '--connect', '--connect-token', '--ca', '--node'],
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team budget requires <team_id>',
+      extra: (token) => `Unknown argument for team budget: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'budget-status',
+                teamId: parsed.positionals[0] ?? '',
+                ...(f['--conversation'] !== undefined
+                  ? { conversationId: f['--conversation'] }
+                  : {}),
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['team', 'budget', 'override'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--conversation',
+      '--dimension',
+      '--max',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--node',
+    ],
+    flagOverrides: {
+      '--dimension': {
+        value: {
+          kind: 'enum',
+          candidates: ['hops', 'turns', 'tokens', 'wall_clock', 'cycle'],
+        },
+        invalidError: (raw) =>
+          `Invalid --dimension: ${raw} (expected hops|turns|tokens|wall_clock|cycle)`,
+      },
+      '--max': {
+        value: {
+          kind: 'dynamic',
+          placeholder: '<n|unlimited>',
+          parse: (raw) => {
+            if (raw === 'unlimited') return { ok: true, value: null };
+            if (/^\d+$/.test(raw)) return { ok: true, value: Number.parseInt(raw, 10) };
+            return {
+              ok: false,
+              error: `Invalid --max: ${raw} (expected a non-negative integer or unlimited)`,
+            };
+          },
+        },
+      },
+    },
+    required: ['--conversation', '--dimension', '--max'],
+    requiredError: (flag) =>
+      flag === '--conversation'
+        ? 'team budget override requires --conversation <id>'
+        : flag === '--dimension'
+          ? 'team budget override requires --dimension <d>'
+          : 'team budget override requires --max <n|unlimited>',
+    positional: '<team_id>',
+    positionalErrors: {
+      missing: 'team budget override requires <team_id>',
+      extra: (token) => `Unknown argument for team budget override: ${token}`,
+    },
+    validate: (p) => targetingError(p.globals),
+    load: async () => {
+      const { runTeamCommand } = await import('./commands/team-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await runTeamCommand(
+              {
+                kind: 'budget-override',
+                teamId: parsed.positionals[0] ?? '',
+                conversationId: f['--conversation'] ?? '',
+                dimension: (f['--dimension'] ?? 'hops') as
+                  | 'hops'
+                  | 'turns'
+                  | 'tokens'
+                  | 'wall_clock'
+                  | 'cycle',
+                max: (f['--max'] ?? null) as number | null,
+                json: f['--json'],
+              },
+              teamDeps(g, await resolveCommandDataDir()),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  // ── 批 C4：federation 族（S4） ──
+  defineCommand({
+    path: ['federation'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.federation',
+    positionalErrors: { extra: (token) => `Unknown federation subcommand: ${token}` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'post'],
+    surface: 'one-shot',
+    flags: ['--json', '--to', '--from', '--conversation-id'],
+    positional: '<content...>',
+    positionalErrors: { missing: 'federation post requires <content...>' },
+    required: ['--to', '--from'],
+    requiredError: (flag) =>
+      flag === '--to'
+        ? 'federation post requires --to <principal@node:team>'
+        : 'federation post requires --from <principal@node:team>',
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'post',
+                to: f['--to'] ?? '',
+                from: f['--from'] ?? '',
+                content: parsed.positionals.join(' '),
+                ...(f['--conversation-id'] !== undefined
+                  ? { conversationId: f['--conversation-id'] }
+                  : {}),
+                json: f['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'team-info'],
+    surface: 'one-shot',
+    flags: ['--json', '--to', '--members'],
+    flagOverrides: {
+      '--members': {
+        value: {
+          kind: 'number',
+          placeholder: '<n>',
+          parse: (raw) => {
+            if (!/^\d+$/.test(raw)) return null;
+            const v = Number.parseInt(raw, 10);
+            return v >= 1 && v <= 100 ? v : null;
+          },
+        },
+      },
+    },
+    required: ['--to'],
+    requiredError: () => 'federation team-info requires --to <principal@node:team>',
+    positionalErrors: { extra: (token) => `Unknown argument for federation team-info: ${token}` },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'team-info',
+                to: f['--to'] ?? '',
+                ...(f['--members'] !== undefined ? { members: f['--members'] } : {}),
+                json: f['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'peers'],
+    surface: 'one-shot',
+    flags: ['--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for federation peers: ${token}` },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runFederationCommand(
+              { kind: 'peers', json: parsed.flags['--json'] },
+              await resolveCommandContext(),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'pair-code'],
+    surface: 'one-shot',
+    flags: ['--json', '--ttl'],
+    flagOverrides: {
+      '--ttl': { invalidError: (raw) => `Invalid --ttl: ${raw} (expected 60..3600 seconds)` },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for federation pair-code: ${token}` },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'pair-code',
+                ...(f['--ttl'] !== undefined ? { ttl: f['--ttl'] } : {}),
+                json: f['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'join'],
+    surface: 'one-shot',
+    flags: ['--json', '--allow-directory', '--code', '--team-id', '--peer-team-id', '--url'],
+    positional: '<url|node-id>',
+    positionalErrors: {
+      missing: 'federation join requires <url|node-id>',
+      extra: () => 'federation join takes exactly one <url|node-id>',
+    },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'join',
+                target: parsed.positionals[0] ?? '',
+                teamId: f['--team-id'] ?? 'vessel',
+                allowDirectory: f['--allow-directory'],
+                ...(f['--code'] !== undefined ? { code: f['--code'] } : {}),
+                ...(f['--peer-team-id'] !== undefined ? { peerTeamId: f['--peer-team-id'] } : {}),
+                ...(f['--url'] !== undefined ? { selfUrl: f['--url'] } : {}),
+                json: f['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'discover'],
+    surface: 'one-shot',
+    flags: ['--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for federation discover: ${token}` },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runFederationCommand(
+              { kind: 'discover', json: parsed.flags['--json'] },
+              await resolveCommandContext(),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'peer'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.federationPeer',
+    positionalErrors: { extra: (token) => `Unknown federation peer subcommand: ${token}` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'peer', 'add'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--allow-directory',
+      '--node-id',
+      '--team-id',
+      '--token-env',
+      '--url',
+      '--direction',
+      '--local-team-id',
+      '--ca-file',
+    ],
+    flagOverrides: {
+      '--direction': {
+        invalidError: (raw) => `Invalid --direction: ${raw} (expected in | out | both)`,
+      },
+    },
+    required: ['--node-id', '--team-id', '--token-env'],
+    requiredError: (flag) =>
+      flag === '--node-id'
+        ? 'federation peer add requires --node-id <node_id>'
+        : flag === '--team-id'
+          ? 'federation peer add requires --team-id <team_id>'
+          : 'federation peer add requires --token-env <ENV_NAME>',
+    positionalErrors: { extra: (token) => `Unknown argument for federation peer add: ${token}` },
+    validate: (p) =>
+      p.flags['--direction'] !== 'in' && p.flags['--url'] === undefined
+        ? 'federation peer add requires --url <base-url> when direction includes out'
+        : null,
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'peer-add',
+                nodeId: f['--node-id'] ?? '',
+                teamId: f['--team-id'] ?? '',
+                tokenEnv: f['--token-env'] ?? '',
+                direction: (f['--direction'] ?? 'both') as 'in' | 'out' | 'both',
+                allowDirectory: f['--allow-directory'],
+                ...(f['--url'] !== undefined ? { url: f['--url'] } : {}),
+                ...(f['--local-team-id'] !== undefined
+                  ? { localTeamId: f['--local-team-id'] }
+                  : {}),
+                ...(f['--ca-file'] !== undefined ? { caFile: f['--ca-file'] } : {}),
+                json: f['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'peer', 'list'],
+    surface: 'one-shot',
+    flags: ['--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for federation peer list: ${token}` },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runFederationCommand(
+              { kind: 'peer-list', json: parsed.flags['--json'] },
+              await resolveCommandContext(),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['federation', 'peer', 'remove'],
+    surface: 'one-shot',
+    flags: ['--json'],
+    positional: '<label|node-id>',
+    positionalErrors: {
+      missing: 'federation peer remove requires <label|node-id> (label = <nodeId>:<teamId>)',
+      extra: () => 'federation peer remove takes exactly one <label|node-id>',
+    },
+    load: async () => {
+      const { runFederationCommand } = await import('./commands/federation');
+      const { printCommandResult, resolveCommandContext } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runFederationCommand(
+              {
+                kind: 'peer-remove',
+                target: parsed.positionals[0] ?? '',
+                json: parsed.flags['--json'],
+              },
+              await resolveCommandContext(),
+            ),
+          ),
+      };
+    },
+  }),
+  // ── 批 C5：attention（S4；list/respond 两形态，跨字段约束全声明化） ──
+  defineCommand({
+    path: ['attention'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--interactive',
+      '--all-nodes',
+      '--node',
+      '--to',
+      '--team',
+      '--agent',
+      '--status',
+      '--order',
+      '--limit',
+      '--cursor',
+      '--connect',
+      '--connect-token',
+      '--ca',
+    ],
+    flagOverrides: {
+      '--status': { invalidError: () => '--status must be pending or orphaned' },
+      '--order': { invalidError: () => '--order must be oldest or newest' },
+      '--limit': {
+        value: { kind: 'number', placeholder: '<n>', parse: parseAttentionLimit },
+        invalidError: (raw) => `Invalid --limit: ${raw} (expected 1..500)`,
+      },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for attention: ${token}` },
+    unknownFlagError: (token) =>
+      ['--all', '--select', '--allow', '--deny', '--remember', '--yes', '--answers'].includes(token)
+        ? `${token} is only valid for attention respond`
+        : `Unknown argument for attention: ${token}`,
+    validate: async (p) => attentionValidate(p, false),
+    load: async () => {
+      const { attentionCommand } = await import('./commands/attention');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(await attentionCommand(attentionDomain(parsed, false))),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['attention', 'respond'],
+    surface: 'one-shot',
+    flags: [
+      '--all',
+      '--select',
+      '--allow',
+      '--deny',
+      '--remember',
+      '--yes',
+      '--answers',
+      '--node',
+      '--to',
+      '--team',
+      '--agent',
+      '--status',
+      '--order',
+      '--limit',
+      '--cursor',
+      '--connect',
+      '--connect-token',
+      '--ca',
+    ],
+    flagOverrides: {
+      '--status': { invalidError: () => '--status must be pending or orphaned' },
+      '--order': { invalidError: () => '--order must be oldest or newest' },
+      '--limit': {
+        value: { kind: 'number', placeholder: '<n>', parse: parseAttentionLimit },
+        invalidError: (raw) => `Invalid --limit: ${raw} (expected 1..500)`,
+      },
+      '--answers': {
+        value: {
+          kind: 'dynamic',
+          placeholder: '<json>',
+          parse: (raw) => {
+            try {
+              const v: unknown = JSON.parse(raw);
+              if (!Array.isArray(v)) return { ok: false, error: '--answers must be a JSON array' };
+              return { ok: true, value: v };
+            } catch {
+              return { ok: false, error: '--answers must be valid JSON' };
+            }
+          },
+        },
+      },
+    },
+    exclusive: [['--allow', '--deny']],
+    exclusiveError: '--allow and --deny are mutually exclusive',
+    positional: '[<request_id>]',
+    positionalErrors: { extra: () => 'attention respond accepts at most one <request_id>' },
+    unknownFlagError: (token) =>
+      token === '--json'
+        ? 'Unknown argument for attention respond: --json'
+        : token === '--interactive' || token === '--all-nodes'
+          ? `${token} is only valid for \`vessel attention\` (list)`
+          : `Unknown argument for attention: ${token}`,
+    validate: async (p) => attentionValidate(p, true),
+    load: async () => {
+      const { attentionCommand } = await import('./commands/attention');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(await attentionCommand(attentionDomain(parsed, true))),
+      };
+    },
+  }),
 ];
 
 /** model 族连接校验（现 parseModelArgs 5052-5060：--connect 或 VESSEL_CONNECT env）。 */
@@ -3058,4 +4434,185 @@ function gatewayPortOverride(command: string): {
 /** 选择器互斥文案（现 gatewaySelectorError）。 */
 function selectorExclusiveError(command: string): string {
   return `gateway ${command} accepts only one of --instance, --port, --all`;
+}
+
+/** agent/team/federation targeting 校验（现 extractTargetFlags 口径：--connect 或 --node）。 */
+function targetingError(g: Globals): string | null {
+  const connectOnly =
+    g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+  if (connectOnly !== null && g.connectArg === null && g.nodeTargetArg === null) {
+    return `${connectOnly} requires --connect or --node`;
+  }
+  return null;
+}
+
+/** 空选择器归一 {all:true}（现 parseStopArgs/parseRestartArgs 口径）。 */
+function normalizedSelector(f: { '--instance'?: string; '--port'?: number; '--all'?: boolean }): {
+  instance?: string;
+  port?: number;
+  all?: boolean;
+} {
+  const selector = selectorFromFlags(f);
+  const hasSelector =
+    selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+  return hasSelector ? selector : { all: true };
+}
+
+/** team 族 deps（registry 包装器口径）。 */
+function teamDeps(
+  g: Globals,
+  dataDir: string,
+): {
+  dataDir: string;
+  connectUrl: string | null;
+  connectToken: string | null;
+  caFile: string | null;
+  nodeId: string | null;
+} {
+  return {
+    dataDir,
+    connectUrl: g.connectArg,
+    connectToken: g.connectTokenArg,
+    caFile: g.caArg,
+    nodeId: g.nodeTargetArg,
+  };
+}
+
+/** --policy JSON 对象校验（现 parseTeamArgs 口径）。 */
+function policyValue(): FlagValueKind {
+  return {
+    kind: 'dynamic',
+    placeholder: '<json>',
+    parse: (raw) => {
+      try {
+        const v: unknown = JSON.parse(raw);
+        if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+          return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+        }
+        return { ok: true, value: v };
+      } catch {
+        return { ok: false, error: 'Invalid --policy: expected a JSON object' };
+      }
+    },
+  };
+}
+
+/** attention 跨字段约束（现 parseAttentionArgs 3541-3624 逐字转录）。 */
+async function attentionValidate(
+  p: ParsedCommand<CommandSpecBase>,
+  isRespond: boolean,
+): Promise<string | null> {
+  const f = p.flags as Record<string, unknown>;
+  const g = p.globals;
+  const interactive = f['--interactive'] === true;
+  const json = f['--json'] === true;
+  const allNodes = f['--all-nodes'] === true;
+  const node = f['--node'] as string | undefined;
+  const to = f['--to'] as string | undefined;
+  const cursor = f['--cursor'] as string | undefined;
+  const connectUrl = g.connectArg;
+  const connectToken = g.connectTokenArg;
+  const caFile = g.caArg;
+  if (!isRespond && interactive && json) {
+    return '--interactive cannot be combined with --json';
+  }
+  if (isRespond && f['--status'] !== undefined && f['--status'] !== 'pending') {
+    return 'attention respond only supports --status pending; orphaned interactions cannot be answered';
+  }
+  if (!isRespond && allNodes) {
+    if (interactive) return '--all-nodes cannot be combined with --interactive';
+    if (node !== undefined) return '--all-nodes cannot be combined with --node';
+    if (connectUrl !== null) return '--all-nodes cannot be combined with --connect';
+    if (to !== undefined) return '--all-nodes cannot be combined with --to';
+    if (cursor !== undefined) return '--all-nodes cannot be combined with --cursor';
+    if (connectToken !== null || caFile !== null) {
+      return '--all-nodes uses each node token_env; drop --connect-token/--ca';
+    }
+  }
+  if (node !== undefined && connectUrl !== null) {
+    return '--node cannot be combined with --connect';
+  }
+  if (node !== undefined && (connectToken !== null || caFile !== null)) {
+    return '--node uses its configured token_env/ca_file; drop --connect-token/--ca';
+  }
+  if (
+    (connectToken !== null || caFile !== null) &&
+    connectUrl === null &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return `${connectToken !== null ? '--connect-token' : '--ca'} requires --connect`;
+  }
+  if (to !== undefined) {
+    const { parseFederationAddress } = await import('../federation/federation-address');
+    const parsed = parseFederationAddress(to);
+    if (!parsed.ok) return `Invalid --to: ${parsed.message}`;
+  }
+  if (isRespond) {
+    const requestId = p.positionals[0];
+    const select = f['--select'] as number[] | undefined;
+    const all = f['--all'] === true;
+    const yes = f['--yes'] === true;
+    const decision = f['--allow'] === true ? 'allow' : f['--deny'] === true ? 'deny' : undefined;
+    const answers = f['--answers'] as unknown[] | undefined;
+    const remember = f['--remember'] === true;
+    const targets =
+      (requestId !== undefined ? 1 : 0) + (select !== undefined ? 1 : 0) + (all ? 1 : 0);
+    if (targets !== 1) {
+      return 'attention respond requires exactly one of <request_id>, --select, or --all';
+    }
+    if (all && !yes) return 'attention respond --all requires --yes';
+    if (select !== undefined && decision === undefined) {
+      return 'attention respond --select requires --allow or --deny';
+    }
+    if (answers !== undefined && requestId === undefined) {
+      return '--answers requires a positional <request_id>';
+    }
+    if (answers !== undefined && decision !== undefined) {
+      return '--answers cannot be combined with --allow/--deny';
+    }
+    if (answers === undefined && decision === undefined) {
+      return 'attention respond requires --allow or --deny (or --answers with a request_id)';
+    }
+    if (remember && answers !== undefined) {
+      return '--remember requires --allow or --deny';
+    }
+  }
+  return null;
+}
+
+/** attention 域对象（现 parseAttentionArgs 3627-3650 口径；thunk 调用点类型互锁）。 */
+function attentionDomain(p: ParsedCommand<CommandSpecBase>, isRespond: boolean) {
+  const f = p.flags as Record<string, unknown>;
+  const g = p.globals;
+  const requestId = p.positionals[0];
+  const decision =
+    f['--allow'] === true
+      ? ('allow' as const)
+      : f['--deny'] === true
+        ? ('deny' as const)
+        : undefined;
+  return {
+    kind: isRespond ? ('respond' as const) : ('list' as const),
+    ...(g.connectArg !== null ? { connectUrl: g.connectArg } : {}),
+    ...(g.connectTokenArg !== null ? { connectToken: g.connectTokenArg } : {}),
+    ...(g.caArg !== null ? { caFile: g.caArg } : {}),
+    ...(f['--node'] !== undefined ? { node: f['--node'] as string } : {}),
+    allNodes: f['--all-nodes'] === true,
+    ...(f['--to'] !== undefined ? { to: f['--to'] as string } : {}),
+    ...(f['--team'] !== undefined ? { teamId: f['--team'] as string } : {}),
+    ...(f['--agent'] !== undefined ? { agent: f['--agent'] as string } : {}),
+    status: (f['--status'] ?? 'pending') as 'pending' | 'orphaned',
+    ...(f['--order'] !== undefined ? { order: f['--order'] as 'oldest' | 'newest' } : {}),
+    limit: (f['--limit'] ?? 20) as number,
+    ...(f['--cursor'] !== undefined ? { cursor: f['--cursor'] as string } : {}),
+    json: f['--json'] === true,
+    interactive: f['--interactive'] === true,
+    ...(requestId !== undefined ? { requestId } : {}),
+    ...(f['--select'] !== undefined ? { select: f['--select'] as number[] } : {}),
+    all: f['--all'] === true,
+    ...(decision !== undefined ? { decision } : {}),
+    ...(f['--answers'] !== undefined ? { answers: f['--answers'] as unknown[] } : {}),
+    remember: f['--remember'] === true,
+    yes: f['--yes'] === true,
+  };
 }

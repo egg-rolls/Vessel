@@ -218,7 +218,7 @@ function parseCommandArgs(
         : canonical.flag;
     const inline = canonical.inline;
     if (!accepted.has(flag)) {
-      return { error: `Unknown argument: ${token}` };
+      return { error: spec.unknownFlagError?.(token) ?? `Unknown argument: ${token}` };
     }
     const def = flagDef(flag) as FlagSpec;
     const override = (
