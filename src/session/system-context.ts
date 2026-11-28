@@ -14,21 +14,29 @@
  * 只认 `prompt.system_context`（载荷形状见 core 的 `PromptSystemContextPayload`）：
  * `hash` / `system_prompt` / `self_card` / `model` / `message_count` / `tools_count` /
  * `estimated_tokens` / `context_max` / `run_id` / `at`，以及 0.52 的增量索引
- * `changed` / `previous_hash`。**只返回尾窗内最近一条**：
+ * `changed` / `previous_hash`。**只返回最近一条**：
  *
  * - 增量索引原样透传，**缺省 = 不知道**（该会话首份快照 / 0.52 之前落盘的旧日志）：
  *   客户端据此退回全量快照卡，而不是渲成「0 项变更」—— 那是编造一个不存在的结论；
  * - 粒度与失败卡（`sessions.get` 的最近一次 run 快照）对齐 —— 客户端拿到的就是
  *   「这个会话最近一轮模型看到了什么系统消息」；
  * - 代价（**已知限制，不是 bug**）：更早轮次的卡在刷新 / 进程重启之后不会回来。要恢复
- *   每一轮，得把尾窗里的全部匹配记录都透出，并由客户端按 run 落位；这一单不做。
+ *   每一轮，得把全部匹配记录都透出，并由客户端按 run 落位；这一单不做。
+ *
+ * ## 怎么取（索引优先，尾窗兜底）
+ * 该事件**只在首 run 发一次**（写侧 hash+model+tools 去重 + 持久指纹，环境不变就永不
+ * 重发）。长会话里它会老化到日志头部，超出尾窗回扫「距尾部 4 MiB」的触达上界 ——
+ * 盲扫字节尾窗永远够不到（q-model-context-index 修的正是这个）。所以 `lookup` 先走
+ * 读口的 `readLatestOfType`：`type.idx` 定位该 type 的最大 seq + 范围读精确读回那一条
+ * 事实，触达与日志大小无关；索引缺失/损坏/滞后或载荷不成形时退回既有尾窗回扫
+ * （`readTailMatches`：首窗 64 KiB，命中即停；尾部没有这类事件时按 64K→256K→1M→4M
+ * 扩窗，累计最多 ≈5.3 MiB 后返回「不知道」，**不回退全量扫盘**）。
  *
  * ## 读数成本
- * 尾窗回扫（读口的 `readTailMatches`，0.54 stop-write 起由 `TimelineEventLog` 提供）：
- * 首窗 64 KiB，命中即停；该会话尾部没有
- * 这类事件时按 64K→256K→1M→4M 扩窗，累计最多 ≈5.3 MiB 后返回「不知道」，**不回退全量
- * 扫盘**。调用方（`sessions.get`）按**尾水位**缓存（见 `packages/serve` 的
- * `systemContext` 端口契约）：水位不变时连 `lookup` 都不会被调到，只花一次 `stat`。
+ * 索引路径：一次轻量索引读（`session.idx` + `type.idx`）+ 64 KiB 新鲜度探针 + 一页
+ * 范围读；索引不可信时只多花索引读那点字节，随后走尾窗。调用方（`sessions.get`）按
+ * **尾水位**缓存（见 `packages/serve` 的 `systemContext` 端口契约）：水位不变时连
+ * `lookup` 都不会被调到，只花一次 `stat`。
  *
  * @module vessel/system-context
  */
@@ -182,9 +190,9 @@ export interface SystemContextSourceOptions {
 /**
  * 构造 `sessions.get.system_context` 的取值面。
  *
- * `lookup` 返回 `undefined` 的三种情况都表示「不知道」，调用方与客户端都按「没有卡」处理：
- * 会话没有事件日志 / 尾窗回扫字节预算内没有 `prompt.system_context` / 命中记录的载荷
- * 不成形（旧日志）。这三种都不猜、不补默认值。
+ * `lookup` 返回 `undefined` 的情况都表示「不知道」，调用方与客户端都按「没有卡」处理：
+ * 会话没有事件日志 / 索引与尾窗回扫字节预算内都没有 `prompt.system_context` / 命中记录
+ * 的载荷不成形（旧日志）。这些都不猜、不补默认值。
  */
 export function createSystemContextSource(
   options: SystemContextSourceOptions,
@@ -192,6 +200,21 @@ export function createSystemContextSource(
   const { tail } = options;
   return {
     async lookup(sessionId: string): Promise<SessionSystemContext | undefined> {
+      // ① 索引精确取（首选）：`type.idx` 定位最新一条 + 范围读读回事实本身，触达与
+      // 日志大小无关 —— 解「事件只首 run 发一次、被去重压住、老化出 4 MiB 尾窗」的
+      // 长会话缺卡。索引缺失/损坏/滞后、或读回的载荷不成形 ⇒ 落到 ②。
+      if (tail.readLatestOfType !== undefined) {
+        try {
+          const record = await tail.readLatestOfType(sessionId, 'prompt.system_context');
+          if (record !== undefined) {
+            const context = systemContextOfRecord(record);
+            if (context !== undefined) return context;
+          }
+        } catch {
+          // 索引路径任何意外都不许打断既有尾窗路径（派生值是观测性字段）。
+        }
+      }
+      // ② 兜底：既有尾窗回扫（口径一字未动）。
       const { records } = await tail.readTailMatches(sessionId, ['prompt.system_context'], {
         limit: TAIL_MATCH_LIMIT,
       });
