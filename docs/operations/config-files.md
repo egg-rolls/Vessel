@@ -85,6 +85,13 @@ security: {}                      # root_secret_env 可选；不配就用 <data_
   `isConfigLockHeld` 供迁移钩子在锁内免嵌套原地执行。
 - **手动编辑不在锁内**：编辑器直接改 `config.yaml` 可能与进程内读改写竞争。锁仅依赖本地文件系统语义，不做跨主机锁。
 
+## 写回原语（`user-config.ts`）
+
+- `writeUserConfigRoot` 经 yaml Document API 对账写回：值未变的键节点原样保留（**既有 YAML 注释 /
+  锚点 / 键序不丢**，含行尾注释），变化键就地替换值，删键 / 新键对账处理；无变化写回字节级不变。
+- 文件不存在 / 不可解析 / 根非对象时回退全量 stringify（旧行为）；原子写（同目录临时文件 + rename，
+  `0600`）与错误码 `ui_settings_*` 不变。调用方只改目标块，其它块深相等 ⇒ 整块不动。
+
 ## 排查
 
 | 现象 | 处理 |
