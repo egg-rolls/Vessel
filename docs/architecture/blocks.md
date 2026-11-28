@@ -121,8 +121,9 @@ scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送�
 ````
 
 - **info string 精确匹配 `vessel-block`**（不带其他 info 词；与用户手打文本碰撞
-  概率极低）。markdown 原生：解析器已认 code fence，AI 可直接产出（就是写一段
-  fenced code，无需新工具）。
+  概率极低）。试点只认 ``` 围栏（`~~~vessel-block` 不提升，按原文渲染）。
+  markdown 原生：解析器已认 code fence，AI 可直接产出（就是写一段 fenced
+  code，无需新工具）。
 - **闭合才认**：流式期未闭合围栏不提升——既有保守策略（markdown-parse 把未闭合
   fence 吃到 EOF）按原文降级为 code 块逐字渲染，正文一行不丢。
 - **按 type schema 校验**：JSON 解析失败 / type 未注册 / payload 形状不对 ⇒

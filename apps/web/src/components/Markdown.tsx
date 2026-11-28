@@ -1,6 +1,7 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: parsed markdown is immutable per render; index keys are stable
 import { Fragment, memo, type ReactNode, useMemo, useRef } from 'react';
 import { t } from '../i18n';
+import { tableToMarkdown } from '../text';
 import { useLinkEnhancer } from './link-enhancers';
 import {
   type InlineNode,
@@ -108,17 +109,8 @@ function BlockCopy({
   );
 }
 
-/**
- * 表格块 → markdown 文本（复制用）：按解析出的 header/rows 重建 `| … |` 行。
- * 单元格里内容级的 `|`（解析时已从 `\|` / 行内 code 还原）重新转义回 `\|`，
- * 粘回 markdown 仍是同一张表；粘进纯文本编辑器也是可读的管道分隔行。
- */
-function tableToMarkdown(header: string[], rows: string[][]): string {
-  const escapeCell = (cell: string) => cell.replace(/\|/g, '\\|');
-  const line = (cells: string[]) => `| ${cells.map(escapeCell).join(' | ')} |`;
-  const separator = `| ${header.map(() => '---').join(' | ')} |`;
-  return [line(header), separator, ...rows.map(line)].join('\n');
-}
+// tableToMarkdown（表格复制用序列化）已抽到 ../text.ts（块 P1 共享纯函数，
+// 与 vessel-block table payload 的渲染投影共用同一实现）。
 
 /** memo：增量解析下前缀块对象引用稳定（parseMarkdownStreaming 缓存复用），
  *  逐帧 reveal 时前缀块整棵子树跳过重渲染 —— 每帧只渲染真正变化的尾块。 */

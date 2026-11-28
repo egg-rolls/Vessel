@@ -26,6 +26,21 @@ export function truncateSnippet(text: string, max: number): string {
 }
 
 /**
+ * 表格 → markdown 文本（唯一实现）：按 header/rows 重建 `| … |` 行。
+ * 单元格里内容级的 `|` 重新转义回 `\|`，粘回 markdown 仍是同一张表；
+ * 粘进纯文本编辑器也是可读的管道分隔行。
+ *
+ * 收编自 Markdown.tsx 私有 tableToMarkdown（块 P1）：表格复制与 vessel-block
+ * table payload 的渲染投影共用同一序列化，口径不漂移。
+ */
+export function tableToMarkdown(header: readonly string[], rows: readonly string[][]): string {
+  const escapeCell = (cell: string) => cell.replace(/\|/g, '\\|');
+  const line = (cells: readonly string[]) => `| ${cells.map(escapeCell).join(' | ')} |`;
+  const separator = `| ${header.map(() => '---').join(' | ')} |`;
+  return [line(header), separator, ...rows.map(line)].join('\n');
+}
+
+/**
  * 「同一路径的第几次引用」key（唯一实现）：`<path>#<seen>`，seen 从 0 起。
  * 同一路径可被引用多次，删除回写 / React key 都要认到那一条 —— 只靠 path 反查
  * 会永远命中第一条。收编自 MessageRefs / ToolImageCard / ComposerChrome 三处
