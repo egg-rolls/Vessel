@@ -15,7 +15,9 @@
  *   只有他人再改（rev 不同）才通知（autoSubscribePath / readSubscribePath，tool.ts）。
  * - **覆盖两条执行路**：hook 在 host 侧跑，与 handler 在 in-process 还是 engine worker 无关。
  * - **best-effort**：任何失败静默，不得打断工具流。
- * - 相对路径按成员实际 cwd 归一化（HookContext.cwd，P1 修洞1）；装配未填时回退 config.cwd（现状）。
+ * - 相对路径按成员实际 cwd 归一化（HookContext.cwd，P1 修洞1）；装配未填时回退活 config.cwd。
+ * - live 配置（q-doc-subscription-hot-gate）：deps.liveConfig 注入后，自动订阅入口每次
+ *   调用读活配置（cwd / maxFullBytes 热改即时生效）；缺省回落 install 快照（零回归）。
  * - 感知只在 run 边界（BeforeLlm 注入，append-only 铁律）；本 hook 不注入任何消息。
  */
 

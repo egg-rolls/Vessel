@@ -52,7 +52,10 @@ export interface SubscribeToolDeps {
   boundary: PathBoundary;
   store: SubscriptionStore;
   config: DocSubscriptionConfig;
-  /** live 配置 getter（q-subscription-script）：allowlist / 调度热改即时生效；缺省回落快照 */
+  /**
+   * live 配置 getter（q-subscription-script；q-doc-subscription-hot-gate 扩到自动订阅入口）：
+   * allowlist / 调度 / cwd / maxFullBytes / stateDir 热改即时生效；缺省回落 install 快照。
+   */
   liveConfig?: () => DocSubscriptionConfig;
   /** script 执行器（inspect 诊断 peek 用）；缺省 ⇒ 无在飞诊断 */
   runner?: ScriptRunner;
@@ -74,6 +77,20 @@ interface InspectOutcome {
 /** 类型守卫：值是否为对象记录 */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * live 配置求值（hot-gate 同族修复，q-doc-subscription-hot-gate）：getter 缺省 / 抛错 ⇒
+ * 回落 install 快照。工具 handler 与自动订阅入口（autoSubscribePath / readSubscribePath）
+ * 共用同一口径 —— 热改 cwd / maxFullBytes / stateDir / allowlist 在两条路都即时生效。
+ */
+function liveConfigOf(deps: SubscribeToolDeps): DocSubscriptionConfig {
+  if (deps.liveConfig === undefined) return deps.config;
+  try {
+    return deps.liveConfig();
+  } catch {
+    return deps.config;
+  }
 }
 
 /** XML 属性值转义（& < > "） */
@@ -864,14 +881,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
 
       const sessionId = ctx.session_id ?? 'default';
       // live 配置（q-subscription-script）：allowlist / 调度每次调用求值，热改即时生效。
-      let config = deps.config;
-      if (deps.liveConfig !== undefined) {
-        try {
-          config = deps.liveConfig();
-        } catch {
-          config = deps.config;
-        }
-      }
+      const config = liveConfigOf(deps);
       const effectiveDeps: SubscribeToolDeps = { ...deps, config };
       let state: SessionSubscriptionState;
       try {
@@ -995,7 +1005,8 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
           if (seen.has(target)) continue;
           seen.add(target);
           const key = healthSubscriptionKey(target);
-          const outcome = await prepareHealthEntry(target, deps, state.subscriptions[key]);
+          // live deps（hot-gate 残留修复）：stateDir 热改后基线快照读新目录，与 inspect 同口径。
+          const outcome = await prepareHealthEntry(target, effectiveDeps, state.subscriptions[key]);
           if (outcome.entry === undefined) {
             rejected.push({ input: outcome.input, reason: outcome.reason ?? 'invalid' });
             continue;
@@ -1039,9 +1050,11 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         if (seen.has(existingCanonical)) continue;
         seen.add(existingCanonical);
 
+        // live deps（hot-gate 残留修复）：cwd 热改后条目解析与上方 dedup 键同一份活配置，
+        // 不再「dedup 用 live、落盘用快照」分裂出两条不同 canonical 的重复条目。
         const outcome = await prepareEntry(
           input,
-          deps,
+          effectiveDeps,
           state.subscriptions[existingCanonical] ?? undefined,
         );
         if (outcome.entry === undefined) {
@@ -1115,8 +1128,11 @@ export async function autoSubscribePath(
 ): Promise<boolean> {
   const trimmed = rawPath.trim();
   if (trimmed === '') return false;
-  // 洞1 修复：成员实际 cwd 优先（HookContext.cwd），缺省回退 config.cwd（现状基线）。
-  const config = origin?.cwd !== undefined ? { ...deps.config, cwd: origin.cwd } : deps.config;
+  // live 配置（hot-gate 残留修复）：自动订阅与手动 add 同口径读活配置（cwd / maxFullBytes
+  // 热改即时生效）；洞1 修复不变：成员实际 cwd 优先（HookContext.cwd），缺省回退活 config.cwd。
+  const base = liveConfigOf(deps);
+  const config = origin?.cwd !== undefined ? { ...base, cwd: origin.cwd } : base;
+  const effectiveDeps: SubscribeToolDeps = { ...deps, config };
   const canonical = canonicalPath(resolveInput(config, trimmed));
   let wrote = false;
   // 原子读改写（设计 §2.2 修洞 3）：load→改→save 整段在 per-session 串行链内，并发批不丢更新。
@@ -1124,14 +1140,14 @@ export async function autoSubscribePath(
     sessionId,
     async (state) => {
       const existing = state.subscriptions[canonical] ?? undefined;
-      const outcome = await prepareEntry(trimmed, { ...deps, config }, existing);
+      const outcome = await prepareEntry(trimmed, effectiveDeps, existing);
       if (outcome.entry === undefined) return undefined;
       const entry = outcome.entry;
       // 升级梯 manual > edit > read：manual 不降级；read 条目被 edit/write 触碰升为 'edit'
       // （清除后不再自过期）；新建置 'edit'。
       entry.origin = existing?.origin === 'manual' ? 'manual' : 'edit';
 
-      const observation = await observeEntry(entry, deps);
+      const observation = await observeEntry(entry, effectiveDeps);
       if (observation !== undefined) {
         entry.rev = observation.rev;
         entry.size = observation.size;
@@ -1215,8 +1231,10 @@ export async function readSubscribePath(
   const limit = readRequestNumber(args, 'limit') ?? DEFAULT_READ_LIMIT;
   if (!Number.isInteger(limit) || limit < 1) return false;
 
-  // 洞1 修复：成员实际 cwd 优先（HookContext.cwd），缺省回退 config.cwd（现状基线）。
-  const config = cwd !== undefined ? { ...deps.config, cwd } : deps.config;
+  // live 配置（hot-gate 残留修复）：与 autoSubscribePath / 手动 add 同口径读活配置；
+  // 洞1 修复不变：成员实际 cwd 优先（HookContext.cwd），缺省回退活 config.cwd。
+  const base = liveConfigOf(deps);
+  const config = cwd !== undefined ? { ...base, cwd } : base;
   const canonical = canonicalPath(resolveInput(config, rawPath));
   // 边界前置（observeEntry / prepareEntry 同口径）：deny/ask 的 read 本身已失败，不订阅；
   // 也避免热应用收紧边界后仍把已拒路径的字节读进引用。
@@ -1245,7 +1263,7 @@ export async function readSubscribePath(
   const ref: ReadRef = { offset, limit, start: offset, end: offset - 1 + slice.length };
   const rangeText = slice.join('\n');
   // 仅当字节数 ≤ maxFullBytes 才存 text；存不下 ⇒ 无 text 的 ref（仍计引用，观察时整文件兜底）。
-  if (Buffer.byteLength(rangeText, 'utf-8') <= deps.config.maxFullBytes) ref.text = rangeText;
+  if (Buffer.byteLength(rangeText, 'utf-8') <= config.maxFullBytes) ref.text = rangeText;
 
   // 原子读改写（设计 §2.2 修洞 3）：read 只追加引用 / 新建条目，不记 last_writer（read 非编辑）。
   let wrote = false;

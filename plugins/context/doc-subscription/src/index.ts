@@ -145,7 +145,9 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
 
       host.registerTool(createSubscribeTool({ boundary, store, config, liveConfig, runner }));
       host.registerHook(createBeforeLlmHook({ boundary, store, config, liveConfig, runner }));
-      host.registerHook(createAutoSubscribeHook({ boundary, store, config }));
+      // auto-sub 同注入 live getter（q-doc-subscription-hot-gate 残留修复）：edit/write/read
+      // 自动订阅的 cwd / maxFullBytes 热改即时生效，与手动 add / BeforeLlm 同一份活配置。
+      host.registerHook(createAutoSubscribeHook({ boundary, store, config, liveConfig }));
       installedRunner = runner;
     },
     dispose(): void {

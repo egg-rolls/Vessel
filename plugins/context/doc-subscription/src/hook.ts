@@ -490,8 +490,9 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
 
   // interval 真 timer 的 tick 闭包（q-subscription-script-p1）：每次触发 live 重读
   // allowlist / cadence —— 删名 / scope off / 调度不再是 interval ⇒ 自 disarm
-  // （idle 期间热改也即时生效，不等到下个 run 边界）；否则 kickoff（单飞由 runner
-  // 保证：在飞 ⇒ 跳过本轮）。结果入队，下个 BeforeLlm drain（ambient 非打断）。
+  // （idle 期间热改也即时生效，不等到下个 run 边界）；周期变更 ⇒ 幂等重 arm
+  // （q-doc-subscription-hot-gate）；否则 kickoff（单飞由 runner 保证：在飞 ⇒ 跳过
+  // 本轮）。结果入队，下个 BeforeLlm drain（ambient 非打断）。
   const intervalTick =
     (key: string, name: string): (() => void) =>
     () => {
@@ -509,6 +510,10 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         runner.disarmInterval(key);
         return;
       }
+      // period 热改（q-doc-subscription-hot-gate 残留修复）：幂等重 arm —— 同周期保留
+      // 相位（no-op），周期变了重设 timer ⇒ idle 期间改 intervalSeconds 下个 tick 即按
+      // 新周期走，不等到下个 run 边界才由 hook 重 arm。
+      runner.armInterval(key, spec.schedule.intervalSeconds * 1000, intervalTick(key, name));
       runner.kickoff(key, spec, spec.cwd ?? cfg.cwd);
     };
 
