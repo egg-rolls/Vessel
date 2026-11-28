@@ -835,9 +835,9 @@ function agentIdOf(from: string): string {
  * 本轮输入那条 user 消息的 `name`：声明的身份优先，否则按 A2A 来源推导。
  *
  * - `message.input_name`：投递方**显式声明**的身份，只用于运行时合成输入与交接嘱托
- *   （idle 唤醒 = `vessel:notice`，见 `AgentService.INBOX_WAKE_NAME`；rotate 交接 =
- *   `rotate:handoff:<epoch>`，见 `AgentService.ROTATE_HANDOFF_INPUT_NAME`；restart --self
- *   跨进程续作 = `tool:system`，见 `AgentService.CONTINUATION_INPUT_NAME`）。上下文
+ *   （rotate 交接 = `rotate:handoff:<epoch>`，见 `AgentService.ROTATE_HANDOFF_INPUT_NAME`；
+ *   restart --self 跨进程续作 = `tool:system`，见 `AgentService.CONTINUATION_INPUT_NAME`；
+ *   bash 作业结果 = `tool:bash`，见 `BASH_JOB_INPUT_NAME`）。上下文
  *   身份不只能从 `source` 推理出来：`startup_prompt` 与唤醒曾同为 system principal
  *   投递 —— rotate 路径是 agent 写的交接书、restart / activate 是人的开场白，只能由
  *   生产者说清楚；agent 经内置工具 create / hire 的 startup_prompt 归属创建者
