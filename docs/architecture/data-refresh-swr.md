@@ -48,7 +48,7 @@ paths: [packages/plugin-ui/src/useStaleWhileRevalidate.ts, apps/web/src/state/us
 | 位置 | `apps/web/src/state/useResource.ts` | `packages/plugin-ui/src/useStaleWhileRevalidate.ts` |
 | 消费方 | apps/web 视图（~30 个） | 插件 web-src（iframe / embed 共用）；宿主新视图亦可用 |
 | 状态面 | `ResourceState`（idle/loading/success/error，loading/error 可带 data）+ `resourceData()` + `refreshing` | `{data, error, isLoading, isRefreshing, updatedAt, reload}` |
-| 触发 | `deps`（JSON 序列化）+ `pollMs` + `reload()` | `queryKey` + `intervalMs` + `refreshKey` + `reload()` |
+| 触发 | `deps`（JSON 序列化）+ `pollMs` + `reload()` + `resyncOnVisible`（opt-in，缺省 false：零轮询消费点回可见也补一次 revalidate） | `queryKey` + `intervalMs` + `refreshKey` + `reload()` |
 | 旧数据保持 | `beginLoad` / `fail` | 内部五态机（ready/revalidating/stale 恒有 data） |
 | 范例 | KanbanView（30s 条件轮询 + StaleNotice） | UsageView / LogsView（15s 轮询 + 事件触发） |
 
