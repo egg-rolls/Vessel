@@ -10,6 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   CONTEXT_PRESSURE_WARN_RATIO,
+  type MessageRef,
   type RunEvent,
   type ToolContext,
   type ToolDefinition,
@@ -313,6 +314,9 @@ function mapSend(record: Record<string, unknown>): Record<string, unknown> {
   if (record.interrupt !== undefined) input.interrupt = record.interrupt;
   if (record.notify !== undefined) input.notify = record.notify;
   if (record.message_id !== undefined) input.message_id = record.message_id;
+  // 块 P2 additive：附件引用原样透传（形状归一在 dispatch / TeamService 的
+  // normalizeRefs，与用户 send 同一份；这里不做第二套校验）。
+  if (record.refs !== undefined) input.refs = record.refs;
   return input;
 }
 
@@ -525,9 +529,28 @@ export function createAgentTool(
           description:
             'send: with interrupt, deliver an existing inbox message id instead of new content',
         },
+        refs: {
+          type: 'array',
+          description:
+            'send: file/image references attached to the message (same shape as user-send refs: ' +
+            '{kind: file|image|document, path: absolute local path, name?, mime?, sha256?, bytes?}; ' +
+            'max 32, invalid entries dropped). Local member targets only — not addresses, ' +
+            'not with message_id. The receiver sees reference chips and reads files on demand',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['file', 'image', 'document'] },
+              path: { type: 'string' },
+              name: { type: 'string' },
+              mime: { type: 'string' },
+              sha256: { type: 'string' },
+              bytes: { type: 'integer' },
+            },
+          },
+        },
         messages: {
           type: 'array',
-          description: 'send: [{to, content, interrupt?, notify?, message_id?}]',
+          description: 'send: [{to, content, interrupt?, notify?, message_id?, refs?}]',
         },
         limit: {
           type: 'integer',
@@ -960,6 +983,21 @@ export function createAgentTool(
             const delivery = deliveryFromNotify(mapped.notify === true);
             const wakes = delivery === 'wake';
             const messageId = typeof mapped.message_id === 'string' ? mapped.message_id : undefined;
+            // 块 P2 additive：refs 只支持本机成员投递路 —— 地址目标（含跨节点）携带不了
+            // node-local 路径；message_id 重投用既有消息自带的 refs，不接受新 refs。
+            // 形状归一在 dispatch / TeamService 的 normalizeRefs（与用户 send 同一份）。
+            const refs = mapped.refs as MessageRef[] | undefined;
+            if (refs !== undefined) {
+              if (!Array.isArray(refs)) throw invalid('send refs must be an array');
+              if (typeof to === 'string' && to.includes('@')) {
+                throw invalid(
+                  'send refs are only supported for local member targets, not addresses',
+                );
+              }
+              if (messageId !== undefined) {
+                throw invalid('send refs cannot combine with message_id');
+              }
+            }
             if (!isOwnerCaller) {
               if (options.team === undefined) throw invalid('send requires a team service');
               return options.team.send({
@@ -969,6 +1007,7 @@ export function createAgentTool(
                 ...(interrupt ? { interrupt: true } : {}),
                 delivery,
                 ...(messageId !== undefined ? { message_id: messageId } : {}),
+                ...(refs !== undefined && refs.length > 0 ? { refs } : {}),
                 origin_run_id: ctx.run_id,
                 ...(batchKey !== undefined ? { batch_key: batchKey } : {}),
               });
@@ -1007,6 +1046,8 @@ export function createAgentTool(
               // wire 边界：dispatch 只认 notify 布尔，wake 模式在这里转回去。
               ...(wakes ? { notify: true } : {}),
               ...(messageId !== undefined ? { message_id: messageId } : {}),
+              // 块 P2 additive：引用随投递（dispatch normalizeRefs 既有路）。
+              ...(refs !== undefined && refs.length > 0 ? { refs } : {}),
               // 内部（非 wire）：tool 路径按调用者 session 继承会话 / 按 run 去重边。
               ...(callerSession !== undefined ? { origin_session_id: callerSession } : {}),
               origin_run_id: ctx.run_id,
