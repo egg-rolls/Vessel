@@ -246,7 +246,8 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           typeof params.session_id === 'string' ? params.session_id : undefined;
         // 附件引用（0.52）：只校验形状就随 run 落盘；路径边界留到读文件那一刻
         // （`read` / `media` 的 `evaluatePath`），用户引用不在这里被提前拒。
-        const refs = readRefsParam(params.refs);
+        // file-ref-ux A6：带上正文跑一致性闸（token ⊆ refs，越界仅 warn 不拒收）。
+        const refs = readRefsParam(params.refs, params.input);
         const result = await control.start({
           input: stringParam(params, 'input'),
           ...(agentId !== undefined ? { agent_id: agentId } : {}),

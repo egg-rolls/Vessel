@@ -406,7 +406,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
           const content = stringParam(params, 'content');
           const conversationId = optionalString(params, 'conversation_id');
           // 引用与 `runs.start` 同一份形状校验：只拦形状，路径边界留给读侧。
-          const refs = readRefsParam(params.refs);
+          // file-ref-ux A6：带上正文跑一致性闸（token ⊆ refs，越界仅 warn 不拒收）。
+          const refs = readRefsParam(params.refs, content);
           const mentions = Array.isArray(params.mentions)
             ? params.mentions.filter((item): item is string => typeof item === 'string')
             : undefined;

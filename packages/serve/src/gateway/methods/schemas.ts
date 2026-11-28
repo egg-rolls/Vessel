@@ -9,6 +9,7 @@
  */
 
 import { MESSAGE_REF_PATH_MAX, MESSAGE_REFS_MAX, type MessageRef } from '@vessel-agent/core';
+import { logEvent } from '../../log-event.js';
 import { RpcError } from '../../rpc.js';
 
 export const stringListSchema = {
@@ -42,6 +43,33 @@ export const messageRefSchema = {
 };
 
 /**
+ * vessel-ref token 提取（file-ref-ux A6，设计 §2.3 一致性闸用）：双形——
+ * `[name](vessel-ref:path)` 与尖括号形 `[name](<vessel-ref:path>)`。
+ * name 部容 `\]` 转义；裸形目标不含空格 / `)`（CommonMark），尖括号形容空格。
+ * 轻量正则，**不是**完整 markdown 解析：代码围栏内的 token 可能误提取 ⇒
+ * 闸只 warn 不拒收，误报无害（反过度设计）。
+ */
+const REF_TOKEN_RE = /\[(?:\\.|[^\]\\])*\]\((?:<vessel-ref:([^>]+)>|vessel-ref:([^)\s]+))\)/g;
+
+/**
+ * 一致性闸（file-ref-ux A6，设计 §2.3）：用户消息正文 token 解析出的路径集 ⊆ refs[]。
+ * 不一致 ⇒ **以 refs[] 为准**：越界 token 由渲染侧按普通链接处理（web file-token.ts
+ * 已有匹配闸，serve 不造第二套），serve **不拒收、不改写正文**，只留 warn 痕——
+ * 防手工 RPC 造「正文说 A、refs 说 B」而无人察觉。路径比较两侧 `\`→`/` 归一。
+ */
+function checkRefTokenConsistency(refs: readonly MessageRef[], content: string): void {
+  const known = new Set(refs.map((ref) => ref.path.replace(/\\/g, '/')));
+  const missing = new Set<string>();
+  for (const match of content.matchAll(REF_TOKEN_RE)) {
+    const path = (match[1] ?? match[2] ?? '').replace(/\\/g, '/');
+    if (path.length > 0 && !known.has(path)) missing.add(path);
+  }
+  if (missing.size > 0) {
+    logEvent('warn', 'refs.token_mismatch', { paths: [...missing] });
+  }
+}
+
+/**
  * 引用参数（`refs`）→ 归一后的条目（0.52）。`runs.start` 与 `teams.post` 共用一份。
  *
  * 这里**只做形状校验**：绝对路径、长度、条数、kind。路径边界（`allowed_roots` /
@@ -51,9 +79,15 @@ export const messageRefSchema = {
  *
  * params_schema 已经卡住形状；这里再截一次条数（服务端不接受比上限更宽的输入，
  * 而不是悄悄截断）——超限属于 `invalid_params`，由调用方抛出。
+ *
+ * `content`（file-ref-ux A6，additive 可选）：用户消息正文。给了就跑一致性闸
+ * （token 路径集 ⊆ refs[]，越界仅 warn，不拒收不改写）；不给 = 旧行为逐字节不变。
  */
-export function readRefsParam(value: unknown): MessageRef[] {
-  if (value === undefined) return [];
+export function readRefsParam(value: unknown, content?: unknown): MessageRef[] {
+  if (value === undefined) {
+    if (typeof content === 'string') checkRefTokenConsistency([], content);
+    return [];
+  }
   if (!Array.isArray(value)) throw new RpcError('invalid_params', 'refs must be an array');
   if (value.length > MESSAGE_REFS_MAX) {
     throw new RpcError('invalid_params', `refs exceeds ${MESSAGE_REFS_MAX} items`, {
@@ -104,6 +138,7 @@ export function readRefsParam(value: unknown): MessageRef[] {
     if (record.inline === true) ref.inline = true;
     refs.push(ref);
   }
+  if (typeof content === 'string') checkRefTokenConsistency(refs, content);
   return refs;
 }
 
