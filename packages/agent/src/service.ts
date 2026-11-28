@@ -1673,7 +1673,8 @@ export class AgentServiceImpl implements AgentService {
    * 由生产者声明，不从 system 来源统一推断）。不标 input_name：身份由
    * from / source / from_name 承载，与正常 send 同一条推导路。
    *
-   * best-effort：失败只 warn，不回滚已提交的创建（与
+   * 失败不回滚已提交的创建，但 **fail-loud**（q-error-e3 §3.8 A 桶，与 E2 restart
+   * 同款）：error 级日志 + `agent.create.startup_failed` 结构化事件（与
    * `agent.session_create.startup_failed` 同口径）。
    */
   private async deliverStartupPrompt(
@@ -1701,9 +1702,26 @@ export class AgentServiceImpl implements AgentService {
         { startup: true },
       );
     } catch (error) {
-      this.logger.warn('agent.create.startup_failed', {
+      // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+      // 同款（裁定 F）：create 本身不回滚；startup prompt 投递失败必须 run 面可见
+      // （0.56 send-first 口径：绝不静默丢掉用户刚发的那句话）。
+      const startupError = new AgentError('spawn_failed', errorText(error), {
+        cause: error,
+        operation: 'agent.create.startup',
+        details: this.spawnFailureDetails(record, error),
+      });
+      this.logger.error('agent.create.startup_failed', {
         agent_id: record.id,
+        session_id: record.sessionId,
+        error_id: startupError.errorId,
+        code: 'spawn_failed',
         error: errorText(error),
+      });
+      this.emitForSession('agent.create.startup_failed', record, record.sessionId, {
+        error: errorText(error),
+        error_id: startupError.errorId,
+        code: 'spawn_failed',
+        operation: 'agent.create.startup',
       });
     }
   }
@@ -6675,9 +6693,26 @@ export class AgentServiceImpl implements AgentService {
           },
         );
       } catch (error) {
-        this.logger.warn('agent.session_create.startup_failed', {
+        // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+        // 同款（裁定 F）：session_create 本身不回滚；startup prompt 投递失败必须
+        // run 面可见——结构化失败事件 + error 级日志。
+        const startupError = new AgentError('spawn_failed', errorText(error), {
+          cause: error,
+          operation: 'agent.session_create.startup',
+          details: this.spawnFailureDetails(record, error),
+        });
+        this.logger.error('agent.session_create.startup_failed', {
           agent_id: record.id,
+          session_id: newSessionId,
+          error_id: startupError.errorId,
+          code: 'spawn_failed',
           error: errorText(error),
+        });
+        this.emitForSession('agent.session_create.startup_failed', record, newSessionId, {
+          error: errorText(error),
+          error_id: startupError.errorId,
+          code: 'spawn_failed',
+          operation: 'agent.session_create.startup',
         });
       }
     }
@@ -7121,9 +7156,26 @@ export class AgentServiceImpl implements AgentService {
             { startup: true },
           );
         } catch (error) {
-          this.logger.warn('agent.session_activate.startup_failed', {
+          // q-error-e3（§3.8 A 桶，E2 候补承接）：warn-only → fail-loud，与 E2 restart
+          // 同款（裁定 F）：activate 本身不回滚；startup prompt 投递失败必须 run 面
+          // 可见——结构化失败事件 + error 级日志。
+          const startupError = new AgentError('spawn_failed', errorText(error), {
+            cause: error,
+            operation: 'agent.session_activate.startup',
+            details: this.spawnFailureDetails(record, error),
+          });
+          this.logger.error('agent.session_activate.startup_failed', {
             agent_id: record.id,
+            session_id: sessionId,
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
             error: errorText(error),
+          });
+          this.emitForSession('agent.session_activate.startup_failed', record, sessionId, {
+            error: errorText(error),
+            error_id: startupError.errorId,
+            code: 'spawn_failed',
+            operation: 'agent.session_activate.startup',
           });
         }
       }
