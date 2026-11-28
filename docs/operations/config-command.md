@@ -42,7 +42,7 @@ project 写工作区 `vessel.yaml` 覆盖层，未注入项目路径 → `not_fo
 
 | 组 | 键 |
 |---|---|
-| ui | `ui.language` / `ui.showReasoning` / `ui.statusBars` / `ui.verbosity` / `ui.showInternalEvents` / `ui.showArchived` / `ui.errorLevel` / `ui.askUser` / `ui.expandCards` |
+| ui | `ui.language` / `ui.showReasoning` / `ui.statusBars` / `ui.verbosity` / `ui.showInternalEvents` / `ui.showArchived` / `ui.showRetiredSessions` / `ui.errorLevel` / `ui.addressStyle` / `ui.askUser` / `ui.expandCards` |
 | ui 消息显隐 | `ui.messageVisibility.{reasoning,tools,environment,source,system}`（YAML 子块 `message_visibility`） |
 | ui 深度配色 | `ui.depthColor.{enabled,rootHue,hueStep,lightnessLight,chromaLight,lightnessDark,chromaDark}`（YAML `ui.depth_color`） |
 | observability | `observability.showProcessErrors` / `observability.log.{level,color,format,time}` |
