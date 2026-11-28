@@ -219,6 +219,7 @@ async function repairPartialTail(path: string): Promise<number> {
       window = Math.min(window * 8, size);
     }
   } finally {
+    // benign: 读窗口句柄关闭，失败不掩盖读取结果。
     await handle.close().catch(() => {});
   }
 }
@@ -306,6 +307,7 @@ export class TeamLogWriter {
   ): Promise<TeamLogReadWindow> {
     const limit = clampLimit(options.limit);
     if (limit === 0) return { entries: [], hasMore: false };
+    // benign: 只等写链排空；写失败经 append 调用方的 promise 可见，读侧不重复抛。
     await this.writeChain.catch(() => {});
 
     const before = options.before;
@@ -433,12 +435,14 @@ export class TeamLogWriter {
       const hasMore = collected.length > 0 && (stop || !reachedStart);
       return { entries: collected.slice(0, limit).reverse(), hasMore };
     } finally {
+      // benign: 读句柄关闭，失败不掩盖读取结果。
       await handle.close().catch(() => {});
     }
   }
 
   /** 等待已入队的 append 落盘 */
   async flush(): Promise<void> {
+    // benign: 只等写链排空；写失败经 append 调用方的 promise 可见。
     await this.writeChain.catch(() => {});
   }
 
@@ -471,6 +475,7 @@ export class TeamLogWriter {
     try {
       await handle.sync();
     } finally {
+      // benign: sync 句柄关闭，失败不掩盖 sync 结果。
       await handle.close().catch(() => {});
     }
   }

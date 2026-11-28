@@ -358,6 +358,7 @@ export async function refreshOAuthToken(input: {
     } finally {
       deadline.dispose();
     }
+    // benign: JSON 解析探针——非 JSON 体回落 null，下方 access_token 校验显式失败（log + return null）。
     const payload: unknown = await response.json().catch(() => null);
     const access = readField(payload, 'access_token');
     if (typeof access !== 'string' || access === '') {

@@ -201,6 +201,7 @@ async function readBodyLimited(req: Request, limit: number): Promise<Uint8Array 
       if (value === undefined) continue;
       total += value.byteLength;
       if (total > limit) {
+        // benign: 超限取消流，失败不掩盖 BodyTooLargeError（重抛）。
         await reader.cancel().catch(() => undefined);
         throw new BodyTooLargeError(limit);
       }
@@ -574,6 +575,7 @@ export class PlatformProxy {
         },
         cancel(reason) {
           releaseSlot();
+          // benign: 下游取消尽力传导，失败不抛（槽已释放）。
           void reader.cancel(reason).catch(() => undefined);
         },
       });

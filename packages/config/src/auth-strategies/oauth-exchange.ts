@@ -111,6 +111,7 @@ export async function exchangeCodeForIdentity(
       // 不清掉就是悬挂定时器（core/timeout.ts 的约定）。
       tokenDeadline.dispose();
     }
+    // benign: JSON 解析探针——非 JSON 体回落 null，下方 access_token 校验显式失败（log + token_exchange_failed）。
     const tokenPayload: unknown = await tokenResponse.json().catch(() => null);
     const tokenField = readField(tokenPayload, 'access_token');
     if (typeof tokenField !== 'string' || tokenField === '') {
@@ -163,6 +164,7 @@ export async function exchangeCodeForIdentity(
       log(`${prefix}: ${source.userRequestLabel} failed status=${String(userResponse.status)}`);
       return { ok: false, failure: 'user_fetch_failed' };
     }
+    // benign: JSON 解析探针——非 JSON 体回落 null，下方 identity 校验显式失败（log + user_fetch_failed）。
     const userPayload: unknown = await userResponse.json().catch(() => null);
     const identity = source.identityOf(userPayload);
     if (identity === null) {

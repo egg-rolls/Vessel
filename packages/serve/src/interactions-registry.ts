@@ -475,9 +475,9 @@ export function createInteractionsRegistry(
     if (!store) return;
     const records = [...interactionRecords.values()].sort((a, b) => a.created_at - b.created_at);
     const next = persistChain
-      .catch(() => undefined)
+      .catch(() => undefined) // benign: 只等链排空；前次写失败已经 store.persist_failed logEvent 可见。
       .then(() => store.save(singleTenantId, records))
-      .catch(() => undefined);
+      .catch(() => undefined); // benign: 写失败内部 logEvent('error','interactions.store.persist_failed')；RPC 不因此失败（设计）。
     persistChain = next;
   }
 

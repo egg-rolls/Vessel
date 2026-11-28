@@ -475,6 +475,7 @@ export class FileTeamStore implements TeamStore {
   /** 等待所有日志写链与 ensure / seed 串行链排空 */
   async flush(): Promise<void> {
     await this.ready();
+    // benign: 只等串行链排空；链上失败经各调用方 promise 可见。
     await this.chainTail.catch(() => {});
     await Promise.all([...this.logWriters.values()].map((writer) => writer.flush()));
   }

@@ -858,6 +858,7 @@ class ExecutionUnitRunHandle implements RunHandle {
       this.resolveResult = resolve;
       this.rejectResult = reject;
     });
+    // benign: 调用方可以不 await result；防未处理拒绝（拒绝经 resolveResult 消费侧可见）。
     void this.result.catch(() => {});
   }
 
@@ -3169,6 +3170,7 @@ export class AgentServiceImpl implements AgentService {
       return true;
     }
     this.noticeDirty.add(record.id);
+    // benign: 补投递 fire-and-forget；投递失败内部 deliver_failed warn + redelivery 留队列重试。
     void this.dispatchInbox(record.id).catch(() => {});
     return true;
   }
@@ -4025,6 +4027,7 @@ export class AgentServiceImpl implements AgentService {
       this.retryHeldMessages(entry);
     }
     if (this.noticeDirty.has(agentId)) {
+      // benign: 闸后补投递 fire-and-forget；失败内部 deliver_failed warn + 留队列重试。
       void this.dispatchInbox(agentId).catch(() => {});
     }
   }
@@ -5096,6 +5099,7 @@ export class AgentServiceImpl implements AgentService {
     // 投不进去才发摘要唤醒（判据见 `dispatchInbox`）。这就是「多条 ⇒ 每轮抽一条队头」
     // 的链条：直投成功时 `noticeDirty` 保持点亮，下一轮收口再来一次，直到队列空。
     if (this.noticeDirty.has(handle.agentId)) {
+      // benign: run 收口补投递 fire-and-forget；失败内部 deliver_failed warn + 留队列重试。
       void this.dispatchInbox(handle.agentId).catch(() => {});
     }
   }
@@ -6180,6 +6184,7 @@ export class AgentServiceImpl implements AgentService {
     const next = previous.then(op, op);
     this.executionUnitOps.set(
       key,
+      // benign: 串行链尾防未处理拒绝；调用方拿到的 next 仍会 reject（错误可见）。
       next.catch(() => {}),
     );
     return next;
@@ -7296,6 +7301,7 @@ export class AgentServiceImpl implements AgentService {
       return;
     }
     const entry = this.findEntry(record.id, sessionId);
+    // benign: 等 spawning 收口但不消费其错误（spawn 失败经 startup 失败事件可见；下方 active 判定照常）。
     if (entry?.spawning !== undefined) await entry.spawning.catch(() => {});
     if (entry?.active !== undefined) {
       throw new AgentError('conflict', `session_busy: ${sessionId}`);

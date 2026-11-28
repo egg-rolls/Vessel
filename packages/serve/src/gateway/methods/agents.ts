@@ -1090,7 +1090,7 @@ export function createAgentMethods(deps: AgentMethodsDeps): RpcMethodDefinition[
           const pending = teamControl
             .get(teamId)
             .then((detail) => detail?.team.workspace)
-            .catch(() => undefined);
+            .catch(() => undefined); // benign: 解析失败按 workspace 缺失 → not_found（fail-closed，不泄漏）。
           teamWorkspaces.set(teamId, pending);
           return pending;
         };

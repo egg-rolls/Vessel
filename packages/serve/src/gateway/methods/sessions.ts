@@ -1238,6 +1238,7 @@ async function inTeamScope(
   scope: string,
   target: string,
 ): Promise<boolean> {
+  // benign: 解析失败按 not_found 拒绝（fail-closed，见函数注释）。
   const status = await control.resolve(target).catch(() => undefined);
   return status !== undefined && status.team_id === scope;
 }

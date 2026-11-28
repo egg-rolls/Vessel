@@ -3130,8 +3130,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
       try {
         const resolved = await opts.agent.resolve(ws.data.sessionId);
         ws.data.inboxAgentId = resolved?.id;
-      } catch {
-        // 降级不报错：归属解析失败只是少收 inbox 变更信号，会话内帧不受影响。
+      } catch (error) {
+        // q-error-e3（§3.8 B 桶）：可选 inbox 变更信号降级——会话内帧不受影响。
+        // 有界：每次 subscribe 失败一条（用户动作驱动）；结构化降级事件可观测。
+        logEvent('warn', 'degradation.used', {
+          component: 'gateway.ws_subscribe.inbox_agent',
+          from: 'inbox+session',
+          to: 'session-only',
+          reason: `inbox agent resolve failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
       }
     }
     ws.data.types = Array.isArray(params.types)
