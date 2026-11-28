@@ -28,7 +28,7 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 | 投射 | 段起点按会话声明裁决模式并冻结集合（`freezeSegmentProjection`）；placeholder 的清除集合：最新工具结果累计 ≤ 窗口 5%、至少 1 条、至多 10 条（`retainedToolResultCount` / `planClearedToolResults`），其余换成占位 | **run**：段起点算一次，run 内所有请求共用 | core runtime 定基准 + ContextManager 提供纯函数 | 否（只改写发出去的那份副本） | 否（视图 run 内固定；与落盘不同但已声明为 `context_trim`，`buildRequestMessages`） | 无决策 / 空集时一条都不清（`withClearedToolResults`），视图与落盘逐字一致；未实现模式 / 脏声明 / 读回不可用 fail-open 到 passthrough 并留痕 |
 | 压缩 | `shouldCompact()`：估算 token > 窗口 × `DEFAULT_COMPACT_THRESHOLD`(0.85)，或条数超兜底上限 `isOverMessageCap`，或（仅 placeholder）体积维度超 0.20 | **段起点**（run / resume 起点、手动 `/compact`）；run 内撑爆不改写历史，只追加「超限」卡（`appendContextOverflowNotice`） | context manager（`autoCompactAsync`）；「开新段」在 runtime | **是**：pop 旧消息 + append 一张 `compaction_summary` | 是（头部被摘，前缀自然重算 —— append-only 的合法出口） | 摘要失败退化为占位卡（`placeholderSummary`），报 `degraded`，不中断 run |
 | 体积阈值 | 保留那批工具结果原文估算合计 / 窗口 > `TOOL_RESULT_VOLUME_THRESHOLD_RATIO`(0.20)（`measureRetainedToolResultVolume`）；**只对 placeholder 生效**（`projectionVolumeDimensionApplies`） | 段起点判一次 | context manager（纯函数 `shouldCompactForToolResultVolume`，只回答「该不该」） | 否 | 否（它自己不调用任何改写） | passthrough / archive_notice 下不参与判据，只发 `context.projection_pressure` 观测 |
-| rotate + handoff | agent 自己判断；90% 压力提示只是建议（`publishContextPressureWarning`），模型发起需人确认（`tool.ts` rotate 批准，120s 超时见 [member-team](member-team.md#rotate)） | 任意时刻，跨 run | agent 自觉 + AgentService（见 [member-team](member-team.md)） | 否（旧 session 原样留在盘上） | **是**（新 session ⇒ 新 system prompt 与工具集） | spawn / 切换失败恢复旧 primary、dispose 新 body、抛 `spawn_failed`，不自动重试（见 member-team） |
+| rotate + handoff | agent 自己判断；50% 压力提示只是建议（`publishContextPressureWarning`），模型发起需人确认（`tool.ts` rotate 批准，120s 超时见 [member-team](member-team.md#rotate)） | 任意时刻，跨 run | agent 自觉 + AgentService（见 [member-team](member-team.md)） | 否（旧 session 原样留在盘上） | **是**（新 session ⇒ 新 system prompt 与工具集） | spawn / 切换失败恢复旧 primary、dispose 新 body、抛 `spawn_failed`，不自动重试（见 member-team） |
 
 ## 1. 投射：三模式已落地，粒度是 run
 
@@ -56,7 +56,7 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 
 ## 4. rotate + handoff：唯一不在 core 里的机制
 
-- 触发是 agent 的判断，不是 token 计数。core 只在 `ratio ≥ CONTEXT_PRESSURE_WARN_RATIO`(0.9) 且「未超过自动压缩阈值」时，发一条 `[runtime] context_window: …` 尾部消息（同时发 `context.pressure` 事件），hint 建议 `agent(rotate)`，每 run 每 key 只发一次（`publishContextPressureWarning`）。默认阈值 0.85 < 0.9，所以开着 autoCompact 时这条提示永不出现（另见 [context](context.md)）。
+- 触发是 agent 的判断，不是 token 计数。core 在 `ratio ≥ CONTEXT_PRESSURE_WARN_RATIO`(0.5) 时发一条 `[runtime] context_window: …` 尾部消息（同时发 `context.pressure` 事件），hint 建议 `agent(rotate)`，每 run 每 key 只发一次（`publishContextPressureWarning`）。自动压缩开启时超过压缩阈值（缺省 0.85）静默交给 `autoCompactAsync`，所以提示窗口是 50%–85%（恰等于阈值仍提示一次）；**关闭自动压缩时取消上界**——没有压缩把水位降回来，上界会让提示永久静默。预警数用下一次请求视图的上界估算（`currentContextTokens`，应用冻结占位集合），与显示 / 闸同一个数（另见 [context](context.md)）。
 - rotate 换 body ⇒ 换 session（`registry.ts`，`body_id ≡ session_id`），因此它是**唯一能重置 system prompt 与工具集**的机制：同 session 内 base system 变了只发 notice、不开新段（`appendSystemRevisionNotice`）。交接只走 `startup_prompt`（`tool.ts`），人可见。
 - 边界：不以 token 计为触发、不属 core 自动行为、不改旧会话落盘；它与前三种不共享状态。
 
@@ -70,7 +70,7 @@ rotate 之后，前三种机制的基准全部归零（新 body ⇒ 新 session 
 2. 压缩后原文**不再可寻址**：被摘要或占位掉的内容，人和 agent 都不能再按行号/路径取第二遍。工具层知道语义（行号、JSON 路径、匹配序号），能**无损分片**；会话层只知道「一大坨字符串」。
 3. 只有会话层同时看得见窗口总量、消息构成与全局占比；工具层各自不知道别人贡献了多少。
 
-**工具层现状**（本仓 `plugins/tools/basic-tools`）：`read` 带 `offset` / `limit` 分页，截断时明说总行数与续读方式；`bash` 输出过行闸（头尾保留 + 省略行说明）/ 字节闸 / token 闸，token 闸由 core `tool-result-gate.ts` 在 loop 一处收口、覆盖所有插件工具。本仓不提供 `grep` 工具。
+**工具层现状**（本仓 `plugins/tools/basic-tools`）：`read` 带 `offset` / `limit` 分页，截断时明说总行数与续读方式；`bash` 输出过行闸（头尾保留 + 省略行说明）/ 字节闸 / token 闸，token 闸由 core `tool-result-gate.ts` 在 loop 一处收口、覆盖所有插件工具。`grep`（q-tooling）是只读结构化文本搜索（ripgrep 引擎），按 `max_count`（缺省 200）截断匹配条数并标注截断，不静默丢。
 
 硬约束：工具层截断**不得静默丢弃**，必须说清截断了多少、怎么续读；否则违反可见性对等的精神（[message-invariants](message-invariants.md) §1 —— agent 看不见的那部分也必须被明说出来）。
 
