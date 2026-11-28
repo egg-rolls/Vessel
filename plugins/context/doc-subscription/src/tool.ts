@@ -914,6 +914,14 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         }
         const result = formatRemove(state, args, (input) => resolveInput(config, input));
         if (result.startsWith('removed:')) {
+          // script 源 remove ⇒ disarm interval 真 timer（q-subscription-script-p1；
+          // 在飞进程不杀，受各自超时闸约束，结果丢一次可接受——订阅已删不再 drain）。
+          const removedKey = result.slice('removed: '.length);
+          if (removedKey.startsWith('script:')) {
+            deps.runner?.disarmInterval(
+              scriptFlightKey(sessionId, removedKey.slice('script:'.length)),
+            );
+          }
           try {
             await deps.store.save(state);
           } catch {
