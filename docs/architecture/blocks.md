@@ -176,6 +176,8 @@ scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送�
 `TeamService.send` 主 dispatch + Team 日志 mention 条目携带引用。边界：refs 是
 node-local 路径，地址（2/3 段）/ human / 裸名跨节点升级路显式拒绝（federation wire
 无 refs 字段，不扩 wire）；`message_id` 重投与 refs 互斥（既有消息自带 refs）。
+`inline?` 同形透传（file-ref-ux A1：`normalizeRefs` 只写 `true` 键，缺省 = 不内联；
+入池闸在装配层按它判定，与用户 send 同一口径）。
 
 ## 5. vessel-block fence spec（新 type 统一格式，文档先行）
 
