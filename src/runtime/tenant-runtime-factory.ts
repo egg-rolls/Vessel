@@ -148,6 +148,12 @@ export interface BuildTenantRuntimeOptions {
    * 快照（旧 caller 零回归）。
    */
   getEnvInjection?: () => EnvInjectionConfig | undefined;
+  /**
+   * 活配置 getter（q-subscription-script，hot-gate 同族修复）：doc-subscription 插件
+   * 安装配置注入 liveConfig（cadence / channel / scripts 每请求求值）。缺省 ⇒ 插件读
+   * install 快照（旧 caller 零回归）。
+   */
+  getLiveConfig?: () => VesselConfig | undefined;
   tenantPaths: TenantPaths;
   /** config.loaded 事件的来源（缺省空） */
   configSources?: ConfigSources;
@@ -945,6 +951,7 @@ export async function buildTenantRuntime(
     resolveAgentCwd(config),
     resolveDataDir(config),
     config.envInjection,
+    options.getLiveConfig,
   );
   const pluginSelection = resolvePluginSelection(
     loader,

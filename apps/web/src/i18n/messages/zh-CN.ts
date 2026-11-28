@@ -1572,6 +1572,8 @@ export const messages = {
   'chat.env.scope.conflict': '写冲突',
   'chat.env.scope.files': '文件变更',
   'chat.env.scope.health': '节点健康',
+  // 订阅脚本（q-subscription-script）：通用检测脚本订阅的检测结果（兜底 scope 词）。
+  'chat.env.scope.script': '订阅脚本',
   'chat.env.scope.model': '模型',
   'chat.env.scope.selfcard': '基础信息',
   'chat.env.scope.context': '上下文',

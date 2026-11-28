@@ -172,6 +172,11 @@ export async function assemblePluginRegistrations(options: {
   excludePlugins?: ReadonlySet<string>;
   /** 用 cache-busted 新实例（热应用采纳 / dispose）；缺省 false 沿用单例。 */
   fresh?: boolean;
+  /**
+   * 活配置 getter（q-subscription-script）：doc-subscription liveConfig 同源注入。
+   * 缺省 ⇒ 读 options.config 快照（旧 caller 零回归）。
+   */
+  getLiveConfig?: () => VesselConfig | undefined;
 }): Promise<AssembledPluginRegistrations> {
   const loader = options.loader ?? new PluginLoader();
   const declarative = declarativePluginEntries(options.config);
@@ -189,6 +194,7 @@ export async function assemblePluginRegistrations(options: {
     resolveAgentCwd(options.config),
     resolveDataDir(options.config),
     options.config.envInjection,
+    options.getLiveConfig,
   );
   const exclude = options.excludePlugins ?? new Set<string>();
   const host = new MemoryPluginHost();

@@ -42,6 +42,9 @@ const ENV_CADENCE_TABLE = {
   conflict: 'request',
   files: 'run',
   health: 'run',
+  // 订阅脚本（q-subscription-script）：通用检测脚本订阅的兜底 scope 词（案 B 注册制，
+  // 内置专词 doc-lag / code-heaviness P1 加）；默认 run = 每 run 首请求 kickoff/drain。
+  script: 'run',
   context: 'request',
   trim: 'run',
   pii: 'request',

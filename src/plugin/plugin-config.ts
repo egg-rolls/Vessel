@@ -30,6 +30,8 @@ import type {
   PluginHost,
   PluginInitContext,
 } from '../../packages/core/src/index';
+import { resolveDataDir } from '../data/data-paths';
+import { resolveAgentCwd } from '../data/path-resolution';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
@@ -237,6 +239,7 @@ export function buildPluginConfigMap(
   agentCwd?: string,
   dataDir?: string,
   envInjection?: EnvInjectionConfig,
+  getLiveConfig?: () => VesselConfig | undefined,
 ): Record<string, Record<string, unknown>> {
   const map: Record<string, Record<string, unknown>> = {};
   for (const entry of declarative) {
@@ -260,6 +263,28 @@ export function buildPluginConfigMap(
   applyPathBoundaryFallback(map);
   applySkillsLibraryIsolation(map, dataDir, skillsActive(configured, declarative));
   applyEnvGranularity(map, envInjection);
+  // live 配置 getter（q-subscription-script，hot-gate 同族修复）：doc-subscription 的
+  // cadence / channel / scripts 第一天走活配置 —— 注入 `liveConfig: () => 活合并安装配置`，
+  // 插件每次 hook run / 工具调用重新解析（runtime-notice live resolver 样板）。
+  // 成员 runtime 复制父 hook 引用后读的也是这份活配置（修 q-doc-subscription-hot-gate
+  // 残留：成员持 install 快照，热改不生效）。内层调用不带 getLiveConfig ⇒ 无递归。
+  // JSON.stringify（pluginConfigKeyOf）自然丢弃函数值 ⇒ 热应用键比较不受影响。
+  if (getLiveConfig !== undefined) {
+    map['doc-subscription'] = {
+      ...(map['doc-subscription'] ?? {}),
+      liveConfig: (): Record<string, unknown> | undefined => {
+        const live = getLiveConfig();
+        if (live === undefined) return undefined;
+        return buildPluginConfigMap(
+          live.plugins,
+          declarativePluginEntries(live),
+          resolveAgentCwd(live),
+          resolveDataDir(live),
+          live.envInjection,
+        )['doc-subscription'];
+      },
+    };
+  }
   return map;
 }
 
@@ -299,11 +324,12 @@ function applySkillsLibraryIsolation(
 }
 
 /**
- * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files / health
- *（health 源 q-health-subscription），basic-tools → lock / conflict（写协调 producer）。
+ * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files / health /
+ * script（health 源 q-health-subscription；script 源 q-subscription-script），
+ * basic-tools → lock / conflict（写协调 producer）。
  */
 const ENV_GRANULARITY_SCOPES: Readonly<Record<string, readonly string[]>> = {
-  'doc-subscription': ['files', 'health'],
+  'doc-subscription': ['files', 'health', 'script'],
   'basic-tools': ['lock', 'conflict'],
 };
 
