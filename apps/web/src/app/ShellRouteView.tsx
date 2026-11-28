@@ -1,3 +1,5 @@
+import { lazy, Suspense } from 'react';
+import { LoadingState } from '../components/States';
 import { AgentsView } from '../domains/agents/AgentsView';
 import { ChatView } from '../domains/chat/ChatView';
 import { GatewayView } from '../domains/gateway/GatewayView';
@@ -12,8 +14,14 @@ import { PluginPageView } from '../domains/plugins/PluginPageView';
 import { RunsView } from '../domains/runs/RunsView';
 import { CapabilitiesPage } from '../domains/settings/NavPages';
 import { TeamsView } from '../domains/teams/TeamsView';
+import { t } from '../i18n';
 import type { Route } from './router';
 import type { PaneResizeApi } from './usePaneResize';
+
+/** 设计实验室整页懒加载（q-design-lab-restore）：token/预览/清单不进首屏 chunk。 */
+const LazyDesignLabView = lazy(() =>
+  import('../domains/design/DesignLabView').then((module) => ({ default: module.DesignLabView })),
+);
 
 /** 按路由渲染主域视图；外壳的 `<main>` 容器、key 与焦点管理留在 AppShell。 */
 export function ShellRouteView({
@@ -57,7 +65,12 @@ export function ShellRouteView({
       {route.domain === 'observe' && <ObserveView route={route} navigate={navigate} />}
       {route.domain === 'plugins' && <PluginPageView route={route} />}
       {route.domain === 'capabilities' && <CapabilitiesPage />}
-      {/* visual / designLab / settings 不再是整页路由：parseRoute 别名进设置弹窗
+      {route.domain === 'designLab' && (
+        <Suspense fallback={<LoadingState label={t('settings.dialog.loading')} />}>
+          <LazyDesignLabView />
+        </Suspense>
+      )}
+      {/* visual / settings 不再是整页路由：parseRoute 别名进设置弹窗
           （ShellOverlays 消费），背景保留上页（AppShell backgroundRoute）。 */}
     </>
   );

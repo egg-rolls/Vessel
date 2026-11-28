@@ -133,6 +133,7 @@ export const messages = {
   'breadcrumb.observe.evals': '评测',
   'breadcrumb.settings': '设置',
   'breadcrumb.capabilities': '能力清单',
+  'breadcrumb.designLab': '设计实验室',
 
   // Settings
   'settings.title': '设置',
@@ -2151,6 +2152,8 @@ export const messages = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': '设计实验室',
+  'designLab.subtitle':
+    'token 与可复用组件都在运行时自动发现：新增 token 或 *.preview.tsx 就会出现在这里；组件清单区审计共享组件的复用度。',
   'designLab.tokens.autoNote':
     '清单由 :root 上实际存在的自定义属性自动枚举（按前缀分组）：新增一个 token 不需要改本页代码。',
   'designLab.tokens.colors': '颜色',

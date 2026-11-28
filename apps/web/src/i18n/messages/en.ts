@@ -133,6 +133,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.observe.evals': 'Evals',
   'breadcrumb.settings': 'Settings',
   'breadcrumb.capabilities': 'Capabilities',
+  'breadcrumb.designLab': 'Design Lab',
 
   // Settings
   'settings.title': 'Settings',
@@ -2274,6 +2275,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': 'Design Lab',
+  'designLab.subtitle':
+    'Tokens and reusable components are discovered at runtime: add a token or a *.preview.tsx and it appears here; the inventory section audits shared-component reuse.',
   'designLab.tokens.autoNote':
     'The list is enumerated from the custom properties that actually exist on :root and grouped by prefix, so a new token needs no change here.',
   'designLab.tokens.colors': 'Colors',
