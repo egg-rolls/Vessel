@@ -139,3 +139,12 @@ export function parseHubEnvName(
   }
   return { ok: true, value: raw };
 }
+
+// ── plugin 名称 ──────────────────────────────────
+
+const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** plugin 名称语法（与 plugin-command 同口径；解析层只做语法）。 */
+export function parsePluginName(raw: string): string | null {
+  return PLUGIN_NAME_RE.test(raw) ? raw : null;
+}

@@ -24,6 +24,7 @@ import {
   parseHubEnvName,
   parseInstanceName,
   parseOlderThanMs,
+  parsePluginName,
   parsePort,
   parseReloadScopes,
   parseTimeoutMs,
@@ -275,6 +276,11 @@ export const FLAG_DEFS = {
       placeholder: '<state>',
     },
     help: 'flag.state',
+  },
+  '--status': {
+    flag: '--status',
+    value: { kind: 'enum', candidates: ['pending', 'orphaned'] },
+    help: 'flag.status',
   },
   '--order': {
     flag: '--order',
@@ -638,6 +644,17 @@ export const FLAG_DEFS = {
     flag: '--ca-file',
     value: { kind: 'string', placeholder: '<path>' },
     help: 'flag.caFile',
+  },
+  // S2b 新增（args 接受但现 CLI_FLAG_VALUE 漏声明；D-13 token 族 help 缺失同源）
+  '--purpose': {
+    flag: '--purpose',
+    value: { kind: 'string', placeholder: '<platform|hub|node|proxy>' },
+    help: 'flag.purpose',
+  },
+  '--allow-non-interactive': {
+    flag: '--allow-non-interactive',
+    value: { kind: 'boolean' },
+    help: 'flag.allowNonInteractive',
   },
 } as const satisfies Readonly<Record<string, FlagSpec>>;
 
@@ -1497,4 +1514,765 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       };
     },
   }),
+  // ── 批 A3：token / plugin / logs / rpc / kanban / model（S2b） ──
+  defineCommand({
+    path: ['token'],
+    surface: 'one-shot',
+    hidden: true, // parse-only；summary 不渲染（token 族现态无 help-spec 条目，D-13）
+    summary: 'help.cmd.tokenList',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing token subcommand (show|list|rotate)',
+      extra: (token) => `Unknown token subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown token subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['token', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for token list: ${token}` },
+    load: async () => {
+      const { tokenListCommand } = await import('./commands/token-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await tokenListCommand(
+              { json: parsed.flags['--json'] },
+              {
+                ...(parsed.globals.dataDirArg !== null
+                  ? { dataDir: parsed.globals.dataDirArg }
+                  : {}),
+              },
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['token', 'rotate'],
+    surface: 'one-shot',
+    flags: ['--yes', '--json', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for token rotate: ${token}` },
+    load: async () => {
+      const { tokenRotateCommand } = await import('./commands/token-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await tokenRotateCommand(
+              { yes: parsed.flags['--yes'], json: parsed.flags['--json'] },
+              {
+                ...(parsed.globals.dataDirArg !== null
+                  ? { dataDir: parsed.globals.dataDirArg }
+                  : {}),
+              },
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['token', 'show'],
+    surface: 'one-shot',
+    flags: ['--purpose', '--node', '--instance', '--json', '--allow-non-interactive', '--data-dir'],
+    required: ['--purpose'],
+    requiredError: () => 'token show requires --purpose <platform|hub|node|proxy>',
+    // token show --instance 不做实例名语法校验（现态任意字符串）
+    flagOverrides: { '--instance': { value: { kind: 'dynamic', placeholder: '<name>' } } },
+    positionalErrors: { extra: (token) => `Unknown argument for token show: ${token}` },
+    load: async () => {
+      const { tokenShowCommand } = await import('./commands/token-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const id = f['--node'] ?? f['--instance'];
+          return printCommandResult(
+            await tokenShowCommand(
+              {
+                purpose: f['--purpose'] ?? '',
+                ...(id !== undefined ? { id } : {}),
+                json: f['--json'],
+              },
+              {
+                allowNonInteractive: f['--allow-non-interactive'],
+                ...(parsed.globals.dataDirArg !== null
+                  ? { dataDir: parsed.globals.dataDirArg }
+                  : {}),
+              },
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['plugin'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.plugin',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing plugin subcommand (list|install|remove)',
+      extra: (token) => `Unknown plugin subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown plugin subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['plugin', 'list'],
+    surface: 'one-shot',
+    flags: ['--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for plugin list: ${token}` },
+    load: async () => {
+      const { runPluginCommand } = await import('./commands/plugin/plugin-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runPluginCommand({ kind: 'list', json: parsed.flags['--json'] }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['plugin', 'install'],
+    surface: 'one-shot',
+    flags: ['--force'],
+    positional: '<path>',
+    positionalErrors: {
+      missing: 'Missing <path> for plugin install',
+      extra: (token) => `Unexpected extra argument for plugin install: ${token}`,
+    },
+    load: async () => {
+      const { runPluginCommand } = await import('./commands/plugin/plugin-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runPluginCommand({
+              kind: 'install',
+              path: parsed.positionals[0] ?? '',
+              force: parsed.flags['--force'],
+            }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['plugin', 'enable'],
+    surface: 'one-shot',
+    positional: '<name>',
+    positionalErrors: {
+      missing: 'Missing <name> for plugin enable',
+      extra: (token) => `Unexpected extra argument for plugin enable: ${token}`,
+    },
+    validate: (p) => {
+      const name = p.positionals[0] ?? '';
+      return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
+    },
+    load: async () => {
+      const { runPluginCommand } = await import('./commands/plugin/plugin-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runPluginCommand({ kind: 'enable', name: parsed.positionals[0] ?? '' }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['plugin', 'disable'],
+    surface: 'one-shot',
+    positional: '<name>',
+    positionalErrors: {
+      missing: 'Missing <name> for plugin disable',
+      extra: (token) => `Unexpected extra argument for plugin disable: ${token}`,
+    },
+    validate: (p) => {
+      const name = p.positionals[0] ?? '';
+      return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
+    },
+    load: async () => {
+      const { runPluginCommand } = await import('./commands/plugin/plugin-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runPluginCommand({ kind: 'disable', name: parsed.positionals[0] ?? '' }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['plugin', 'remove'],
+    surface: 'one-shot',
+    flags: ['--yes'],
+    positional: '<name>',
+    positionalErrors: {
+      missing: 'Missing <name> for plugin remove',
+      extra: (token) => `Unexpected extra argument for plugin remove: ${token}`,
+    },
+    validate: (p) => {
+      const name = p.positionals[0] ?? '';
+      return parsePluginName(name) === null ? `Invalid plugin name: ${name}` : null;
+    },
+    load: async () => {
+      const { runPluginCommand } = await import('./commands/plugin/plugin-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await runPluginCommand({
+              kind: 'remove',
+              name: parsed.positionals[0] ?? '',
+              yes: parsed.flags['--yes'],
+            }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['logs'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.logs',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Usage: vessel logs tail [--json] [--lines N]',
+      extra: () => 'Usage: vessel logs tail [--json] [--lines N]',
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? 'Usage: vessel logs tail [--json] [--lines N]' : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['logs', 'tail'],
+    surface: 'one-shot',
+    flags: ['--json', '--lines', '--instance'],
+    flagOverrides: {
+      '--lines': {
+        value: {
+          kind: 'number',
+          placeholder: '<n>',
+          parse: (raw) => {
+            if (!/^\d+$/.test(raw)) return null;
+            const v = Number.parseInt(raw, 10);
+            return v >= 1 && v <= 10_000 ? v : null;
+          },
+        },
+        invalidError: (raw) =>
+          /^\d+$/.test(raw) ? `Invalid --lines: ${raw} (1-10000)` : `Invalid --lines: ${raw}`,
+      },
+      // logs tail --instance 错误文案无正则后缀（异于选择器口径）
+      '--instance': { invalidError: (raw) => `Invalid --instance: ${raw}` },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for logs tail: ${token}` },
+    load: async () => {
+      const { logsCommand } = await import('./commands/logs-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await logsCommand({
+              kind: 'tail',
+              json: f['--json'],
+              lines: f['--lines'] ?? 50,
+              ...(f['--instance'] !== undefined ? { instance: f['--instance'] } : {}),
+            }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['rpc'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.rpc',
+    positionalErrors: { extra: (token) => `Unknown rpc subcommand: ${token}` },
+    // 裸 rpc：help 兜底 → 全局总览 exit 0（现态 parseRpcArgs args.help=true）
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['rpc', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--node'],
+    positionalErrors: { extra: (token) => `Unknown argument for rpc list: ${token}` },
+    validate: (p) => {
+      const g = p.globals;
+      const connectOnly =
+        g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+      if (
+        connectOnly !== null &&
+        g.connectArg === null &&
+        (process.env.VESSEL_CONNECT ?? '').trim() === ''
+      ) {
+        return `${connectOnly} requires --connect`;
+      }
+      return null;
+    },
+    load: async () => {
+      const { rpcListCommand } = await import('./commands/rpc-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await rpcListCommand({
+              json: parsed.flags['--json'],
+              connectUrl: parsed.globals.connectArg,
+              connectToken: parsed.globals.connectTokenArg,
+              caFile: parsed.globals.caArg,
+              nodeId: parsed.globals.nodeTargetArg,
+            }),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['kanban'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.kanban',
+    positionalErrors: { extra: (token) => `Unknown kanban subcommand: ${token} (list|view)` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['kanban', 'list'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--column',
+      '--owner',
+      '--status',
+      '--data-dir',
+      '--node',
+      '--connect',
+      '--connect-token',
+      '--ca',
+    ],
+    flagOverrides: {
+      '--column': { value: { kind: 'string', placeholder: '<列名>' } },
+      '--owner': { value: { kind: 'string', placeholder: '<owner>' } },
+      '--status': { value: { kind: 'string', placeholder: '<列名>' }, help: 'flag.kanbanStatus' },
+      '--node': { value: { kind: 'string', placeholder: '<id>' } },
+    },
+    positionalErrors: { extra: (token) => `Unexpected argument for kanban list: ${token}` },
+    validate: (p) => {
+      const g = p.globals;
+      const connectOnly =
+        g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+      if (
+        connectOnly !== null &&
+        g.connectArg === null &&
+        (process.env.VESSEL_CONNECT ?? '').trim() === ''
+      ) {
+        return `${connectOnly} requires --connect`;
+      }
+      return null;
+    },
+    load: async () => {
+      const { kanbanListCommand } = await import('./commands/kanban-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          return printCommandResult(
+            await kanbanListCommand({
+              json: f['--json'],
+              ...(f['--column'] !== undefined ? { column: f['--column'] } : {}),
+              ...(f['--owner'] !== undefined ? { owner: f['--owner'] } : {}),
+              ...(f['--status'] !== undefined ? { status: f['--status'] } : {}),
+              connectUrl: g.connectArg,
+              connectToken: g.connectTokenArg,
+              caFile: g.caArg,
+              nodeId: g.nodeTargetArg,
+              dataDir: g.dataDirArg ?? (await resolveCommandDataDir()),
+            }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['kanban', 'view'],
+    surface: 'one-shot',
+    flags: ['--json', '--data-dir', '--node', '--connect', '--connect-token', '--ca'],
+    flagOverrides: { '--node': { value: { kind: 'string', placeholder: '<id>' } } },
+    positional: '<id>',
+    positionalErrors: {
+      missing: 'kanban view requires exactly one task id',
+      extra: () => 'kanban view requires exactly one task id',
+    },
+    validate: (p) => {
+      const g = p.globals;
+      const connectOnly =
+        g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+      if (
+        connectOnly !== null &&
+        g.connectArg === null &&
+        (process.env.VESSEL_CONNECT ?? '').trim() === ''
+      ) {
+        return `${connectOnly} requires --connect`;
+      }
+      return null;
+    },
+    load: async () => {
+      const { kanbanViewCommand } = await import('./commands/kanban-command');
+      const { printCommandResult, resolveCommandDataDir } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const g = parsed.globals;
+          return printCommandResult(
+            await kanbanViewCommand(parsed.positionals[0] ?? '', {
+              json: parsed.flags['--json'],
+              connectUrl: g.connectArg,
+              connectToken: g.connectTokenArg,
+              caFile: g.caArg,
+              nodeId: g.nodeTargetArg,
+              dataDir: g.dataDirArg ?? (await resolveCommandDataDir()),
+            }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.model',
+    positionalErrors: { extra: (token) => `Unknown model subcommand: ${token}` },
+    load: async () => {
+      const { renderGlobalHelp } = await import('./help');
+      return {
+        run: async () => {
+          console.log(renderGlobalHelp());
+          return 0;
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca'],
+    positionalErrors: { extra: () => 'model list takes no positional arguments' },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              { kind: 'list', json: parsed.flags['--json'] },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'set'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca', '--entry'],
+    required: ['--entry'],
+    requiredError: () => 'model set requires --entry <json>',
+    flagOverrides: {
+      '--entry': {
+        value: {
+          kind: 'dynamic',
+          placeholder: '<json>',
+          parse: (raw) => {
+            try {
+              const v: unknown = JSON.parse(raw);
+              if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+                return { ok: false, error: '--entry must be a JSON object (model entry)' };
+              }
+              return { ok: true, value: v };
+            } catch (error) {
+              return {
+                ok: false,
+                error: `Invalid --entry JSON: ${error instanceof Error ? error.message : String(error)}`,
+              };
+            }
+          },
+        },
+      },
+    },
+    positional: '<id>',
+    positionalErrors: {
+      missing: 'model set requires <id>',
+      extra: () => 'model set requires <id>',
+    },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              {
+                kind: 'set',
+                id: parsed.positionals[0] ?? '',
+                entry: parsed.flags['--entry'],
+                json: parsed.flags['--json'],
+              },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'remove'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca'],
+    positional: '<id>',
+    positionalErrors: {
+      missing: 'model remove requires <id>',
+      extra: () => 'model remove requires <id>',
+    },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              { kind: 'remove', id: parsed.positionals[0] ?? '', json: parsed.flags['--json'] },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'set-default'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca'],
+    positional: '<ref>',
+    positionalErrors: {
+      missing: 'model set-default requires <ref>',
+      extra: () => 'model set-default requires <ref>',
+    },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              {
+                kind: 'set-default',
+                ref: parsed.positionals[0] ?? '',
+                json: parsed.flags['--json'],
+              },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'credential-set'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--base-url',
+      '--api-key-env',
+      '--value-env',
+      '--value-stdin',
+    ],
+    required: ['--base-url'],
+    requiredError: () => 'model credential-set requires --base-url <url>',
+    usage:
+      'vessel model credential-set <id> --base-url <url> [--api-key-env <ENV>] [--value-env <ENV> | --value-stdin] [options]',
+    exclusive: [['--value-env', '--value-stdin']],
+    exclusiveError: '--value-env and --value-stdin are mutually exclusive',
+    positional: '<id>',
+    positionalErrors: {
+      missing: 'model credential-set requires <id>',
+      extra: () => 'model credential-set requires <id>',
+    },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await modelCommand(
+              {
+                kind: 'credential-set',
+                id: parsed.positionals[0] ?? '',
+                baseUrl: f['--base-url'] ?? '',
+                ...(f['--api-key-env'] !== undefined ? { apiKeyEnv: f['--api-key-env'] } : {}),
+                ...(f['--value-env'] !== undefined ? { valueEnv: f['--value-env'] } : {}),
+                valueStdin: f['--value-stdin'],
+                json: f['--json'],
+              },
+              modelTargeting(parsed.globals),
+            ),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'credential-remove'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca'],
+    positional: '<id>',
+    positionalErrors: {
+      missing: 'model credential-remove requires <id>',
+      extra: () => 'model credential-remove requires <id>',
+    },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              {
+                kind: 'credential-remove',
+                id: parsed.positionals[0] ?? '',
+                json: parsed.flags['--json'],
+              },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'credentials-list'],
+    surface: 'one-shot',
+    flags: ['--json', '--connect', '--connect-token', '--ca'],
+    positionalErrors: { extra: () => 'model credentials-list takes no positional arguments' },
+    validate: (p) => modelConnectError(p.globals),
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) =>
+          printCommandResult(
+            await modelCommand(
+              { kind: 'credentials-list', json: parsed.flags['--json'] },
+              modelTargeting(parsed.globals),
+            ),
+          ),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['model', 'test'],
+    surface: 'one-shot',
+    flags: [
+      '--json',
+      '--connect',
+      '--connect-token',
+      '--ca',
+      '--credential',
+      '--provider',
+      '--model',
+    ],
+    positional: '[<entry>]',
+    positionalErrors: {
+      extra: () => 'model test requires [<entry>] (--credential <id> for a credential-level ping)',
+    },
+    validate: (p) => {
+      const connectError = modelConnectError(p.globals);
+      if (connectError !== null) return connectError;
+      const entry = p.positionals[0];
+      const credential = p.flags['--credential'];
+      if (entry !== undefined && credential !== undefined) {
+        return 'model test takes <entry> or --credential, not both';
+      }
+      if (entry === undefined && credential === undefined) {
+        return 'model test requires <entry> or --credential <id>';
+      }
+      return null;
+    },
+    load: async () => {
+      const { modelCommand } = await import('./commands/model');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const entry = parsed.positionals[0];
+          return printCommandResult(
+            await modelCommand(
+              {
+                kind: 'test',
+                ...(entry !== undefined ? { entry } : {}),
+                ...(f['--credential'] !== undefined ? { credential: f['--credential'] } : {}),
+                ...(f['--provider'] !== undefined ? { provider: f['--provider'] } : {}),
+                ...(f['--model'] !== undefined ? { model: f['--model'] } : {}),
+                json: f['--json'],
+              },
+              modelTargeting(parsed.globals),
+            ),
+          );
+        },
+      };
+    },
+  }),
 ];
+
+/** model 族连接校验（现 parseModelArgs 5052-5060：--connect 或 VESSEL_CONNECT env）。 */
+function modelConnectError(g: Globals): string | null {
+  const connectOnly =
+    g.connectTokenArg !== null ? '--connect-token' : g.caArg !== null ? '--ca' : null;
+  if (
+    connectOnly !== null &&
+    g.connectArg === null &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return `${connectOnly} requires --connect`;
+  }
+  return null;
+}
+
+/** model 族 targeting（registry 包装器口径）。 */
+function modelTargeting(g: Globals): {
+  connectUrl: string | null;
+  connectToken: string | null;
+  caFile: string | null;
+} {
+  return { connectUrl: g.connectArg, connectToken: g.connectTokenArg, caFile: g.caArg };
+}

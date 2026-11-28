@@ -294,7 +294,9 @@ function parseCommandArgs(
 function checkPositionals(spec: CommandSpec, positionals: readonly string[]): string | null {
   const form = spec.positional;
   if (form === undefined) {
-    return positionals.length === 0 ? null : `Unknown argument: ${positionals[0]}`;
+    if (positionals.length === 0) return null;
+    const token = positionals[0] ?? '';
+    return spec.positionalErrors?.extra?.(token) ?? `Unknown argument: ${token}`;
   }
   const parts = form.split(/\s+/).filter((p) => p !== '');
   let required = 0;

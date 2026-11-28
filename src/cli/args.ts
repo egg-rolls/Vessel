@@ -19,6 +19,7 @@ import {
   parseHubTtl,
   parseInstanceName,
   parseOlderThanMs,
+  parsePluginName,
   parsePort,
   parseReloadScopes,
   parseTimeoutMs,
@@ -1632,8 +1633,7 @@ function parseTraceArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** 插件短名：防止 `remove` 越出用户插件目录 */
-export const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** 插件短名校验移居 parse-validators.ts（parsePluginName；cli-single-source S2） */
 
 /** `plugin list [--json] | install <path> [--force] | remove <name> [--yes]` */
 function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
@@ -1711,7 +1711,7 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (args.help) return { ok: true, args };
     if (name === undefined) return { ok: false, error: `Missing <name> for plugin ${sub}` };
-    if (!PLUGIN_NAME_RE.test(name)) {
+    if (parsePluginName(name) === null) {
       return { ok: false, error: `Invalid plugin name: ${name}` };
     }
     args.pluginCommand = { kind: sub, name };
@@ -1743,7 +1743,7 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
     if (name === undefined || name.trim() === '') {
       return { ok: false, error: 'Missing <name> for plugin remove' };
     }
-    if (!PLUGIN_NAME_RE.test(name)) {
+    if (parsePluginName(name) === null) {
       return { ok: false, error: `Invalid plugin name: ${name}` };
     }
     args.pluginCommand = { kind: 'remove', name, yes };

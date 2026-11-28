@@ -309,6 +309,8 @@ export const en: Record<MessageKey, string> = {
   'flag.peerTeamId': 'the team on the target node to pair with (defaults to --team-id)',
   'flag.allowDirectory': 'allow inbound team-info directory queries from this peer',
   'flag.caFile': 'CA bundle path for the peer TLS connection',
+  'flag.purpose': 'Token purpose (platform|hub|node|proxy)',
+  'flag.allowNonInteractive': 'Allow non-interactive mode (refuses interactive prompts by default)',
   'flag.help': 'show usage for this command',
 
   // ── common ──

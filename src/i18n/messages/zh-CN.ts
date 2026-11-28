@@ -289,6 +289,8 @@ export const zhCN = {
   'flag.peerTeamId': '要配对的目标节点 Team（缺省 = --team-id）',
   'flag.allowDirectory': '允许该 peer 入站查询本机 Team 目录（team-info）',
   'flag.caFile': '对端 TLS 连接的 CA 证书路径',
+  'flag.purpose': '令牌用途（platform|hub|node|proxy）',
+  'flag.allowNonInteractive': '允许非交互模式（缺省拒绝提示交互）',
   'flag.help': '显示该命令的用法',
 
   // ── common ──
