@@ -139,9 +139,14 @@ function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelope
  */
 export function hasBootRegistryKey(config: VesselConfig, dataDir: string): boolean {
   const snapshot = synthesizeLegacyRegistry(config);
+  // CHAIN-04：与运行期 resolveModel 同一 env 优先级（§2.6 冻结）——VESSEL_MODEL 非空
+  // 以其为 ref（env 赢 models.default）。闸此前只解析 models.default：env 指向的注册
+  // 条目凭证已配置时仍被误判「未配置 API Key」，或查错条目的凭证。
+  const envModel = process.env.VESSEL_MODEL;
+  const effectiveRef = envModel !== undefined && envModel !== '' ? envModel : undefined;
   let resolved: ResolvedModel | undefined;
   try {
-    resolved = resolveModelRef(snapshot, undefined);
+    resolved = resolveModelRef(snapshot, effectiveRef);
   } catch {
     return false;
   }
