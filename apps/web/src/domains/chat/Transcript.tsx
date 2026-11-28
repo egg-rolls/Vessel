@@ -410,5 +410,7 @@ export function Transcript({
     // 行级 memo：item / render 引用不变 ⇒ 整行跳过（流式期每帧只动脏行）。
     nodes.push(<TranscriptItemRow key={item.key} item={item} render={renderItem} />);
   }
-  return <div className="flex flex-col gap-4 py-1.5 pb-2.5">{nodes}</div>;
+  // 垂直节奏（q-chat-spacing）：行间距统一 --space-2（8px，gap-2）——思考 / 正文 /
+  // 卡片相邻等距且紧凑。角色切换的更大一档由 chat.css 的行级 :has 规则补（8+8=16）。
+  return <div className="flex flex-col gap-2 py-1.5 pb-2.5">{nodes}</div>;
 }
