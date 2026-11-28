@@ -44,7 +44,7 @@ paths: [src/plugin/plugin-loader.ts, src/plugin/plugin-manifest.ts, src/plugin/p
 ```
 
 - `id` 全仓库唯一；`contributes.events` 必须是 `permissions.events` 的子集；`rpc[].name` 只能是裸名，宿主注册为 `plugin.<id>.<name>`，`permission` 缺省 `read`、`write` 须显式声明。`entry` / `ui.dir` 必须在 plugin 目录内（realpath containment）；覆盖内置插件需 `vessel.override: true`。`contributes.http` 的 path 在 `/plugins/<id>/` 之后的首段不得为 `ui`（embed 静态命名空间保留，plugin-embed 契约 §2）。
-- `toolbar[].menu` 是通用 RPC 绑定菜单（additive）：`read` / `write` 裸名须在本插件 rpc 白名单内且权限匹配（校验在 Web 归一化层）；`valueKey` 取当前值 / 传选中值，`sessionScoped` 由宿主注入当前 session_id；items ≤16、value ≤64 字符；形状违规丢 menu 保留普通按钮声明。先例 `plugins/context/thinking-intensity`。
+- `toolbar[].menu` 是通用 RPC 绑定菜单（additive）：`read` / `write` 裸名须在本插件 rpc 白名单内且权限匹配（校验在 Web 归一化层）；`valueKey` 取当前值 / 传选中值，`sessionScoped` 由宿主注入当前 session_id；items ≤16、value ≤64 字符；形状违规丢 menu 保留普通按钮声明。read 结果可选字段：`options` 能力过滤（`auto` 项恒保留豁免——auto=清 override，对任何模型合法）、`hint` 菜单底部说明行（i18n key 或短文案；宿主经 `pluginT` 按插件 catalog 解析，未命中回落原文，零插件专属代码）、`enabled:false` 置灰。先例 `plugins/context/thinking-intensity`。
 - `contributes.composer[]` 是输入框内嵌贡献（槽位闭集 `refs | drop | link`）：refs / link 必须 `scheme`（小写字母开头、字母数字连字符 ≤32）+ `component`，drop 必须 `handler`；component / handler 都是 embed 具名导出 ⇒ 声明它们必须有 `ui.embed`（与 pages.component 同一 fail-closed 口径）。宿主只认通用接缝（scheme / 具名导出），零功能名；插件撤离 ⇒ 贡献消失（宿主侧 `apps/web/src/domains/plugins/composer-extensions.tsx`，SDK 契约见 [plugin-embed](plugin-embed.md)）。
 - `vessel.lifecycle` 可选声明 per-capability 生效方式（`toggle / settings / code: 'hot' | 'restart'`），只允许比宿主推导**更保守**（见下「热重载」）。
 
