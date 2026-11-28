@@ -144,8 +144,9 @@ export function deliveryFromNotify(notify: boolean | undefined): AgentInboxDeliv
  * 「工具返回一次 + inbox 又插一次」的双份。
  *
  * `running` 占位**不可被 read 消费 / 弹出**（readable/visible/inputHead 都跳过它），
- * 在 list 里**沉底**（pinned-bottom）；done/failed 后回到正常可读队列（仍可 read 消费，
- * 但 `quiet` 留档语义保证它不会被当成 run input 直投 —— 唤醒读取，正文由模型自己拉）。
+ * 在 list 里**沉底**（pinned-bottom）；done/failed 后回到正常可读队列（仍可 read 消费）。
+ * q-inbox-admit-restore 起占位卡**只管卡片视觉**（quiet 留档，永不当 run input）；
+ * 结果投递是**另一条独立正常条目**（completeAsyncJob 落盘，走队头直投成正文 run）。
  *
  * **通用解耦**：占位行为（不可消费 / 沉底 / 原位复原 / 防双真相 / 不计 unread）全部
  * **kind 无关**。`kind` 是消费者类别扩展点 —— `'bash'` 首个消费者，`'ask'` 未来消费者
