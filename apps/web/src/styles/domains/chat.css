@@ -599,10 +599,6 @@ button.tool-image-thumb:focus-visible {
   cursor: pointer;
 }
 
-.inline-ref-chip-body:hover .inline-ref-name {
-  color: var(--accent);
-}
-
 .inline-ref-chip-body:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -639,8 +635,8 @@ button.tool-image-thumb:focus-visible {
   font-family: var(--font-mono);
 }
 
-.inline-ref-chip .ref-card-badge {
-  font-size: 10.5px;
+.inline-ref-chip-body:hover .inline-ref-name {
+  color: var(--accent);
 }
 
 /* 尾部剩余 refs chip 行（气泡内尾部内联，裁示①）：与正文留一行距。 */

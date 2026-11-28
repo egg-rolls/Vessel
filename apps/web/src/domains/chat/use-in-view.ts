@@ -8,14 +8,14 @@
  */
 import { useEffect, useRef, useState } from 'react';
 
-export function useInView<T extends Element>(rootMargin = '200px'): {
+export function useInView<T extends Element>(
+  rootMargin = '200px',
+): {
   ref: React.RefObject<T | null>;
   inView: boolean;
 } {
   const ref = useRef<T | null>(null);
-  const [inView, setInView] = useState(
-    () => typeof IntersectionObserver === 'undefined',
-  );
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined');
 
   useEffect(() => {
     if (inView) return;

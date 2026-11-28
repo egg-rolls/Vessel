@@ -18,10 +18,12 @@ import { RefIcon } from './RefIcon';
 import { useInView } from './use-in-view';
 import { useRefPreview } from './use-ref-preview';
 
-export function InlineRefChip({ card }: { card: FileTokenCard }) {
+export function InlineRefChip({ card, titleMeta }: { card: FileTokenCard; titleMeta?: string }) {
   const { ref, inView } = useInView<HTMLSpanElement>();
   const preview = useRefPreview(card, inView);
   const { kind, name, url, loading, expired, staging, deliveryText, onClick } = preview;
+  const title =
+    titleMeta !== undefined && titleMeta !== '' ? `${card.path}\n${titleMeta}` : card.path;
 
   return (
     <span
@@ -33,7 +35,7 @@ export function InlineRefChip({ card }: { card: FileTokenCard }) {
       <button
         type="button"
         className="inline-ref-chip-body"
-        title={card.path}
+        title={title}
         aria-label={
           url !== undefined
             ? t('chat.toolImage.previewNamed', { name })
@@ -44,7 +46,10 @@ export function InlineRefChip({ card }: { card: FileTokenCard }) {
         {url !== undefined ? (
           <img className="inline-ref-thumb" src={url} alt="" loading="lazy" decoding="async" />
         ) : loading ? (
-          <span className="inline-ref-thumb inline-ref-thumb-loading animate-pulse" aria-busy="true">
+          <span
+            className="inline-ref-thumb inline-ref-thumb-loading animate-pulse"
+            aria-busy="true"
+          >
             <span className="sr-only">{t('chat.toolImage.loading')}</span>
           </span>
         ) : (

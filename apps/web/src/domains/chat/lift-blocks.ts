@@ -33,6 +33,8 @@ import {
 import { blockViews, type FileBlockPayload } from './block-views';
 import { runtimeEnvCard } from './env-notice';
 import { type FileTokenMatch, matchFileTokens, scanFileTokens } from './file-token';
+// 宿主原生 vessel-ref link 渲染器注册（裁示③）：消费点 import liftBlocks 即完成。
+import './host-vessel-ref';
 import { composeQuoteText, liftQuoteForDisplay } from './quote-ref';
 import { composeSessionRefText, liftSessionRefForDisplay } from './session-ref';
 import { toolImageRefsOf } from './transcript-items';

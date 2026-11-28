@@ -2,7 +2,7 @@
 import { Fragment, memo, type ReactNode, useMemo, useRef } from 'react';
 import { t } from '../i18n';
 import { tableToMarkdown } from '../text';
-import { useLinkEnhancer } from './link-enhancers';
+import { useHostLinkEnhancer, useLinkEnhancer } from './link-enhancers';
 import {
   type InlineNode,
   isSafeHref,
@@ -17,14 +17,20 @@ import { cn, Icon, useMessageCopy } from './ui';
 import { useTypewriterText } from './ui/useTypewriterText';
 
 /**
- * link 渲染三档（file-ref-ux A6/A9）：
+ * link 渲染四档（图片内嵌气泡精炼裁示③加宿主档）：
+ * 0. 命中宿主原生渲染器（vessel-ref）⇒ 宿主内联 chip（插件禁用不露原文）；
  * 1. 命中插件 link 增强器（scheme 声明式注册）⇒ 插件卡片；
  * 2. 通用安全 scheme（http/https/mailto/锚点/相对）⇒ 既有 `<a target=_blank>`；
- * 3. 未知 scheme（含无增强器的 vessel-ref）⇒ 不可点击文本，名称+目标可见
+ * 3. 未知 scheme ⇒ 不可点击文本，名称+目标可见
  *    （通用 markdown 兜底，不是引用功能残留；绝不导航）。
  */
 function LinkInline({ href, text }: { href: string; text: string }): ReactNode {
+  // 两个查表 hook 都无条件先调（hook 顺序恒定），再按档位分流。
+  const HostCard = useHostLinkEnhancer(href);
   const enhancer = useLinkEnhancer(href);
+  if (HostCard !== undefined) {
+    return <HostCard href={href} text={text} />;
+  }
   if (enhancer !== undefined) {
     const Card = enhancer.component;
     return <Card href={href} text={text} host={enhancer.host} />;
