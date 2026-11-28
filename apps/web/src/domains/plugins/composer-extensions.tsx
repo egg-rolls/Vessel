@@ -86,6 +86,7 @@ function ComposerPluginBridge({
   const embed = plugin.ui_embed;
   const hash = plugin.ui_bundle_hash ?? '';
   const embedEntry = embed?.entry;
+  const embedCss = embed?.css;
   const runtimeReact = embed?.runtime.react;
   const runtimeSdk = embed?.runtime.sdk;
   const moduleUrl =
@@ -125,6 +126,27 @@ function ComposerPluginBridge({
       disposePluginHost(pluginId);
     };
   }, [embedEntry, runtimeReact, runtimeSdk, hash, moduleUrl, firstExport, pluginId]);
+
+  // css 注入（?v=hash 与入口同口径，先例 PluginEmbed）：composer 上下文没有
+  // page 槽的 link，不注入则插件样式（开关等）塌缩。与 page 槽去重：同 href
+  // 的 link 已存在则复用（不创建也不移除）；卸载 / 哈希变化仅移除自己注入的。
+  useEffect(() => {
+    if (embedCss === undefined || hash === '') return;
+    const cssUrl = pluginEmbedAssetUrl(nodeUrl, pluginId, embedCss);
+    if (cssUrl === null) return;
+    const href = `${cssUrl}?v=${hash}`;
+    for (const existing of document.head.querySelectorAll('link[rel="stylesheet"]')) {
+      if (existing.getAttribute('href') === href) return;
+    }
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.setAttribute('data-plugin-css', pluginId);
+    document.head.appendChild(link);
+    return () => {
+      link.remove();
+    };
+  }, [embedCss, hash, nodeUrl, pluginId]);
 
   useEffect(() => {
     if (module === null || !surfaceReady) return;
