@@ -47,10 +47,12 @@ export type TargetResolution =
   | { ok: false; error: string };
 
 /**
- * 信息源契约（设计稿 §3.1 草图落地）。TEntry / TContext 由实现方注入
- * （插件的 SubscriptionEntry / BeforeLlmHookDeps），core 保持零依赖。
+ * 信息源契约（设计稿 §3.1 草图落地）。TEntry / TContext / TChange 由实现方注入
+ * （插件的 SubscriptionEntry / BeforeLlmHookDeps / 通知素材行），core 保持零依赖。
+ * TChange 缺省 string（file/health 的已格式化明细行）；script 源注入富素材
+ * （ScriptNoticeEntry）——契约是提取现态形状，不是发明（§3.2）。
  */
-export interface SourceModule<TEntry = unknown, TContext = unknown> {
+export interface SourceModule<TEntry = unknown, TContext = unknown, TChange = string> {
   /** 源词（scope 词表登记值，★D5：agent 源统一 'agent'）。 */
   readonly source: string;
   /** 输入校验 + 归一 → 键空间键（同步或异步均可）。 */
@@ -60,7 +62,7 @@ export interface SourceModule<TEntry = unknown, TContext = unknown> {
   /** 游标族描述。 */
   readonly cursor: CursorSpec;
   /** 变更列表 → 通知文案（预算内）。 */
-  format(changes: readonly string[], budget: NoticeBudget): NoticePayload;
+  format(changes: readonly TChange[], budget: NoticeBudget): NoticePayload;
   /** 投递族：ambient = 环境注入；wake = 固定推送（P2 起）。 */
   readonly delivery: 'ambient' | 'wake';
 }

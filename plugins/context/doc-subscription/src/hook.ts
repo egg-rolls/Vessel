@@ -308,7 +308,7 @@ function isSelfWrite(
  * `undefined` = 跳过（快照缺失 / 读失败），不推进任何游标（与文件读失败同语义）。
  * 探测本身在宿主侧（node-health-watch）；插件只消费事实，不 import 宿主模块。
  */
-async function observeHealthEntry(
+export async function observeHealthEntry(
   entry: SubscriptionEntry,
   deps: BeforeLlmHookDeps,
 ): Promise<{ rev: string; snapshot: HealthSnapshot } | undefined> {
@@ -336,7 +336,7 @@ function healthNoticeLine(entry: SubscriptionEntry, snapshot: HealthSnapshot): s
 }
 
 /** script 源单条目处理结果 */
-interface ScriptProcessOutcome {
+export interface ScriptProcessOutcome {
   /** 更新后的条目（无变化时原引用） */
   entry: SubscriptionEntry;
   /** 需要投递的通知素材（空抑制 / diff 空 / 非零 exit 时缺省） */
@@ -356,7 +356,7 @@ interface ScriptProcessOutcome {
  * - full 模式 / 首次（无 snapshot）：全量投递（裁点 2：存量问题立刻可见）。
  * - snapshot 只在 ≤ maxFullBytes 时存（diff 基准 + inspect 正文，与 file 源同口径）。
  */
-function processScriptEntry(
+export function processScriptEntry(
   entry: SubscriptionEntry,
   spec: ScriptSpec | undefined,
   runner: ScriptRunner,
