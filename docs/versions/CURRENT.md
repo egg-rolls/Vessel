@@ -5,7 +5,7 @@
 
 ## 版本
 
-**2.1.26**（2026-11-27 收口）— manifest 根 `package.json` = `2.1.26`（workspace manifests 同线；
+**2.2.0**（2026-11-28 收口）— manifest 根 `package.json` = `2.2.0`（workspace manifests 同线；
 `packages/plugin-sdk` 独立版本线 `1.0.0`，仅 SDK 契约变更时 bump）。
 版本号以根 `package.json` 为唯一来源。tag 状态见 `git tag -l 'v*'`（tag push 触发 release.yml）。
 当前变更摘要见 [CHANGELOG](../../CHANGELOG.md)；版本记录见 [INDEX.md](INDEX.md)。
@@ -47,5 +47,5 @@
 
 - 版本历史：[INDEX.md](INDEX.md)
 - 变更摘要：[../../CHANGELOG.md](../../CHANGELOG.md)
-- 版本记录：[2.1.26](2.1.26.md)、[2.1.25](2.1.25.md)、[2.1.24](2.1.24.md)、[2.1.23](2.1.23.md)
+- 版本记录：[2.2.0](2.2.0.md)、[2.1.26](2.1.26.md)、[2.1.25](2.1.25.md)、[2.1.24](2.1.24.md)
 - 发布手册：[../operations/RELEASE.md](../operations/RELEASE.md)
