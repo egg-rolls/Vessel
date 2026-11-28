@@ -143,7 +143,7 @@ class FeishuChannelImpl implements FeishuPlugin {
       this.started = true;
       this.setConnected(true);
     } catch (error) {
-      await this.runner.stop().catch(() => undefined);
+      await this.runner.stop().catch(() => undefined); // benign: 关停尽力而为——失败不阻断停止流程。
       this.runner = undefined;
       const message = this.sanitize(errorMessage(error));
       this.lastError = message;
@@ -245,7 +245,7 @@ class FeishuChannelImpl implements FeishuPlugin {
     if (this.config.ackReaction) {
       void this.transport
         .react?.({ messageId: message.messageId, emojiType: FEISHU_ACK_EMOJI })
-        .catch(() => undefined);
+        .catch(() => undefined); // benign: 👀 回执 fire-and-forget（P1-A4 D4：无权限/失败静默降级，不影响回复）。
     }
 
     this.publish('channel.feishu.message.received', message.chatId, {

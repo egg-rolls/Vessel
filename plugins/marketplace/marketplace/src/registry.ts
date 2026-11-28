@@ -300,7 +300,7 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch(() => {}); // benign: 超限取消流，失败不掩盖原始错误。
         throw new MarketplaceError('registry_fetch_failed', 'registry index is too large');
       }
       chunks.push(value);
@@ -347,7 +347,7 @@ async function writeCache(cachePath: string, cache: CacheFile): Promise<void> {
   try {
     await rename(tmp, cachePath);
   } catch (error) {
-    await unlink(tmp).catch(() => {});
+    await unlink(tmp).catch(() => {}); // benign: 错误路径清理临时文件，失败不掩盖原始错误。
     try {
       await writeFile(cachePath, body, { encoding: 'utf-8', mode: 0o600 });
     } catch {

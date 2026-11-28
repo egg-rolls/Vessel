@@ -69,7 +69,7 @@ async function stageOne(
     error,
     retry: () => {
       transient?.update({ status: 'uploading', name: file.name } satisfies TransientData);
-      void stageOne(file, port, at, transient, notify, copy).catch(() => undefined);
+      void stageOne(file, port, at, transient, notify, copy).catch(() => undefined); // benign: fire-and-forget——失败经 transient error 态 + notify('error') 可见。
     },
   };
   if (transient !== null) transient.update(data);
@@ -101,6 +101,7 @@ export const onFilesDropped: ComposerDropHandler = (files, port, at) => {
       } satisfies TransientData,
       at.offset ?? undefined,
     );
+    // benign: fire-and-forget——失败经 transient error 态 + notify 可见。
     void stageOne(file, port, at, transient, notify, copy).catch(() => undefined);
   }
 };

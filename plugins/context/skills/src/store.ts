@@ -233,7 +233,7 @@ export class SkillsStore {
   /** 串行化写：同目标文件的写按调用顺序落盘 */
   private enqueue(target: string, write: () => Promise<void>): Promise<void> {
     const previous = this.chains.get(target) ?? Promise.resolve();
-    const next = previous.catch(() => {}).then(write);
+    const next = previous.catch(() => {}).then(write); // benign: 串行链续接——write 失败经调用方 promise 可见。
     this.chains.set(target, next);
     return next.finally(() => {
       if (this.chains.get(target) === next) this.chains.delete(target);

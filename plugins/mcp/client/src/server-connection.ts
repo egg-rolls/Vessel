@@ -140,7 +140,7 @@ export class McpServerConnection {
         transport: this.config.transport,
         error: this.error,
       });
-      await transport.close().catch(() => {});
+      await transport.close().catch(() => {}); // benign: 错误路径关闭传输，失败不掩盖原始错误。
     }
   }
 
@@ -242,7 +242,7 @@ export class McpServerConnection {
     this.closed = true;
     const transport = this.transport;
     this.transport = undefined;
-    await transport?.close().catch(() => {});
+    await transport?.close().catch(() => {}); // benign: 关闭路径尽力而为。
   }
 
   private async handshake(transport: McpTransport): Promise<void> {

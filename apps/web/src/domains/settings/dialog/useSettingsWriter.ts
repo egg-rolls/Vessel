@@ -166,7 +166,7 @@ export function useSettingsWriter(): SettingsWriter {
           }
           let confirmed = false;
           for (let attempt = 0; attempt < WRITE_CONFIRM_ATTEMPTS; attempt += 1) {
-            const fresh = await client.listPlugins().catch(() => undefined);
+            const fresh = await client.listPlugins().catch(() => undefined); // benign: 写确认探针——失败重试（有界），终态未确认走告警。
             const entry = fresh?.find((plugin) => plugin.name === def.pluginId);
             if (entry !== undefined && pluginValueMatches(entry.config?.[def.key], raw)) {
               confirmed = true;
@@ -214,7 +214,7 @@ export function useSettingsWriter(): SettingsWriter {
         // 写入成功 ≠ gateway 已回报新值（热应用 debounce）：分批重拉直到确认。
         let confirmed = false;
         for (let attempt = 0; attempt < WRITE_CONFIRM_ATTEMPTS; attempt += 1) {
-          const fresh = await reloadConfigAsync().catch(() => undefined);
+          const fresh = await reloadConfigAsync().catch(() => undefined); // benign: 写确认探针——失败重试（有界），终态未确认走告警。
           if (fresh !== undefined && readDisplayValue(fresh, def.key) === raw) {
             confirmed = true;
             break;

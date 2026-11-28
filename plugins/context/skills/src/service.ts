@@ -117,7 +117,7 @@ export class SkillsService {
 
   /** 串行化扫描任务 */
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.chain.catch(() => {}).then(task);
+    const next = this.chain.catch(() => {}).then(task); // benign: 串行链续接——task 失败经调用方 promise 可见。
     this.chain = next;
     return next;
   }

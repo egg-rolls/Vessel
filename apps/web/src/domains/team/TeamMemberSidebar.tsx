@@ -36,7 +36,7 @@ export function groupTeamMembers(members: readonly TeamMember[]): TeamMember[] {
 }
 
 function copyAgentId(agentId: string): void {
-  void navigator.clipboard?.writeText(agentId).catch(() => undefined);
+  void navigator.clipboard?.writeText(agentId).catch(() => undefined); // benign: 剪贴板尽力而为——不可用时 UI 仍显示 id。
 }
 
 export interface TeamMemberSidebarProps {

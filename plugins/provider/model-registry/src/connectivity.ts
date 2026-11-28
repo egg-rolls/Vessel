@@ -112,7 +112,7 @@ export async function testConnectivity(options: {
       return fail('http_error', `HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
     }
     // 成功即连通；丢弃响应体释放连接，不解析内容。
-    await res.body?.cancel().catch(() => {});
+    await res.body?.cancel().catch(() => {}); // benign: 探测后取消流尽力而为。
     return { ok: true, latencyMs: elapsed() };
   } catch (error) {
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {

@@ -66,7 +66,7 @@ export function withTimeout(provider: LLMProvider, timeoutMs?: number): LLMProvi
 
       const inner = provider.chat({ ...req, signal });
       // 超时先返回时，底层 promise 之后可能 reject——这里吞掉，避免 unhandled rejection
-      inner.catch(() => {});
+      inner.catch(() => {}); // benign: 超时先返回后底层迟到 reject 防未处理拒绝（race 错误已可见，见上注）。
 
       try {
         return await Promise.race([inner, timeout]);

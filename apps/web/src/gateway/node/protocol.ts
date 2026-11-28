@@ -226,7 +226,16 @@ export abstract class ProtocolClient {
           message = body.error.message || message;
         }
       } catch {
-        // 非 JSON 错误体：保留 HTTP 状态
+        // 非 JSON 错误体：保留 HTTP 状态。
+        // q-error-e3（§3.8 B 桶，与 node/rpc.ts 同形）：审计降级——结构化降级日志，
+        // 有界（仅错误体解析失败时一条），不吞 HTTP 状态。
+        console.warn('[vessel] degradation.used', {
+          component: 'web.protocol.error-body',
+          from: 'json-error-body',
+          to: 'http-status-only',
+          reason: 'non-JSON error body; HTTP status preserved',
+          status: res.status,
+        });
       }
       throw new GatewayHttpError(code, message, res.status);
     } catch (error) {

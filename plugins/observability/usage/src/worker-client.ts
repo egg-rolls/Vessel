@@ -234,7 +234,7 @@ export class WorkerQueryClient {
     this.clearIdle();
     this.failPending(error);
     if (worker !== null) {
-      void worker.terminate().catch(() => undefined);
+      void worker.terminate().catch(() => undefined); // benign: worker 终止尽力而为——进程退出兜底。
     }
   }
 

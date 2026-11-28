@@ -155,11 +155,11 @@ async function reclaimStale(lockPath: string, staleMs: number): Promise<boolean>
   try {
     await handle.writeFile(JSON.stringify(guard), 'utf8');
   } catch (error) {
-    await handle.close().catch(() => {});
-    await unlink(guardPath).catch(() => {});
+    await handle.close().catch(() => {}); // benign: 句柄关闭，失败不掩盖结果。
+    await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale TTL 兜底。
     throw error;
   }
-  await handle.close().catch(() => {});
+  await handle.close().catch(() => {}); // benign: 句柄关闭，失败不掩盖结果。
 
   try {
     // Re-read inside the guard: the lock may have been reclaimed and rebuilt
@@ -188,7 +188,7 @@ async function releaseGuard(guardPath: string, token: string): Promise<void> {
     return;
   }
   if (info === undefined || info.token !== token) return;
-  await unlink(guardPath).catch(() => {});
+  await unlink(guardPath).catch(() => {}); // benign: guard 清理尽力而为——残留由 stale TTL 兜底。
 }
 
 /** Create the lock file with owner info; retries EEXIST per stale / timeout rules. */
@@ -252,9 +252,9 @@ async function acquireLock(
     try {
       await handle.writeFile(body, 'utf8');
     } catch (error) {
-      await handle.close().catch(() => {});
+      await handle.close().catch(() => {}); // benign: 句柄关闭，失败不掩盖结果。
       // A failed write must not leave an empty "held" lock behind.
-      await unlink(lockPath).catch(() => {});
+      await unlink(lockPath).catch(() => {}); // benign: 锁释放尽力而为——残留由 stale TTL 兜底。
       throw error;
     }
     await handle.close();

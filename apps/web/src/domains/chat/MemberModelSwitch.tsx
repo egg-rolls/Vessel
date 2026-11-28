@@ -84,7 +84,7 @@ export function MemberModelSwitch({ agentId, agentName, currentModel }: MemberMo
           setValue(model);
         }
       })
-      .catch(() => {});
+      .catch(() => {}); // benign: 切换器当前模型读探针——失败保持旧显示（submit 路径自有错误处理）。
   };
 
   const submit = async () => {

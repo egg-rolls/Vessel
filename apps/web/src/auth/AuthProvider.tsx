@@ -102,7 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Reloaded the tab after a gateway restart? The plain CSRF token lives in
       // memory only, so trade a stale one for a fresh one before the shell needs it.
       if (next.authEnabled && next.authenticated && next.csrfToken === null) {
-        await fetchCsrfToken().catch(() => null);
+        await fetchCsrfToken().catch(() => null); // benign: CSRF 预热尽力而为——失败后续请求重取。
       }
       setStatus(next);
       setPhase(phaseFor(next));
