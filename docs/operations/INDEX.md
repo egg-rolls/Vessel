@@ -19,7 +19,7 @@ children: [LOGS.md, GATEWAY.md, TROUBLESHOOTING-401.md, BUN-WIN32-SEGFAULT.md, B
 | [BUN-WIN32-SEGFAULT](BUN-WIN32-SEGFAULT.md) | gateway 崩在 `panic(main thread): Segmentation fault` 之后：收集哪五样、`/metrics` 资源指标怎么读、两个环境开关（`VESSEL_PROXY_HTTP_STREAM` / `VESSEL_CRC32_NATIVE`）、已定位的代理流式转发最小复现与加固 |
 | [BUN-QUIRKS](BUN-QUIRKS.md) | Bun 运行时坑位**总目**（非崩溃类）：每条只留「现象 + 判据 + 一句话处置」，专项细节指向对应文档。§1 是假超时，细则见 [TIMEOUTS](TIMEOUTS.md) |
 | [TIMEOUTS](TIMEOUTS.md) | **超时不可信（专项）**：bun 1.3.9 上 `AbortSignal.timeout()` 可能不触发（进程不报错、也不动）；哪些路径最容易踩、正确写法（`withDeadline` / `startDeadline`）、用户手测时该看什么 |
-| [CONFIG](CONFIG.md) | 配置层序、resolver、执行锁与密钥 |
+| [CONFIG](CONFIG.md) | 配置域导航枢纽（guide）：17 个窄叶子——文件与优先级 / models 与迁移 / 命令 / 密钥 / 登录与 Origin / UI / 权限 / 限额 / 运行期 / agent / team / hub / gateway / 热更新 / 数据与 prune |
 | [FEISHU](../../plugins/im/feishu/FEISHU.md) | 飞书连接引导：开放平台申请 / 权限与事件 / 长连接配置 / 启动验证 / 白名单安全与 mention-only 升级 |
 | [MIGRATION](MIGRATION.md) | sqlite / file-v1 → file-v2 数据迁移 |
 | [version-isolation-blue-green](version-isolation-blue-green.md) | 两版本并行（红蓝双行）：A 行留默认根、B 行 `--user-config`+`--data-dir`+独立端口+`engine_pool.instance` 搬出；缺省 stop 只停平台层、`--stop-nodes` 才整舰队真停；切换=新会话宇宙、回退=换回入口 |
