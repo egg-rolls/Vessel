@@ -38,6 +38,12 @@ export interface CompletionSubcommand {
   flags?: readonly string[];
   /** flag → 静态候选值 */
   flagValues?: Readonly<Record<string, readonly string[]>>;
+  /**
+   * N 级子命令（cli-single-source Option A，main 终批）：三级及以上路径
+   * （gateway nodes add / federation peer list / hub node remove / team budget
+   * override）递归表达。加法可选字段，既有两级渲染语义不变；生成器加法递归分支。
+   */
+  subcommands?: readonly CompletionSubcommand[];
 }
 
 export interface CompletionCommand {
