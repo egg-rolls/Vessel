@@ -53,6 +53,9 @@
 工具卡、排队卡都走这一套，**不要自造第二个卡头，也不要给某张卡单独换肤**；需要单行折叠、
 点击看全文的卡必须给 `children`，否则被 ellipsis 吃掉的那段正文永远读不到。环境信息卡的
 scope 是卡头标题（与 `来自 agent X` 同级、同一组 class），不是色条或独立底色。
+唯一的 scoped 间距例外（用户裁定，q-card-padding-relax）：工具卡 / 环境信息卡上下
+padding 各 +6px 防拥挤 —— `chat.css` 里 `.tool-card` / `.env-notice-card` 的卡头
+4→10px、展开体底 8→14px；通用 `.event-block` 规则不动，agent 条等它卡不受影响。
 
 **动画基座（三族）+ 消息入场 + 长消息折叠（会话 / Team 共用一份实现）**：动画 class 与
 keyframes 只有一份，在 `styles/motion.css`（文件头就是复用契约：出现 / 大小变化 / 流式三族
