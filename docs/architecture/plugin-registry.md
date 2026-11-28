@@ -2,7 +2,7 @@
 title: Plugin Registry 与 Marketplace
 kind: current
 triggers: [plugin, registry, marketplace, install, update, remove, checksum, github pages, release, index.json, 插件, 插件市场, 插件仓库, 安装, 更新, 卸载, 校验, 发布]
-paths: [plugins/marketplace/**, docs/architecture/plugin-registry.md]
+paths: [plugins/marketplace/marketplace/src/**, plugins/marketplace/marketplace/package.json, plugins/marketplace/marketplace/web-src/**, docs/architecture/plugin-registry.md]
 ---
 
 # Plugin Registry 与 Marketplace
@@ -54,11 +54,13 @@ paths: [plugins/marketplace/**, docs/architecture/plugin-registry.md]
 
 ## Marketplace 插件
 
-- 位于 `plugins/marketplace/**`，id `marketplace`，`activationEvents: ["onPage:marketplace"]`；页面 Browse / Installed / Updates；RPC `search` / `detail` / `install` / `remove` / `update` / `installed`。
-- settings：`registry_url`（必填）、`proxy`、`install_scope`（`user` 默认 / `project`）、`allow_prerelease`。
+- 位于 `plugins/marketplace/marketplace`，id `marketplace`，`activationEvents: ["onPage:marketplace"]`；页面 Browse / Installed / Updates；RPC `search` / `detail` / `install` / `remove` / `update` / `updates` / `job` / `jobs` / `set-enabled` / `configure`。
+- settings：`registry_url`（必填）、`proxy`、`install_scope`（`user` 默认 / `project`）、`project_root`（project 安装的绝对项目根，缺省回落 `VESSEL_PLUGIN_HOST_CWD`）、`allow_prerelease`。
 - permissions：`fs: ["data-dir", "user-plugins", "project-plugins"]`、`net: ["github.com", "*.githubusercontent.com", "*.github.io"]`、events `plugin.changed`。
-- 安装（子进程内）：读索引（缓存 10min）→ 选版本 → 下载临时文件（≤50 MiB）→ 校验 sha256 + size → 安全解压（拒绝绝对路径 / `..` / 符号链接 / 解压超限）→ 读包内 manifest 校验 id/version/engines → 落 `~/.vessel/plugins/<id>` 或项目 `.vessel/plugins/<id>`（已存在则备份 `<id>.bak-<ts>`，失败回滚）→ 写 `config.yaml` 的 `plugins[]`（enabled=true）。
-- 不自动 spawn：由 watcher 触发 reload，首次页面 / RPC 才懒激活；能力插件下次进程启动才进 in-process，UI 明确提示。
+- **install / update 是异步后台 job**（`src/jobs.ts`）：立即返回 `{job_id}`，下载 / 校验 / 解压 / 写 config 在后台跑（避开宿主 10s `plugin.rpc` 超时）；UI 每 ~500ms 轮询 `job`，`jobs` 列最近 24h（TTL 24h）。job 是进程本地的：child 重启即丢，被杀的安装已回滚目标，可接受。同一目标并发操作 → `busy` 错误。
+- 安装流程（job 内）：读索引（缓存 10min，网络失败回落同 URL 旧缓存）→ 选版本 → 下载临时文件（≤50 MiB，`startDeadline` 盖住 fetch + 读 body）→ 校验 sha256 + size → 安全解压（拒绝绝对路径 / `..` / 符号链接 / 解压超限）→ 读包内 manifest 校验 id/version/engines → 落 `~/.vessel/plugins/<id>` 或项目 `.vessel/plugins/<id>`（已存在则备份 `<id>.bak-<ts>`，失败回滚）→ 写 `config.yaml` 的 `plugins[]`（enabled=true）。
+- `updates` 只对宿主经 `vessel.catalog` 推送的 ids 查 registry，不扫磁盘；`set-enabled` 只写 config.yaml 目标单条（宿主 watcher 触发 reload，无运行期 toggle）；`configure` 持久化 marketplace 自身 `registry_url`（HTTPS only，loopback http fixture 例外）。
+- 不自动 spawn：由 watcher 触发 reload，首次页面 / RPC 才懒激活；能力插件代码改动下次进程启动才进 in-process，Installed badge 消费 `pendingRestart`（`restartRequired` 是兼容别名，真阳性待生效差异，语义见 [plugins](plugins.md)）。
 - 更新同 id 新版本走安装流程；卸载先 deactivate/disable 再删目录；失败回滚，不留半状态。
 
 ## 信任与限制
