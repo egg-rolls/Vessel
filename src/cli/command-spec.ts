@@ -2788,7 +2788,15 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
   defineCommand({
     path: ['hub', 'start'],
     surface: 'one-shot',
-    flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+    flags: [
+      '--host',
+      '--port',
+      '--data-dir',
+      '--allow-remote',
+      '--tls-cert',
+      '--tls-key',
+      '--daemon',
+    ],
     flagOverrides: {
       '--port': { invalidError: (raw) => `Invalid port for --port: ${raw}` },
       '--data-dir': { local: true },
@@ -2812,6 +2820,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
               ...(f['--allow-remote'] === true ? { allowRemote: true } : {}),
               ...(f['--tls-cert'] !== undefined ? { tlsCert: f['--tls-cert'] } : {}),
               ...(f['--tls-key'] !== undefined ? { tlsKey: f['--tls-key'] } : {}),
+              ...(f['--daemon'] === true ? { daemon: true } : {}),
             },
             { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
           );

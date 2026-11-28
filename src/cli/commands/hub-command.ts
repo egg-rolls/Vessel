@@ -7,16 +7,18 @@
  * @module vessel/hub-command
  */
 
+import { mkdir, open } from 'node:fs/promises';
 import * as path from 'node:path';
 import { HUB_PROTOCOL, normalizeAllowedOrigins } from '@vessel-agent/serve';
 import {
+  DATA_DIR_CLI_MARKER_ENV,
   isLoopbackHostname,
   loadConfig,
   normalizeEntryOrigin,
   type VesselConfig,
 } from '../../../packages/config/src/index';
 import { expandHome, resolveDataDir } from '../../data/data-paths';
-import { collectGatewayState } from '../../gateway/pid';
+import { collectGatewayState, isProcessAlive } from '../../gateway/pid';
 import { createHubJoinStore } from '../../hub/join-store';
 import {
   HUB_NODE_STATE_FILE,
@@ -28,6 +30,7 @@ import { hubNodeTokenSecretKey } from '../../hub/outbound-wiring';
 import {
   defaultHubDataDir,
   type HubRuntime,
+  readHubLockFile,
   type StartHubRuntimeOptions,
   startHubRuntime,
 } from '../../hub/runtime';
@@ -55,6 +58,9 @@ export interface HubCommandDeps {
   now?: () => number;
   print?: (line: string) => void;
   printErr?: (line: string) => void;
+  /** T2：hub daemon spawn 注入（缺省 Bun.spawn）。 */
+  spawn?: typeof Bun.spawn;
+  sleep?: (ms: number) => Promise<void>;
   fetchImpl?: typeof fetch;
   wsFactory?: (url: string) => WebSocket;
   startRuntime?: (options: StartHubRuntimeOptions) => Promise<HubRuntime>;
@@ -405,6 +411,8 @@ async function startCommand(
   deps: HubCommandDeps,
   config: VesselConfig,
 ): Promise<number> {
+  // T2：--daemon 分离分支（缺省仍前台，语义零变化）。
+  if (command.daemon === true) return startHubDaemonCommand(command, deps, config);
   const start = deps.startRuntime ?? startHubRuntime;
   const runtime = await start({
     config: withHubOverrides(config, command, deps.env ?? process.env),
@@ -415,6 +423,112 @@ async function startCommand(
   await waitForStop(runtime, deps);
   output(deps, ui.info('hub stopped'));
   return 0;
+}
+
+/**
+ * T2（cli-single-source）：`vessel hub start --daemon` 共享接缝。
+ *
+ * 镜像 node-supervisor.beginHub 已验证模式（spawn 分离 `vessel hub start
+ * --data-dir <hubDataDir>` → 等 hub.lock 归本 child → 打印 pid/url/log → 退出）。
+ * env 卫生：hub 子进程用 hub.dataDir，**不透传**宿主 VESSEL_DATA_DIR / CLI 标记
+ *（supervisor 1490 注释先例；否则触发 hub_data_dir_conflict）。
+ */
+async function startHubDaemonCommand(
+  command: Extract<HubCommand, { kind: 'start' }>,
+  deps: HubCommandDeps,
+  config: VesselConfig,
+): Promise<number> {
+  const env = deps.env ?? process.env;
+  const gatewayDataDir = path.resolve(expandHome(resolveDataDir(config, env)));
+  const configured = command.dataDir ?? config.hub?.dataDir;
+  const hubDataDir =
+    configured === undefined ? defaultHubDataDir(config) : path.resolve(expandHome(configured));
+  const left = process.platform === 'win32' ? hubDataDir.toLowerCase() : hubDataDir;
+  const right = process.platform === 'win32' ? gatewayDataDir.toLowerCase() : gatewayDataDir;
+  if (left === right) {
+    output(deps, ui.err('hub.dataDir must differ from the gateway dataDir'));
+    return 1;
+  }
+  const existing = await readHubLockFile(hubDataDir);
+  if (existing !== null && isProcessAlive(existing.pid)) {
+    output(deps, ui.err(`hub already running (pid ${existing.pid}); data dir ${hubDataDir}`));
+    return 1;
+  }
+  const entryPath = process.argv[1];
+  if (entryPath === undefined || entryPath === '') {
+    output(deps, ui.err('cannot resolve the vessel entry script (process.argv[1] is empty)'));
+    return 1;
+  }
+  const argv = [
+    process.execPath,
+    entryPath,
+    'hub',
+    'start',
+    '--data-dir',
+    hubDataDir,
+    ...(command.host !== undefined ? ['--host', command.host] : []),
+    ...(command.port !== undefined ? ['--port', String(command.port)] : []),
+    ...(command.allowRemote === true ? ['--allow-remote'] : []),
+    ...(command.tlsCert !== undefined ? ['--tls-cert', command.tlsCert] : []),
+    ...(command.tlsKey !== undefined ? ['--tls-key', command.tlsKey] : []),
+  ];
+  const logPath = path.join(hubDataDir, 'hub.log');
+  await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(logPath, 'a', 0o600);
+  } catch (error) {
+    output(
+      deps,
+      ui.err(
+        `hub: cannot open log ${logPath}: ${error instanceof Error ? error.message : String(error)}`,
+      ),
+    );
+    return 1;
+  }
+  // env 卫生：不继承宿主数据根（hub 用自身 --data-dir）。
+  const hubEnv: Record<string, string | undefined> = { ...env };
+  delete hubEnv.VESSEL_DATA_DIR;
+  delete hubEnv[DATA_DIR_CLI_MARKER_ENV];
+  const spawn = deps.spawn ?? Bun.spawn;
+  let child: ReturnType<typeof spawn>;
+  try {
+    child = spawn(argv, {
+      stdin: 'ignore',
+      stdout: handle.fd,
+      stderr: handle.fd,
+      detached: true,
+      windowsHide: true,
+      env: hubEnv,
+    });
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    output(
+      deps,
+      ui.err(`hub failed to spawn: ${error instanceof Error ? error.message : String(error)}`),
+    );
+    return 1;
+  }
+  await handle.close().catch(() => undefined);
+  child.unref?.();
+  // 等 hub.lock 归本 child（缺省 15s，镜像 daemon 预算）；到点如实报告不强杀。
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const lock = await readHubLockFile(hubDataDir);
+    if (lock !== null && lock.pid === child.pid) {
+      output(
+        deps,
+        ui.ok(`hub started (pid ${lock.pid})${lock.url !== undefined ? ` ${lock.url}` : ''}`),
+      );
+      output(deps, ui.dim(`log: ${logPath}`));
+      return 0;
+    }
+    if (!isProcessAlive(child.pid)) break;
+    await sleep(200);
+  }
+  output(deps, ui.err(`hub start failed or timed out; see log: ${logPath}`));
+  return 1;
 }
 
 async function directoryCommand(

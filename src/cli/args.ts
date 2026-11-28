@@ -459,6 +459,8 @@ export type HubCommand =
       allowRemote?: boolean;
       tlsCert?: string;
       tlsKey?: string;
+      /** T2（cli-single-source）：--daemon 分离启动；缺省仍前台（兼容）。 */
+      daemon?: boolean;
     }
   | { kind: 'directory'; hubUrl?: string; tokenEnv?: string; json: boolean }
   | { kind: 'watch'; hubUrl?: string; tokenEnv?: string }
