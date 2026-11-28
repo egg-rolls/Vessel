@@ -71,7 +71,7 @@ import { bootstrapConnect, withConnectCliOverrides } from './bootstrap-connect';
 import type { BootstrapOptions, BootstrapResult } from './bootstrap-types';
 import { createGcAssembly } from './gc-assembly';
 import { buildLocalRpcSurface } from './local-rpc-surface';
-import { hasBootRegistryKey } from './model-registry-wiring';
+import { hasBootRegistryKey, legacyPresentFromSources } from './model-registry-wiring';
 import type { NodeHealthWatch } from './node-health-watch';
 import { createDurableResumeSurface, createNodeRestartSurface } from './node-restart';
 import { createPermissionsSurface, createReplContext } from './repl-context';
@@ -221,11 +221,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // 启动闸两条腿：legacy provider.*/apiKey 链路（DECISION-020）或 registry 注册条目
   // 凭证已配置（纯 models.entries + credentials.json 形态，无 legacy 块）。
+  // CHAIN-05：legacyPresent 传运行期同口径精确值（tenant-runtime-factory 同一公式），
+  // 闸不再恒用缺省 true 的保守合成。
   if (
     !useMock &&
     !interactive &&
     !resolveEffectiveApiKey(config) &&
-    !hasBootRegistryKey(config, dataDir)
+    !hasBootRegistryKey(config, dataDir, legacyPresentFromSources(loaded.sources))
   ) {
     console.error(t('common.noApiKey'));
     process.exit(configErrorExitCode);
