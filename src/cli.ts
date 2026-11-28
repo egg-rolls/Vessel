@@ -80,6 +80,7 @@ import {
   runHeadless,
 } from './cli/headless-runner';
 import { planCliHelp, renderGlobalHelp, renderUsageError } from './cli/help';
+import { planHelpSearch } from './cli/help-search';
 import { ui } from './cli/output';
 import { buildCliConfigOverrides } from './config/cli-overrides';
 import { sanitizeConfigForSnapshot } from './config/config-snapshot';
@@ -309,6 +310,16 @@ installProcessErrorHandlers({
 const pluginCli = await runPluginCliCommand(process.argv.slice(2));
 if (pluginCli.handled) process.exit(pluginCli.exitCode);
 markStartup('plugin-cli');
+
+// q-cli-rpc-search：`vessel help --search <query>` 是 help 家族唯一的 live 分支
+// （CLI 静态表 + capabilities.list；控制面不可达时降级为纯 CLI 搜索）。
+// 非 search 请求零 IO 直接返回 null，不影响下面的静态 help 早退。
+const searchPlan = await planHelpSearch(process.argv.slice(2));
+if (searchPlan !== null) {
+  if (searchPlan.stdout !== '') console.log(searchPlan.stdout);
+  if (searchPlan.stderr !== '') console.error(searchPlan.stderr);
+  process.exit(searchPlan.exitCode);
+}
 
 // 按位置 help：`vessel <cmd...> -h` / `vessel help <cmd...>`。
 // 必须早于 parseArgs —— `-h` 在任何位置（含跟在 flag 后面）都先于参数校验生效。

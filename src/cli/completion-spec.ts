@@ -563,7 +563,8 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [{ name: 'reset', flags: ['--yes', '--dry-run', '--json', '--data-dir'] }],
   },
   // `vessel help [command...]`：入口处直接处理的帮助别名（不经过 registry）。
-  { token: 'help', registryName: null },
+  // `--search <query>`：命令面搜索（q-cli-rpc-search；help-search.ts）。
+  { token: 'help', registryName: null, flags: ['--search', '--json'] },
   { token: '--help', registryName: null },
   { token: '--version', registryName: null },
   { token: '--tools', registryName: 'tools' },

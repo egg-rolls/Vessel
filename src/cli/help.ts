@@ -6,7 +6,8 @@
  * - 只打印**当前命令**的用法，而不是整张大表；无参数时才是全局总览；
  * - `vessel <group> help` 是 `vessel help <group>` 的词形等价写法（只对纯分组生效，
  *   位置参数里的 `help` 不会被吞）；
- * - 纯静态：只读 `cli-help-spec.ts` + i18n catalog，不加载 config / gateway / 网络。
+ * - 纯静态：只读 `cli-help-spec.ts` + i18n catalog，不加载 config / gateway / 网络
+ *   （唯一例外 `help --search` 住在 `help-search.ts`，live capabilities.list 可降级）。
  *
  * 用法错误（`renderUsageError`）与命令页共用同一份规格，因此 `Try 'vessel ... --help'`
  * 指到的就是刚才那条命令。
@@ -278,6 +279,7 @@ export function renderGlobalHelp(): string {
     ['vessel', t('help.cmd.repl')],
     ['vessel demo', t('help.cmd.demo')],
     ['vessel help [command]', t('help.cmd.helpCommand')],
+    ['vessel help --search <query>', t('help.cmd.helpSearch')],
     ['vessel <command> --data-dir <path>', t('help.cmd.globalDataDir')],
     ['vessel <command> --user-config <path>', t('help.cmd.globalUserConfig')],
   ];
