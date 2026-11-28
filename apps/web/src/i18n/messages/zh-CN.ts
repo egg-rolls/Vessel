@@ -2297,6 +2297,30 @@ export const messages = {
   'designLab.preview.dataTable.desc':
     '行间 1px 间隙透出页面底色，整体小圆角；表头与末行的外角跟随圆角。',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.cardShell.desc':
+    '静态内容卡的统一表面：header（状态/标题）→ 卡体 → footer（操作）。无 hover 抬起；可点列表卡走 card-surface。',
+  'designLab.preview.cardShell.sampleAction': '查看详情',
+  'designLab.preview.cardShell.sampleBody':
+    '异步作业卡 / 工具图片卡共用这一条 class 串与同一组槽位，避免各造一套表面样式漂移。',
+  'designLab.preview.cardShell.sampleStatus': '已完成',
+  'designLab.preview.cardShell.sampleTitle': '样例作业卡',
+  'designLab.preview.cardShell.title': 'CardShell',
+  'designLab.preview.filterPopover.desc':
+    '表头筛选：触发器 + 下拉面板，方向键导航；选项超过阈值（默认 8）时出搜索框。',
+  'designLab.preview.filterPopover.sampleLabel': '状态',
+  'designLab.preview.filterPopover.sampleSearch': '搜索选项',
+  'designLab.preview.filterPopover.title': 'FilterPopover',
+  'designLab.preview.messageFold.desc':
+    '超过阈值（--msg-fold-max-h）默认收起 + 底部渐隐 + 开合按钮；DOM 始终是全文（复制拿全文），流式中不折。',
+  'designLab.preview.messageFold.sample':
+    '这是一段用于演示折叠的长消息。它超过阈值高度，因此默认收起，底部渐隐，并出现「展开全文」按钮。\n\n折叠只改显示：max-height + overflow + mask，DOM 里始终是全文。复制按钮拿的是原文，鼠标手动选中也是同一份文本。\n\n流式输出期间不裁切、不出按钮——否则正文每长一段就折/展一次。溢出判定只看 scrollHeight：裁切状态下它仍是内容全高。\n\n阈值从 CSS 变量读（唯一来源），读不到时用与 tokens.css 同值的兜底。没有 ResizeObserver 时只按挂载时那一帧判定。\n\n会话页用户气泡与团队页气泡共用这一个组件与同一套 class——不要各自复制一份阈值或宽度口径。\n\n判定口径：有底色气泡包裹才折，纯正文不折。助手正文与卡片都不挂这个组件。\n\n再补一段让高度足够超过阈值：设计实验室的样例都是只读静态数据，不发任何 RPC，断连时也能看。\n\n最后一段：展开后按钮不会突然消失，也不会在展开/收起之间反复折。',
+  'designLab.preview.messageFold.title': 'MessageFold',
+  'designLab.preview.sidebarShell.desc':
+    '侧栏容器外壳：header（标题+动作）/ controls 行 / 可滚动 children；≤1023px 可选抽屉模式（本样例为普通列）。',
+  'designLab.preview.sidebarShell.sampleRow': '样例行 {index}',
+  'designLab.preview.sidebarShell.sampleSearch': '搜索会话',
+  'designLab.preview.sidebarShell.sampleTitle': '会话',
+  'designLab.preview.sidebarShell.title': 'SidebarShell',
   'designLab.preview.entityHeader.desc':
     '两个尺寸档并排：page = 22px 衬线（一屏唯一的 h1），panel = 16px 无衬线（面板标题）。改尺寸只碰字号与字族、不碰颜色；祖先永远更小更暗。',
   'designLab.preview.entityHeader.sampleAction': '返回',

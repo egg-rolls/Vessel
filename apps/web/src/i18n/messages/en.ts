@@ -2426,6 +2426,30 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.dataTable.desc':
     'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.cardShell.desc':
+    'Unified surface for static content cards: header (status/title) → body → footer (actions). No hover lift; clickable list cards use card-surface.',
+  'designLab.preview.cardShell.sampleAction': 'View details',
+  'designLab.preview.cardShell.sampleBody':
+    'Async job cards / tool image cards share this one class string and the same slots, so surface styles never drift apart.',
+  'designLab.preview.cardShell.sampleStatus': 'Done',
+  'designLab.preview.cardShell.sampleTitle': 'Sample job card',
+  'designLab.preview.cardShell.title': 'CardShell',
+  'designLab.preview.filterPopover.desc':
+    'Header filter: trigger + dropdown panel with arrow-key navigation; a search box appears when options exceed the threshold (default 8).',
+  'designLab.preview.filterPopover.sampleLabel': 'Status',
+  'designLab.preview.filterPopover.sampleSearch': 'Search options',
+  'designLab.preview.filterPopover.title': 'FilterPopover',
+  'designLab.preview.messageFold.desc':
+    'Above the threshold (--msg-fold-max-h) it collapses by default with a bottom fade and a toggle button; the DOM always holds the full text (copy gets everything), and streaming never folds.',
+  'designLab.preview.messageFold.sample':
+    'This is a long message used to demonstrate folding. It exceeds the threshold height, so it collapses by default with a bottom fade and an "expand" button.\n\nFolding only changes display: max-height + overflow + mask; the DOM always holds the full text. The copy button gets the original, and manual selection sees the same text.\n\nDuring streaming nothing is clipped and no button appears — otherwise the body would fold/unfold with every new chunk. Overflow is judged by scrollHeight only: while clipped it still reports the full content height.\n\nThe threshold comes from a CSS variable (single source), with a fallback matching tokens.css. Without ResizeObserver it measures once at mount.\n\nUser bubbles on the chat page and team-page bubbles share this one component and the same classes — never copy the threshold or width rules.\n\nRule of thumb: fold only inside tinted bubbles, never plain body text. Assistant prose and cards do not mount this component.\n\nOne more paragraph so the height clearly exceeds the threshold: every design-lab sample is read-only static data, no RPC, viewable while disconnected.\n\nLast paragraph: after expanding, the button never suddenly disappears, and the fold never oscillates between expanded and collapsed.',
+  'designLab.preview.messageFold.title': 'MessageFold',
+  'designLab.preview.sidebarShell.desc':
+    'Sidebar container shell: header (title + actions) / controls row / scrollable children; optional drawer mode at ≤1023px (this sample is a plain column).',
+  'designLab.preview.sidebarShell.sampleRow': 'Sample row {index}',
+  'designLab.preview.sidebarShell.sampleSearch': 'Search sessions',
+  'designLab.preview.sidebarShell.sampleTitle': 'Sessions',
+  'designLab.preview.sidebarShell.title': 'SidebarShell',
   'designLab.preview.entityHeader.desc':
     'Both size steps side by side: page = 22px serif (the one h1 per screen), panel = 16px sans (a panel heading). Size only changes type, never color; ancestors always stay smaller and dimmer.',
   'designLab.preview.entityHeader.sampleAction': 'Back',
