@@ -31,6 +31,7 @@ import {
   type EngineAuthFrame,
 } from '@vessel-agent/engine-client';
 import { attachNdjsonReader, createNdjsonWriter } from '@vessel-agent/serve';
+import { guardListenerInheritance } from '../shared/socket-inherit-guard.js';
 import { readPackageVersion } from '../shared/version.js';
 import { ToolsEngine } from './engine.js';
 import { McpConnectionManager } from './mcp.js';
@@ -715,6 +716,9 @@ function startPoolMode(poolDir: string, engineId: string): void {
   server.listen(0, '127.0.0.1', () => {
     const address = server.address();
     boundPort = address !== null && typeof address === 'object' ? address.port : 0;
+    // R-5 根治（q-spawn-inheritance-guard）：engine 控制监听句柄清继承标志
+    // （win32；POSIX no-op）——engine 内 spawn 的工具子进程不继承本端口。
+    guardListenerInheritance(boundPort, server);
     // S6：bind 后自写状态文件（atomicWrite 0600；gateway 读其 adopt/探测/发布；pid 复核带 started_at）。
     const state = {
       v: 1,
