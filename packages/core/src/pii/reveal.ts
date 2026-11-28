@@ -167,8 +167,8 @@ export function createPiiRevealTool(options: { vault?: PiiVault } = {}): ToolDef
         ]);
       }
 
-      // 3) 审计（**无真值**）。事件名用字面量：`check:event-visibility` 只扫字面量生产点，
-      //    常量转发会被判成「非字面量」而 FAIL。
+      // 3) 审计（**无真值**）。事件名用字面量（原 `check:event-visibility` 门禁只扫字面量
+      //    生产点；脚本已按宪法删除，字面量写法保留，便于评审核对）。
       const audit: RunEvent = {
         type: 'pii.reveal.audit',
         run_id: ctx.run_id,

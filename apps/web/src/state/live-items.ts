@@ -605,7 +605,7 @@ export class LiveItemStore implements ItemSink {
    *
    * 只认 `agent.closed`，**刻意不认 `agent.retired`**：retired 是 rotate 工具在旧 body
    * 上发的（此时旧 run 可能还没结束，会话会继续交棒给新 body，见
-   * `docs/architecture/events.md` 的 agent 生命周期一节）。拿 retired 收口 = 把一次正常
+   * `docs/architecture/event-catalog.md` 核心事件名表的 agent 生命周期行）。拿 retired 收口 = 把一次正常
    * 交棒记成取消。`agent.stale` 同理（可能恢复）。
    */
   private reconcileLifecycle(entry: StoredEvent): void {
