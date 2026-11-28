@@ -154,6 +154,8 @@ export type SettableConfigKey =
   | 'ui.messageVisibility.source'
   | 'ui.messageVisibility.system'
   | 'ui.showArchived'
+  // q-retired-session-toggle：会话卡片列表是否显示退休会话（YAML ui.show_retired_sessions）。
+  | 'ui.showRetiredSessions'
   | 'ui.errorLevel'
   | 'ui.askUser'
   | 'ui.expandCards'
@@ -244,6 +246,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = {
   'ui.messageVisibility.source': { block: 'ui', subBlock: 'message_visibility', yamlKey: 'source' },
   'ui.messageVisibility.system': { block: 'ui', subBlock: 'message_visibility', yamlKey: 'system' },
   'ui.showArchived': { block: 'ui', yamlKey: 'show_archived' },
+  'ui.showRetiredSessions': { block: 'ui', yamlKey: 'show_retired_sessions' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
   'ui.expandCards': { block: 'ui', yamlKey: 'expand_cards' },
@@ -312,7 +315,8 @@ export async function setUserConfigValue(
     (key === 'ui.showReasoning' ||
       key === 'ui.askUser' ||
       key === 'ui.expandCards' ||
-      key === 'ui.showArchived') &&
+      key === 'ui.showArchived' ||
+      key === 'ui.showRetiredSessions') &&
     typeof value !== 'boolean'
   ) {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
