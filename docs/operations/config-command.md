@@ -42,7 +42,7 @@ project 写工作区 `vessel.yaml` 覆盖层，未注入项目路径 → `not_fo
 
 | 组 | 键 |
 |---|---|
-| ui | `ui.language` / `ui.showReasoning` / `ui.statusBars` / `ui.verbosity` / `ui.showInternalEvents` / `ui.showArchived` / `ui.errorLevel` / `ui.askUser` / `ui.expandCards` |
+| ui | `ui.language` / `ui.showReasoning` / `ui.statusBars` / `ui.verbosity` / `ui.showInternalEvents` / `ui.showArchived` / `ui.errorLevel` / `ui.askUser` / `ui.expandCards` / `ui.addressStyle`（`name\|compact\|full`；YAML `ui.address_style`） |
 | ui 消息显隐 | `ui.messageVisibility.{reasoning,tools,environment,source,system}`（YAML 子块 `message_visibility`） |
 | ui 深度配色 | `ui.depthColor.{enabled,rootHue,hueStep,lightnessLight,chromaLight,lightnessDark,chromaDark}`（YAML `ui.depth_color`） |
 | observability | `observability.showProcessErrors` / `observability.log.{level,color,format,time}` |
@@ -63,6 +63,10 @@ project 写工作区 `vessel.yaml` 覆盖层，未注入项目路径 → `not_fo
 
 `config.get` / `config.sources` 与 `config show` 同口径：永不输出解析后的密钥值，只输出
 `"<set>"` / `"<unset>"`。`config.get` 附 `logEnvOverrides`（env 覆盖提示）。
+视图读**活配置**：网络面读 cli `liveConfig`，本地面（vessel 元工具 `op=rpc` / TUI）读
+bootstrap `liveConfigRef.current`（cli 热应用同步该引用）——yaml watch / `config.set`
+写后热应用完成即反映新策略，视图=真相（q-config-get-fresh / O5）。纯本地 REPL 无热应用
+⇒ 回退启动快照语义。sources/paths 仍取启动期加载结果（热应用不换文件来源）。
 canonical 方法清单以 [gateway-rpc.md](../architecture/gateway-rpc.md) 方法表为准。
 
 ## 其它一次性命令（配置相关）

@@ -21,7 +21,7 @@ children: [config-files.md, config-models.md, config-model-migration.md, config-
 | [config-secrets](config-secrets.md) | 根密钥派生 / token 命令 / `_env` 规则 / env_file / 反代密钥 / 部署示例 |
 | [config-auth](config-auth.md) | WebUI 登录：策略注册表后端 / 口令 / TOTP / 引导码 / 会话 / CSRF |
 | [config-origins](config-origins.md) | public_origins 与 redirect_uri / http.allowed_origins / 回环免登录开关 |
-| [config-ui](config-ui.md) | 语言 / 思考流 / 状态栏 / 可见性 / messageVisibility / depthColor / 指示器 |
+| [config-ui](config-ui.md) | 语言 / 思考流 / 状态栏 / 可见性 / messageVisibility / depthColor / addressStyle / 指示器 |
 | [config-permission](config-permission.md) | auto_approve / never_auto_approve / 权限等待 / interactions 持久化 |
 | [config-limits](config-limits.md) | limits / termination / pricing 合并视图 / 压缩配置 / 白名单 / 组成快照 |
 | [config-runtime](config-runtime.md) | empty_response / kanban / vision / tools_engine + engine_pool 双开关 |
