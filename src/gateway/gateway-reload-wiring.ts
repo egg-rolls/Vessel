@@ -165,6 +165,26 @@ export function diffRestartFields(current: VesselConfig, next: VesselConfig): st
 }
 
 /**
+ * 比较两份配置的**顶层键**，返回值发生变化的键名（按 next 键序，缺省键补尾）。
+ * 与 {@link diffRestartFields} 同一 stableValue 口径，但粒度是顶层键而非重启字段。
+ *
+ * 用途（q-config-edit-bypass）：热应用后所有 scope applier 都报空差异时，配置内容
+ * 其实可能已经变了（`ui.*` / `envInjection` 的非 cadence 字段等没有专属 applier 差异行）。
+ * 装配层据此如实报「hot-applied (changed keys)」，而不是发一条无内容的 `reloaded`
+ * 让读者误以为「没生效 / 被旁路」。纯只读比较，不改任何应用语义。
+ */
+export function changedConfigKeys(current: VesselConfig, next: VesselConfig): string[] {
+  const before = current as unknown as Record<string, unknown>;
+  const after = next as unknown as Record<string, unknown>;
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changed: string[] = [];
+  for (const key of keys) {
+    if (stableValue(before[key]) !== stableValue(after[key])) changed.push(key);
+  }
+  return changed;
+}
+
+/**
  * 判断 allowed_origins 是否变化。CORS 列表与顺序无关；缺省与空数组等价。
  */
 export function allowedOriginsChanged(current: VesselConfig, next: VesselConfig): boolean {
