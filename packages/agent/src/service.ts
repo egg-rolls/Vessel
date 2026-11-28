@@ -3080,7 +3080,9 @@ export class AgentServiceImpl implements AgentService {
       try {
         orphans = store
           .history(record.id)
-          .filter((message) => message.status === 'unread' && message.async_job?.status === 'running');
+          .filter(
+            (message) => message.status === 'unread' && message.async_job?.status === 'running',
+          );
       } catch (error) {
         result.failed += 1;
         this.logger.warn('agent.async_job.reconcile_scan_failed', {
