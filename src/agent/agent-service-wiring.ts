@@ -55,6 +55,7 @@ import type {
   UsageLimits,
 } from '@vessel-agent/core';
 import { createContextRatioSource, withLiveContextRatio } from '../session/context-ratio-source';
+import { createTeamHumanDelivery } from './team-human-delivery';
 
 export interface AgentServiceWiringOptions {
   /**
@@ -488,6 +489,10 @@ export async function createAgentServiceWiring(
         })
       : undefined;
 
+  // q-distress-message：人类求救兜底要写 Team 日志，但 Team 服务在 service 之后才构造
+  // （createTeamService 依赖 service）——晚绑定 ref，闭包投递时读已就位的 team。
+  let teamRef: AgentTeamService | undefined;
+
   const service = createAgentService({
     tenantId: options.tenantId,
     dataDir: options.dataDir,
@@ -531,6 +536,20 @@ export async function createAgentServiceWiring(
       : {}),
     snapshot: { enabled: true },
     ...(options.peerStops !== undefined ? { peerStops: options.peerStops } : {}),
+    // q-distress-message 顶层 fallback：成员收件人皆无/皆投不进时，求救写面向人类的
+    // 本机 Team 日志（复用 0.27 createTeamHumanDelivery，to=['human']、零 dispatch）。
+    // team_id 取遇难者所在 Team，缺省回落默认 Team；两者皆无则抛错由 service 记日志。
+    humanDistress: async (input) => {
+      const team = teamRef;
+      if (team === undefined) throw new Error('human_distress: team service not ready');
+      const teamId = input.teamId ?? defaultTeam?.team_id;
+      if (teamId === undefined) throw new Error('human_distress: no team available');
+      await createTeamHumanDelivery(team).deliver({
+        team_id: teamId,
+        from: input.from,
+        content: input.content,
+      });
+    },
     ...(options.modelRefError !== undefined ? { modelRefError: options.modelRefError } : {}),
   });
   serviceRef = service;
@@ -593,6 +612,7 @@ export async function createAgentServiceWiring(
     // q-addr-display：federation 抬头显示行按风格渲染（reply-with 恒 canonical）。
     ...(options.addressStyle !== undefined ? { addressStyle: options.addressStyle } : {}),
   });
+  teamRef = team;
 
   return {
     service,
