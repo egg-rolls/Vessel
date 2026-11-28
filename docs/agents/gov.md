@@ -2,7 +2,7 @@
 title: 文档、角色与发布
 kind: advisory
 triggers: [docs, doc management, frontmatter, release, publish, tag, version check, changelog, ci, pr, roles, worktree, 发布, 版本, 变更日志, 角色, 工作区, 干跑, 元信息]
-paths: [docs/DOC-MANAGEMENT.md, docs/FILE-MANAGEMENT.md, AGENTS.md, README.md, .github/**, scripts/**, biome.json]
+paths: [AGENTS.md, README.md, biome.json, docs/DOC-MANAGEMENT.md, docs/FILE-MANAGEMENT.md, .github/**, scripts/**]
 applies_to: [N, M]
 ---
 
@@ -14,7 +14,7 @@ applies_to: [N, M]
 
 - 当前态整文件覆盖写，历史只追加；O(n) 目录必须有 `INDEX.md`。
 - 当前态文档禁版本叙事（`## 0.x` / 逐版本“已实现”章节 / “自 0.x 起”）；版本结果进 `docs/versions/<version>.md`，原因进 ADR。
-- 超过 300 行或 100 KB 的 current 文档按模块拆分，带 `INDEX.md` + frontmatter；模块 ≤100 行。
+- 超过 300 行或 100 KB 的 current 文档按模块拆分，带 `INDEX.md` + frontmatter；current 模块 ≤110 行（advisory / guide ≤60，target ≤600）。
 - 过程产物（计划、报告、临时脚本）不进共享仓库——规则见 [DOC-MANAGEMENT.md](../DOC-MANAGEMENT.md) 与 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)；本文件不复述。
 - 文档只写已实现的能力；引用路径前先确认存在。
 - **不写死读数**：handoff / 文档写命令而不是值；确需写值时带 `sha` + 时间戳。
@@ -41,7 +41,7 @@ applies_to: [N, M]
 
 ## 发布与 CI
 
-- 发布纪律（1.0 前只干跑、不 tag/publish/merge main/force-push、PR only）见 AGENTS 硬规则。
+- 发布纪律见 AGENTS 硬规则：1 本地 squash 到 `main` 后直接 push，PR 只在用户明确要求时开；CI 异步，不作为 push 前置；不 force-push。当前版本线 `2.x`，发布由 tag `v*` 触发（0.x「只干跑不 tag」纪律已归档）。
 - 操作步骤与包形态（包名、发布顺序、`smoke-install`、`version.ts` 写模式）见 [RELEASE.md](../operations/RELEASE.md)；CI 见 [CI-CD.md](../operations/CI-CD.md)。
 - tag `v*` 只有 1 打。
 
