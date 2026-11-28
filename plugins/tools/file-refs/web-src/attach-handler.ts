@@ -11,7 +11,7 @@
  */
 
 import type { ComposerToolbarActionHandler } from '@vessel-agent/plugin-sdk';
-import { onFilesDropped } from './drop-handler';
+import { stageFiles } from './staging';
 
 /** File System Access API 最小结构类型（不依赖 lib.dom 是否收录该 API）。 */
 interface FilePickerHandle {
@@ -93,6 +93,6 @@ async function pickFiles(): Promise<File[]> {
 export const onAttachClick: ComposerToolbarActionHandler = async (port, _host) => {
   const files = await pickFiles();
   if (files.length === 0) return;
-  // 与 drop 完全同形：逐文件瞬态占位卡 → stage → addRef → token 落定。
-  await onFilesDropped(files, port, { offset: port.getCaretOffset() });
+  // 与 drop 完全同形（共享 staging 链路）：逐文件瞬态占位卡 → stage → addRef → token 落定。
+  stageFiles(files, port, { offset: port.getCaretOffset() });
 };
