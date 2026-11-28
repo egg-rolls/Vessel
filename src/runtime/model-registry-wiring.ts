@@ -133,20 +133,32 @@ function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelope
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return { kind: 'corrupt', reason: `credentials_read_failed: ${file}: ${messageOf(error)}` };
   }
-  let parsed: { v?: unknown; entries?: Record<string, unknown> };
+  let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as { v?: unknown; entries?: Record<string, unknown> };
+    parsed = JSON.parse(raw);
   } catch (error) {
     return { kind: 'corrupt', reason: `credentials_corrupt: ${file}: ${messageOf(error)}` };
   }
-  if (parsed.v !== 1 || typeof parsed.entries !== 'object' || parsed.entries === null) {
+  const envelope = parsed as { v?: unknown; entries?: unknown } | null;
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    envelope?.v !== 1 ||
+    typeof envelope?.entries !== 'object' ||
+    envelope.entries === null ||
+    Array.isArray(envelope.entries)
+  ) {
     return { kind: 'corrupt', reason: `credentials_corrupt: ${file}: unexpected envelope shape` };
   }
-  const entry = parsed.entries[id] as CredentialEnvelopeEntry | undefined;
+  const entries = (parsed as { entries: Record<string, unknown> }).entries;
+  const entry = entries[id] as CredentialEnvelopeEntry | undefined;
   if (entry === undefined) return { kind: 'absent' };
   // 条目形状与写侧逐字段同口径（iv/tag/data/createdAt/updatedAt 全 string）：
   // 此前只查 updatedAt，残缺条目会流到解密步再误报「root secret 已轮换」。
   if (
+    typeof entry !== 'object' ||
+    entry === null ||
     typeof entry.iv !== 'string' ||
     typeof entry.tag !== 'string' ||
     typeof entry.data !== 'string' ||
