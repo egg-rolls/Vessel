@@ -79,17 +79,20 @@ function loadWin32(): Win32FFI | null {
     const ws2 = dlopen('ws2_32.dll', {
       getsockname: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
     });
+    // bun 1.3.9 类型口径与运行时差异：FFIType.ptr 运行时接受 number（实证），
+    // 类型却只列 bigint|TypedArray|Pointer（bigint 运行时反而抛错）——按实证口径转型。
     cached = {
-      SetHandleInformation: k32.symbols.SetHandleInformation,
-      GetHandleInformation: k32.symbols.GetHandleInformation,
+      SetHandleInformation: k32.symbols.SetHandleInformation as unknown as Win32FFI['SetHandleInformation'],
+      GetHandleInformation: k32.symbols.GetHandleInformation as unknown as Win32FFI['GetHandleInformation'],
       GetCurrentProcessId: k32.symbols.GetCurrentProcessId,
-      NtQuerySystemInformation: ntdll.symbols.NtQuerySystemInformation,
-      getsockname: ws2.symbols.getsockname,
+      NtQuerySystemInformation: ntdll.symbols
+        .NtQuerySystemInformation as unknown as Win32FFI['NtQuerySystemInformation'],
+      getsockname: ws2.symbols.getsockname as unknown as Win32FFI['getsockname'],
     };
   } catch {
     cached = null;
   }
-  return cached;
+  return cached ?? null;
 }
 
 /** 清句柄的 HANDLE_FLAG_INHERIT；成功返回 true。 */
