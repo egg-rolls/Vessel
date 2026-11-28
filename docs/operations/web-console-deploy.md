@@ -9,7 +9,7 @@ paths: [packages/serve/src/platform/proxy-config.ts, apps/web/src/gateway/url.ts
 
 > 缺省形态：平台同源托管 `apps/web/dist`，浏览器**只连平台端口**，数据面经平台代理
 > `/nodes/<node_id>/**`（node token 不出网关）。代理策略与上限的事实家：
-> [CONFIG §2.20](CONFIG.md) / [topology](../architecture/topology.md)；401 分流见
+> [config-gateway](config-gateway.md) / [topology](../architecture/topology.md)；401 分流见
 > [TROUBLESHOOTING-401](TROUBLESHOOTING-401.md)。本文是部署与验证操作。
 
 ## 构建与同源托管（缺省）
@@ -19,7 +19,7 @@ cd apps/web && npm ci && npm run build    # 产物在 apps/web/dist
 ```
 
 平台同源托管 `dist` 时**不需要** `allowed_origins`，CSP 由平台按 Host / allowlist 生成。
-产物目录可配（`gateway.web_dist`，金丝雀跨 cwd 场景）见 [CONFIG §2.20.2](CONFIG.md)。
+产物目录可配（`gateway.web_dist`，金丝雀跨 cwd 场景）见 [config-gateway](config-gateway.md)。
 产物变更推送与反代缓冲见 [build-events-sse](build-events-sse.md)。
 
 ## 独立静态站点部署
@@ -61,7 +61,7 @@ curl -s -X POST http://127.0.0.1:8642/nodes/<node_id>/v1/rpc \
 ```
 
 - 路径 / 方法白名单、请求体 / 并发 / WS 水位上限、失败码（502 / 504 / 503 / 403）与
-  `gateway.ws.closed {via:'proxy'}` 记账：见 [CONFIG §2.20](CONFIG.md)（`proxy-config.ts`
+  `gateway.ws.closed {via:'proxy'}` 记账：见 [config-gateway](config-gateway.md)（`proxy-config.ts`
   `DEFAULT_PLATFORM_PROXY_LIMITS` 唯一来源）。
 - **回退开关** `gateway.proxy_nodes: false`：平台不提供 `/nodes/*`，前端据
   `platform.whoami.proxy.enabled === false` 回到「取 credentials 直连 node」老路径
