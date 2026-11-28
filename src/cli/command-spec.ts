@@ -79,6 +79,8 @@ export interface FlagSpec {
   readonly hidden?: boolean;
   /** 可重复 flag（--filter / --allowed-origin / --mention 先例）：产物为数组 */
   readonly repeatable?: boolean;
+  /** 补全静态候选（独立于 value.kind 校验；--scope config,plugins 先例） */
+  readonly candidates?: readonly string[];
   /** 缺值错误文案（现态 parser 口径 parity；缺省 `Missing value for <flag>`） */
   readonly missingError?: string;
   /** 非法值错误文案（现态 parser 口径 parity；缺省 `Invalid value for <flag>: <raw>`） */
@@ -209,6 +211,8 @@ export const FLAG_DEFS = {
   // restart 内部 flag（不对人类暴露；各命令 hidden 覆盖）
   '--orchestrate': { flag: '--orchestrate', value: { kind: 'boolean' } },
   '--handoff': { flag: '--handoff', value: { kind: 'string', placeholder: '<path>' } },
+  // help --search（入口 live 分支；help-search.ts 自有解析，此声明供补全候选）
+  '--search': { flag: '--search', value: { kind: 'string', placeholder: '<query>' } },
   '--force': { flag: '--force', value: { kind: 'boolean' }, help: 'flag.force' },
   '--yes': { flag: '--yes', aliases: ['-y'], value: { kind: 'boolean' }, help: 'flag.yes' },
   '--check': { flag: '--check', value: { kind: 'boolean' }, help: 'flag.check' },
@@ -545,6 +549,7 @@ export const FLAG_DEFS = {
       },
     },
     help: 'flag.scope',
+    candidates: ['config', 'plugins'],
   },
   '--team': {
     flag: '--team',
@@ -808,6 +813,8 @@ export interface CommandSpecBase {
   readonly positional?: string;
   /** help 展示占位覆盖（completion 先例：引擎可选 '[<shell>]'，展示 '<bash|zsh|...>'） */
   readonly helpArgs?: string;
+  /** 位置参数静态候选（completion <shell> 先例；投射为补全候选词） */
+  readonly positionalCandidates?: readonly string[];
   /** 本命令 flag 字面量（引用 FLAG_DEFS；不含 -h/--help，渲染统一追加） */
   readonly flags?: readonly FlagLiteral[];
   /** 本命令必填 flag（现 CliHelpCommand.required；usage 行不加方括号 + 引擎校验） */
@@ -830,6 +837,8 @@ export interface CommandSpecBase {
           readonly hidden?: boolean;
           /** 本命令内按局部 flag 处理（不写回 Globals；gateway nodes add --data-dir 先例） */
           readonly local?: boolean;
+          /** 本命令补全静态候选覆盖 */
+          readonly candidates?: readonly string[];
         }
       >
     >
@@ -951,6 +960,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     surface: 'one-shot',
     positional: '[<shell>]',
     helpArgs: '<bash|zsh|fish|powershell>',
+    positionalCandidates: ['bash', 'zsh', 'fish', 'powershell'],
     positionalErrors: { extra: (token) => `Unexpected argument for completion: ${token}` },
     load: async () => {
       const { runCompletionCommand } = await import('./commands/completion-command');
@@ -1460,24 +1470,20 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       '--from': {
         help: 'flag.from.migrate',
         value: {
-          kind: 'dynamic',
+          kind: 'enum',
+          candidates: ['sqlite', 'file-v1'],
           placeholder: '<sqlite|file-v1>',
-          parse: (raw) =>
-            raw === 'sqlite' || raw === 'file-v1'
-              ? { ok: true, value: raw }
-              : { ok: false, error: `Invalid --from: ${raw} (expected "sqlite" or "file-v1")` },
         },
+        invalidError: (raw) => `Invalid --from: ${raw} (expected "sqlite" or "file-v1")`,
       },
       '--to': {
         help: 'flag.to.migrate',
         value: {
-          kind: 'dynamic',
+          kind: 'enum',
+          candidates: ['file-v2'],
           placeholder: '<file-v2>',
-          parse: (raw) =>
-            raw === 'file-v2'
-              ? { ok: true, value: raw }
-              : { ok: false, error: `Invalid --to: ${raw} (expected "file-v2")` },
         },
+        invalidError: (raw) => `Invalid --to: ${raw} (expected "file-v2")`,
       },
     },
     positionalErrors: { extra: (token) => `Unknown argument for migrate: ${token}` },
@@ -3904,6 +3910,7 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
             };
           },
         },
+        candidates: ['unlimited'],
       },
     },
     required: ['--conversation', '--dimension', '--max'],
@@ -4374,6 +4381,14 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
     },
   }),
   // ── 入口 flag 触发的一次性命令（--tools / --resume-run 无值；cli.ts 按 globals 路由） ──
+  defineCommand({
+    path: ['help'],
+    surface: 'entry',
+    hidden: true, // help 无命令页（planCliHelp/planHelpSearch 入口处理）；补全 token 保留
+    summary: 'help.cmd.helpCommand',
+    flags: ['--search', '--json'],
+    load: async () => ({ run: async () => 0 }),
+  }),
   defineCommand({
     path: ['tools'],
     surface: 'entry',

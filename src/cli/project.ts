@@ -30,7 +30,31 @@ import {
   PURE_GROUP_SUMMARIES,
 } from './command-spec';
 import type { CompletionCommand, CompletionSubcommand } from './completion-spec';
-import type { CliFlag, CliHelpCommand } from './help-spec';
+
+// ── help 投射产物类型（原 help-spec.ts CliHelpCommand；W1 移居，消费形状不变） ──
+
+/** 一条命令级 help 规格（help.ts 建树/渲染消费形状）。 */
+export interface CliHelpCommand {
+  /** 命令路径：`['gateway', 'start']`；首段必须是顶层命令字面量 */
+  readonly path: readonly [string, ...string[]];
+  /** 一句话摘要（i18n key） */
+  readonly summary: MessageKey;
+  /** 位置参数形态：必填 `<x>`、可选 `[x]`、变长 `<x...>` */
+  readonly args?: string;
+  /** 本命令接受的 flag（不含 `-h/--help`） */
+  readonly flags?: readonly string[];
+  /** 必填 flag：出现在 usage 行且不加方括号 */
+  readonly required?: readonly string[];
+  /** 同名 flag 在本命令里取值形态不同时的展示覆盖 */
+  readonly flagValue?: Partial<Record<string, string>>;
+  /** 互斥形态无法由 flag 列表表达时手写整行 usage */
+  readonly usage?: string;
+  /** 同名 flag 在本命令里含义不同时的覆盖说明 */
+  readonly flagHelp?: Partial<Record<string, MessageKey>>;
+}
+
+/** flag 字面量（原 CliFlag 白名单 → schema FLAG_DEFS 字面量联合；渲染层宽形状）。 */
+export type CliFlag = string;
 
 // ── 1. 执行分派投射 ──────────────────────────────
 
@@ -83,6 +107,8 @@ function flagOverride(
       readonly missingError?: string;
       readonly invalidError?: (raw: string) => string;
       readonly hidden?: boolean;
+      readonly local?: boolean;
+      readonly candidates?: readonly string[];
     }
   | undefined {
   return (
@@ -96,6 +122,8 @@ function flagOverride(
                 readonly missingError?: string;
                 readonly invalidError?: (raw: string) => string;
                 readonly hidden?: boolean;
+                readonly local?: boolean;
+                readonly candidates?: readonly string[];
               }
             | undefined
           >
@@ -190,16 +218,29 @@ export function projectOverviewCommands(schema: readonly CommandSpec[]): CliHelp
 }
 // ── 5. 补全投射（N 级递归，Option A main 终批） ──
 
-/** flag → 静态候选（enum candidates；命令级覆盖优先）。 */
+/** flag → 静态候选（enum candidates / 补全候选字段；命令级覆盖优先）。 */
 function specFlagValues(spec: CommandSpec): Record<string, readonly string[]> {
   const values: Record<string, readonly string[]> = {};
   for (const flag of visibleFlags(spec)) {
-    const override = flagOverride(spec, flag)?.value;
+    const override = flagOverride(spec, flag);
     const def = flagDef(flag);
-    const value = override ?? def?.value;
-    if (value?.kind === 'enum') values[flag] = value.candidates;
+    const value = override?.value ?? def?.value;
+    const candidates =
+      override?.candidates ??
+      (value?.kind === 'enum' ? value.candidates : undefined) ??
+      def?.candidates;
+    if (candidates !== undefined) values[flag] = candidates;
   }
   return values;
+}
+
+/** 补全 flag 候选（含短别名；现态 completion 口径 -y/-n 在候选词中）。 */
+function completionFlags(spec: CommandSpec): string[] {
+  const flags: string[] = [];
+  for (const flag of visibleFlags(spec)) {
+    flags.push(flag, ...(flagDef(flag)?.aliases ?? []));
+  }
+  return flags;
 }
 
 interface CompletionNode {
@@ -211,7 +252,7 @@ interface CompletionNode {
 /** 路径树 → 递归 subcommands（两级上限 workaround 删除；第三词起由投射表达）。 */
 function buildCompletionSubcommands(node: CompletionNode): CompletionSubcommand[] {
   return [...node.children.values()].map((child) => {
-    const flags = child.spec !== undefined ? visibleFlags(child.spec) : [];
+    const flags = child.spec !== undefined ? completionFlags(child.spec) : [];
     const flagValues = child.spec !== undefined ? specFlagValues(child.spec) : {};
     const subcommands = buildCompletionSubcommands(child);
     return {
@@ -232,7 +273,10 @@ function buildCompletionSubcommands(node: CompletionNode): CompletionSubcommand[
 export function projectCompletion(schema: readonly CommandSpec[]): CompletionCommand[] {
   const roots = new Map<string, CompletionNode>();
   for (const spec of schema) {
-    if (spec.hidden === true) continue;
+    // hidden 不进补全；例外：entry 且带 flag 声明（help --search 先例，保留字 token）
+    if (spec.hidden === true && !(spec.surface === 'entry' && (spec.flags?.length ?? 0) > 0)) {
+      continue;
+    }
     let node: CompletionNode | undefined;
     for (const [index, segment] of spec.path.entries()) {
       const children = node === undefined ? roots : node.children;
@@ -247,9 +291,13 @@ export function projectCompletion(schema: readonly CommandSpec[]): CompletionCom
   }
   return [...roots.values()].map((root) => {
     const spec = root.spec;
-    const flags = spec !== undefined ? visibleFlags(spec) : [];
+    const flags = spec !== undefined ? completionFlags(spec) : [];
     const flagValues = spec !== undefined ? specFlagValues(spec) : {};
-    const subcommands = buildCompletionSubcommands(root);
+    let subcommands = buildCompletionSubcommands(root);
+    // 位置参数静态候选（completion <shell> 先例）：投射为候选词子命令形状
+    if (spec?.positionalCandidates !== undefined && subcommands.length === 0) {
+      subcommands = spec.positionalCandidates.map((name) => ({ name }));
+    }
     const registryName =
       spec === undefined || spec.surface === 'entry' ? null : spec.path.join(' ');
     return {

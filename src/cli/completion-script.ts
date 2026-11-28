@@ -15,6 +15,7 @@
 import {
   COMPLETION_COMMANDS,
   type CompletionShell,
+  type CompletionSubcommand,
   DYNAMIC_VALUE_FLAGS,
   GLOBAL_FLAGS,
   OPTIONAL_VALUE_FLAGS,
@@ -53,15 +54,20 @@ interface StaticValue {
 
 function staticValues(): StaticValue[] {
   const entries: StaticValue[] = [];
+  const walk = (subs: readonly CompletionSubcommand[], prefix: string): void => {
+    for (const sub of subs) {
+      const context = `${prefix} ${sub.name}`;
+      for (const [flag, values] of Object.entries(sub.flagValues ?? {})) {
+        entries.push({ context, flag, values });
+      }
+      if (sub.subcommands !== undefined) walk(sub.subcommands, context);
+    }
+  };
   for (const command of COMPLETION_COMMANDS) {
     for (const [flag, values] of Object.entries(command.flagValues ?? {})) {
       entries.push({ context: command.token, flag, values });
     }
-    for (const sub of command.subcommands ?? []) {
-      for (const [flag, values] of Object.entries(sub.flagValues ?? {})) {
-        entries.push({ context: `${command.token} ${sub.name}`, flag, values });
-      }
-    }
+    walk(command.subcommands ?? [], command.token);
   }
   return entries;
 }
@@ -99,9 +105,34 @@ function bashCommandBlock(token: string): string[] {
   lines.push('        case "${sub}" in');
   for (const sub of subcommands) {
     const flags = unique([...HELP_FLAGS, ...(sub.flags ?? [])]);
+    const children = sub.subcommands ?? [];
+    if (children.length === 0) {
+      lines.push(
+        `          ${sh(sub.name)}) COMPREPLY=( $(compgen -W ${sh(flags.join(' '))} -- ${BASH_CUR}) ) ;;`,
+      );
+      continue;
+    }
+    // N 级加法递归（Option A）：第三词 case；既有两级语义不变
+    const childNames = children.map((child) => child.name);
+    const subWords = unique([...childNames, ...flags]);
+    lines.push(`          ${sh(sub.name)})`);
+    lines.push('            if [[ -n "${sub2}" ]]; then');
+    lines.push('              case "${sub2}" in');
+    for (const child of children) {
+      const childFlags = unique([...HELP_FLAGS, ...(child.flags ?? [])]);
+      lines.push(
+        `                ${sh(child.name)}) COMPREPLY=( $(compgen -W ${sh(childFlags.join(' '))} -- ${BASH_CUR}) ) ;;`,
+      );
+    }
     lines.push(
-      `          ${sh(sub.name)}) COMPREPLY=( $(compgen -W ${sh(flags.join(' '))} -- ${BASH_CUR}) ) ;;`,
+      `                *) COMPREPLY=( $(compgen -W ${sh(subWords.join(' '))} -- ${BASH_CUR}) ) ;;`,
     );
+    lines.push('              esac');
+    lines.push('            else');
+    lines.push(
+      `              COMPREPLY=( $(compgen -W ${sh(subWords.join(' '))} -- ${BASH_CUR}) )`,
+    );
+    lines.push('            fi ;;');
   }
   lines.push(
     `          *) COMPREPLY=( $(compgen -W ${sh(subWords.join(' '))} -- ${BASH_CUR}) ) ;;`,
@@ -127,7 +158,7 @@ function renderBash(): string {
     '#   source <(vessel completion bash)',
     '',
     '_vessel() {',
-    '  local cur prev cmd sub w i skip',
+    '  local cur prev cmd sub sub2 w i skip',
     '  COMPREPLY=()',
     '  cur="${COMP_WORDS[COMP_CWORD]}"',
     '  prev="${COMP_WORDS[COMP_CWORD - 1]}"',
@@ -135,6 +166,7 @@ function renderBash(): string {
     '  # The first non-flag word is the command; the next one is its subcommand.',
     '  cmd=""',
     '  sub=""',
+    '  sub2=""',
     '  skip=0',
     '  for ((i = 1; i < COMP_CWORD; i++)); do',
     '    w="${COMP_WORDS[i]}"',
@@ -150,6 +182,8 @@ function renderBash(): string {
     '      cmd="${w}"',
     '    elif [[ -z "${sub}" ]]; then',
     '      sub="${w}"',
+    '    elif [[ -z "${sub2}" ]]; then',
+    '      sub2="${w}"',
     '    fi',
     '  done',
     '',
@@ -292,8 +326,44 @@ function renderZsh(): string {
     lines.push('              case "${words[1]}" in');
     for (const sub of subcommands) {
       const subFlags = unique([...HELP_FLAGS, ...(sub.flags ?? [])]);
+      const children = sub.subcommands ?? [];
       lines.push(`                ${sh(sub.name)})`);
-      lines.push(...zshArgumentsCall('                  ', zshFlagSpecs(subFlags, sub.flagValues)));
+      if (children.length === 0) {
+        lines.push(
+          ...zshArgumentsCall('                  ', zshFlagSpecs(subFlags, sub.flagValues)),
+        );
+        lines.push('                  ;;');
+        continue;
+      }
+      // N 级加法递归（Option A）：第三词 state；既有两级语义不变
+      const childState = `${stateName}_${sub.name.replaceAll('-', '_')}`;
+      lines.push(
+        ...zshArgumentsCall('                  ', [
+          ...zshFlagSpecs(subFlags, sub.flagValues),
+          `'1:subcommand:(${children.map((child) => child.name).join(' ')})'`,
+          `'*::argument:->${childState}'`,
+        ]),
+      );
+      lines.push('                  case "${state}" in');
+      lines.push(`                    ${childState})`);
+      lines.push('                      case "${words[1]}" in');
+      for (const child of children) {
+        const childFlags = unique([...HELP_FLAGS, ...(child.flags ?? [])]);
+        lines.push(`                        ${sh(child.name)})`);
+        lines.push(
+          ...zshArgumentsCall(
+            '                          ',
+            zshFlagSpecs(childFlags, child.flagValues),
+          ),
+        );
+        lines.push('                          ;;');
+      }
+      lines.push('                        *)');
+      lines.push(...zshArgumentsCall('                          ', zshFlagSpecs(subFlags)));
+      lines.push('                          ;;');
+      lines.push('                      esac');
+      lines.push('                      ;;');
+      lines.push('                  esac');
       lines.push('                  ;;');
     }
     lines.push('                *)');
@@ -389,6 +459,14 @@ function renderFish(): string {
       );
       const subCondition = `${seen}; and __fish_seen_subcommand_from ${sub.name}`;
       lines.push(...fishFlagLines(sub.flags ?? [], sub.flagValues, subCondition));
+      // N 级加法递归（Option A）：第三词候选 + flag 条件；既有两级语义不变
+      for (const child of sub.subcommands ?? []) {
+        lines.push(
+          `complete -c vessel -f -n ${sh(subCondition)} -a ${sh(child.name)} -d 'Vessel subcommand'`,
+        );
+        const childCondition = `${subCondition}; and __fish_seen_subcommand_from ${child.name}`;
+        lines.push(...fishFlagLines(child.flags ?? [], child.flagValues, childCondition));
+      }
     }
   }
   lines.push('');
@@ -433,6 +511,22 @@ function renderPowerShell(): string {
       if ((sub.flags?.length ?? 0) > 0) {
         subFlagEntries.push([`${command.token} ${sub.name}`, psArray(sub.flags ?? [])]);
       }
+      // N 级加法递归（Option A）：三级候选表 + flag 表；既有两级语义不变
+      const children = sub.subcommands ?? [];
+      if (children.length > 0) {
+        subEntries.push([
+          `${command.token} ${sub.name}`,
+          psArray(children.map((child) => child.name)),
+        ]);
+      }
+      for (const child of children) {
+        if ((child.flags?.length ?? 0) > 0) {
+          subFlagEntries.push([
+            `${command.token} ${sub.name} ${child.name}`,
+            psArray(child.flags ?? []),
+          ]);
+        }
+      }
     }
   }
 
@@ -474,12 +568,13 @@ function renderPowerShell(): string {
     '',
     '    $cmd = ""',
     '    $sub = ""',
+    '    $sub2 = ""',
     '    $skip = $false',
     '    foreach ($word in $words) {',
     '        if ($skip) { $skip = $false; continue }',
     '        if ($valueFlags -contains $word) { $skip = $true; continue }',
     '        if ($word.StartsWith("-")) { continue }',
-    '        if ($cmd -eq "") { $cmd = $word } elseif ($sub -eq "") { $sub = $word }',
+    '        if ($cmd -eq "") { $cmd = $word } elseif ($sub -eq "") { $sub = $word } elseif ($sub2 -eq "") { $sub2 = $word }',
     '    }',
     '',
     '    $context = $cmd',
@@ -497,9 +592,14 @@ function renderPowerShell(): string {
     '        $candidates = @($subcommands[$cmd])',
     '        if ($commandFlags.ContainsKey($cmd)) { $candidates += $commandFlags[$cmd] }',
     '        $candidates += $helpFlags',
+    '    } elseif ($sub -ne "" -and -not $wordToComplete.StartsWith("-") -and $subcommands.ContainsKey("$cmd $sub")) {',
+    '        $candidates = @($subcommands["$cmd $sub"])',
+    '        if ($subFlags.ContainsKey("$cmd $sub")) { $candidates += $subFlags["$cmd $sub"] }',
+    '        $candidates += $helpFlags',
     '    } else {',
     '        if ($commandFlags.ContainsKey($cmd)) { $candidates += $commandFlags[$cmd] }',
     '        if ($subFlags.ContainsKey("$cmd $sub")) { $candidates += $subFlags["$cmd $sub"] }',
+    '        if ($sub2 -ne "" -and $subFlags.ContainsKey("$cmd $sub $sub2")) { $candidates += $subFlags["$cmd $sub $sub2"] }',
     '        $candidates += $helpFlags',
     '    }',
     '',

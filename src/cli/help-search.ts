@@ -18,8 +18,8 @@ import { t } from '../i18n';
 import { schemaSummary } from './commands/rpc-command';
 import { type ControlPlaneTargetOptions, resolveControlPlaneTarget } from './control-plane-target';
 import type { CliHelpPlan } from './help';
-import { CLI_HELP_COMMANDS } from './help-spec';
 import { ui } from './output';
+import { HELP_COMMANDS as CLI_HELP_COMMANDS } from './project';
 
 /** 结果上限：一屏可读；更细的过滤交给 grep / vessel rpc list --json。 */
 const MAX_RESULTS = 20;

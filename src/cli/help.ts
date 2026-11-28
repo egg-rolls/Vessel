@@ -16,15 +16,16 @@
  */
 
 import { t } from '../i18n';
+import { ui } from './output';
 import {
-  CLI_FLAG_HELP,
-  CLI_FLAG_VALUE,
-  CLI_HELP_COMMANDS,
-  CLI_HELP_GROUPS,
   type CliFlag,
   type CliHelpCommand,
-} from './help-spec';
-import { ui } from './output';
+  FLAG_HELP_TABLE,
+  FLAG_VALUE_TABLE,
+  HELP_COMMANDS,
+  HELP_GROUPS,
+  OVERVIEW_COMMANDS,
+} from './project';
 
 /** 识别 help 的写法（`vessel help ...` / `vessel <group> help` / 任意位置的 `-h`） */
 const HELP_TOKENS: ReadonlySet<string> = new Set(['-h', '--help']);
@@ -76,12 +77,12 @@ function buildHelpTree(commands: readonly CliHelpCommand[]): HelpNode {
   return finalizeHelpNode(root);
 }
 
-const HELP_ROOT: HelpNode = buildHelpTree(CLI_HELP_COMMANDS);
+const HELP_ROOT: HelpNode = buildHelpTree(HELP_COMMANDS);
 
 /** 分组（自身不是命令）的摘要；兼作命令的分组用 spec.summary */
 function nodeSummary(node: HelpNode): string {
   if (node.spec !== undefined) return t(node.spec.summary);
-  const key = CLI_HELP_GROUPS[node.path.join(' ')];
+  const key = HELP_GROUPS[node.path.join(' ')];
   return key === undefined ? '' : t(key);
 }
 
@@ -189,12 +190,12 @@ function columnWidth(rows: Array<[string, string]>): number {
 
 /** flag 的展示形态：`--daemon` / `--instance <name>`（命令级可覆盖取值形态） */
 function flagSyntax(spec: CliHelpCommand, flag: CliFlag): string {
-  const value = spec.flagValue?.[flag] ?? CLI_FLAG_VALUE[flag];
+  const value = spec.flagValue?.[flag] ?? FLAG_VALUE_TABLE[flag] ?? null;
   return value === null ? flag : `${flag} ${value}`;
 }
 
 function flagDescription(spec: CliHelpCommand, flag: CliFlag): string {
-  return t(spec.flagHelp?.[flag] ?? CLI_FLAG_HELP[flag]);
+  return t(spec.flagHelp?.[flag] ?? FLAG_HELP_TABLE[flag] ?? 'flag.help');
 }
 
 /** `vessel <path> <args> <required flags> [optional flags]` */
@@ -273,11 +274,58 @@ function renderGroupHelp(node: HelpNode): string {
   return lines.join('\n');
 }
 
-/** 全局总览：保留 0.10 以来的分组大表（文案不变） */
+/** 全局总览：schema 纯投射（§8.7）+ 渲染层布局常量（段序/入口模式行）。
+ * 命令行 = usageLine(spec)（与命令页同一函数）；新增命令自动落位（D-16 顺序收敛）。 */
 export function renderGlobalHelp(): string {
+  // 段布局常量（渲染层，不是命令声明）：顶层 group → 段；hub join 特例入 hubNode。
+  const SECTION_OF_GROUP: Readonly<Record<string, string>> = {
+    demo: 'usage',
+    ps: 'gateway',
+    status: 'gateway',
+    agents: 'gateway',
+    attention: 'gateway',
+    team: 'gateway',
+    federation: 'gateway',
+    errors: 'gateway',
+    gateway: 'gateway',
+    token: 'gateway',
+    node: 'gateway',
+    stop: 'gateway',
+    restart: 'gateway',
+    fleet: 'gateway',
+    session: 'gateway',
+    permission: 'gateway',
+    kanban: 'gateway',
+    rpc: 'gateway',
+    hub: 'hubService',
+    eval: 'capability',
+    config: 'config',
+    model: 'config',
+    plugin: 'plugins',
+    migrate: 'migrate',
+    trace: 'migrate',
+    prune: 'migrate',
+    dev: 'debug',
+    doctor: 'meta',
+    logs: 'meta',
+    update: 'meta',
+    completion: 'meta',
+  };
+  const sectionOf = (spec: CliHelpCommand): string => {
+    if (spec.path[0] === 'hub' && spec.path[1] === 'join') return 'hubNode';
+    return SECTION_OF_GROUP[spec.path[0] ?? ''] ?? 'meta';
+  };
+  const projected: Record<string, Array<[string, string]>> = {};
+  for (const spec of OVERVIEW_COMMANDS) {
+    const section = sectionOf(spec);
+    const rows = projected[section] ?? [];
+    rows.push([usageLine(spec), t(spec.summary)]);
+    projected[section] = rows;
+  }
+  // 入口模式行（不是 schema 命令；存在性在 cli.ts 入口处理，help 只展示）
   const usage: Array<[string, string]> = [
     ['vessel', t('help.cmd.repl')],
-    ['vessel demo', t('help.cmd.demo')],
+    ...(projected.usage ?? []),
     ['vessel help [command]', t('help.cmd.helpCommand')],
     ['vessel help --search <query>', t('help.cmd.helpSearch')],
     ['vessel <command> --data-dir <path>', t('help.cmd.globalDataDir')],
@@ -296,157 +344,51 @@ export function renderGlobalHelp(): string {
     ['vessel -c --run "..."', t('help.cmd.continueRun')],
     ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
   ];
-  const gateway: Array<[string, string]> = [
-    ['vessel ps [--all] [--json]', t('help.cmd.ps')],
-    ['vessel status [--json]', t('help.cmd.status')],
-    ['vessel agents [--json]', t('help.cmd.agents')],
-    ['vessel attention [--connect <url>] [--json] [--interactive]', t('help.cmd.attention')],
-    ['vessel attention [--node <name>|--all-nodes] [--json]', t('help.cmd.attentionNodes')],
-    [
-      'vessel attention respond <id> --allow|--deny|--answers <json>',
-      t('help.cmd.attentionRespond'),
-    ],
-    ['vessel team list [--json]', t('help.cmd.teamList')],
-    ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
-    ['vessel team show <team_id|slug> [--json]', t('help.cmd.teamShow')],
-    ['vessel team mine [--json]', t('help.cmd.teamMine')],
-    ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
-    ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
-    ['vessel team budget <team_id> [--conversation <id>] [--json]', t('help.cmd.teamBudget')],
-    [
-      'vessel team budget override <team_id> --conversation <id> --dimension <d> --max <n|unlimited>',
-      t('help.cmd.teamBudgetOverride'),
-    ],
-    ['vessel team freeze <team_id> [--json]', t('help.cmd.teamFreeze')],
-    ['vessel team unfreeze <team_id> [--json]', t('help.cmd.teamUnfreeze')],
-    [
-      'vessel federation post --to <principal@node:team> --from <principal@node:team> <content...>',
-      t('help.cmd.federationPost'),
-    ],
-    [
-      'vessel federation team-info --to <principal@node:team> [--members N] [--json]',
-      t('help.cmd.federationTeamInfo'),
-    ],
-    ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
-    [
-      'vessel errors [--connect <url>] [--json] [--id <error_id> | --run <run_id>]',
-      t('help.cmd.errors'),
-    ],
-    [
-      'vessel gateway start [--foreground] [--instance <name>] [--data-dir <path>]',
-      t('help.cmd.gatewayStart'),
-    ],
-    ['vessel gateway list [--json] [--data-dir <path>]', t('help.cmd.gatewayList')],
-    ['vessel gateway nodes list [--json]', t('help.cmd.gatewayNodesList')],
-    [
-      'vessel gateway nodes add <name> --data-dir <dir> --config <path> [--no-auto-start]',
-      t('help.cmd.gatewayNodesAdd'),
-    ],
-    ['vessel gateway nodes remove <name>', t('help.cmd.gatewayNodesRemove')],
-    [
-      'vessel gateway stop [--instance <name>|--port N|--all] [--stop-nodes] [--data-dir <path>]',
-      t('help.cmd.gatewayStop'),
-    ],
-    ['vessel gateway status [--json] [--rpc] [--data-dir <path>]', t('help.cmd.gatewayStatus')],
-    [
-      'vessel gateway restart [--daemon] [--instance <name>|--all] [--stop-nodes] [--data-dir <path>]',
-      t('help.cmd.gatewayRestart'),
-    ],
-    ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
-    ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
-    ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
-    // 0.56：单一根密钥 + 派生 token（列在 gateway/node 之后：是运维核对手段，不是日常命令）。
-    ['vessel token list [--json]', t('help.cmd.tokenList')],
-    [
-      'vessel token show --purpose <platform|hub|node|proxy> [--node <id>]',
-      t('help.cmd.tokenShow'),
-    ],
-    ['vessel token rotate --yes', t('help.cmd.tokenRotate')],
-    ['vessel node token [--print] [--json]', t('help.cmd.nodeToken')],
-    ['vessel node start [--daemon] [--config <path>] [--data-dir <path>]', t('help.cmd.nodeStart')],
-    ['vessel node status [--json] [--rpc] [--data-dir <path>]', t('help.cmd.nodeStatus')],
-    ['vessel node stop [--data-dir <path>]', t('help.cmd.nodeStop')],
-    ['vessel node reload [--scope config,plugins] [--data-dir <path>]', t('help.cmd.nodeReload')],
-  ];
-  // hub 命令按 service / node client 分组。
-  const hubService: Array<[string, string]> = [
-    ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
-    ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
-    ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
-    ['vessel hub join-code [--data-dir DIR] [--ttl N] [--json]', t('help.cmd.hubJoinCode')],
-    ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
-    ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
-  ];
-  const hubNode: Array<[string, string]> = [
-    ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
-  ];
+  const gateway = projected.gateway ?? [];
+  const hubService = projected.hubService ?? [];
+  const hubNode = projected.hubNode ?? [];
   const capability: Array<[string, string]> = [
-    ['vessel eval <suite>', t('help.cmd.eval')],
-    ['vessel eval <suite> --json --out <path>', t('help.cmd.evalOut')],
+    ...(projected.capability ?? []),
     ['vessel --feishu', t('help.cmd.feishu')],
   ];
   const config: Array<[string, string]> = [
     ['vessel --data-dir <path> ...', t('help.cmd.dataDir')],
     ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
-    ['vessel config path', t('help.cmd.configPath')],
-    ['vessel config init', t('help.cmd.configInit')],
-    ['vessel config show --sources', t('help.cmd.configShow')],
-    ['vessel config explain <key>', t('help.cmd.configExplain')],
-    ['vessel config set <key> <value>', t('help.cmd.configSet')],
-    ['vessel model list [--json]', t('help.cmd.modelList')],
-    ['vessel model set <id> --entry <json>', t('help.cmd.modelSet')],
-    ['vessel model remove <id>', t('help.cmd.modelRemove')],
-    ['vessel model set-default <ref>', t('help.cmd.modelSetDefault')],
-    [
-      'vessel model credential-set <id> --base-url <url> [--value-env <ENV>]',
-      t('help.cmd.modelCredentialSet'),
-    ],
-    ['vessel model test [<entry>] [--credential <id>]', t('help.cmd.modelTest')],
+    ...(projected.config ?? []),
   ];
-  const plugins: Array<[string, string]> = [
-    ['vessel plugin list', t('help.cmd.pluginList')],
-    ['vessel plugin install <path> [--force]', t('help.cmd.pluginInstall')],
-    ['vessel plugin remove <name>', t('help.cmd.pluginRemove')],
-    ['vessel plugin enable <name>', t('help.cmd.pluginEnable')],
-    ['vessel plugin disable <name>', t('help.cmd.pluginDisable')],
-  ];
-  const migrate: Array<[string, string]> = [
-    ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
-    ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
-    ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
-    ['vessel prune [--older-than <dur>] [--yes]', t('help.cmd.prune')],
-  ];
+  const plugins = projected.plugins ?? [];
+  const migrate = projected.migrate ?? [];
   const debug: Array<[string, string]> = [
     ['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')],
-    ['vessel dev reset [--yes] [--dry-run] [--json]', t('help.cmd.devReset')],
+    ...(projected.debug ?? []),
   ];
   const meta: Array<[string, string]> = [
-    ['vessel doctor [--deep] [--errors]', t('help.cmd.doctor')],
-    ['vessel logs tail [--json] [--lines N]', t('help.cmd.logsTail')],
+    ...(projected.meta ?? []),
     ['vessel --resume-run', t('help.cmd.resumeRunList')],
-    ['vessel update [--yes]', t('help.cmd.update')],
-    ['vessel update --check', t('help.cmd.updateCheck')],
-    ['vessel update --channel beta', t('help.cmd.updateBeta')],
     ['vessel --version', t('help.cmd.version')],
     ['vessel --tools', t('help.cmd.tools')],
-    ['vessel completion <shell>', t('help.cmd.completion')],
     ['vessel --help', t('help.cmd.help')],
   ];
-  const width = Math.max(
-    ...[
-      ...usage,
-      ...session,
-      ...headless,
-      ...gateway,
-      ...hubService,
-      ...hubNode,
-      ...capability,
-      ...config,
-      ...plugins,
-      ...migrate,
-      ...debug,
-      ...meta,
-    ].map(([cmd]) => cmd.length),
+  // 布局常量：对齐宽度上限（纯投射 usage 行可达 500+ 字符；超限行长行溢出，
+  // 摘要紧随其后。上限 ≈ 现态精选表宽度，保持短行对齐观感。W1 parity 报告列明。）
+  const width = Math.min(
+    98,
+    Math.max(
+      ...[
+        ...usage,
+        ...session,
+        ...headless,
+        ...gateway,
+        ...hubService,
+        ...hubNode,
+        ...capability,
+        ...config,
+        ...plugins,
+        ...migrate,
+        ...debug,
+        ...meta,
+      ].map(([cmd]) => cmd.length),
+    ),
   );
 
   return [
