@@ -95,6 +95,7 @@ evals / feishu / metrics / observability 全缺省时：CLI eval 不可用、不
 
 - **config-watch**（`config-watch.ts`）：`fs.watch` 用户配置，写入抖动 debounce 合并；校验通过后应用，差异行按行首
   scope token 分组、每组独立一条 notice（无前缀行归 config 兜底组）。O7 直写竞态加固：`config.set` 写盘同步 trigger 已应用一遍，同一次写入迟到的 fs.watch 事件去重，不双应用。
+  **空差异如实通知**（q-config-edit-bypass）：所有 scope applier 都报空差异、但配置内容确实变了（`ui.*` / `envInjection` 非 cadence 字段等无专属差异行的键）时，装配层报 `config: hot-applied (changed: <顶层键>)`（`changedConfigKeys`，与 `diffRestartFields` 同 `stableValue` 口径），不发无内容的 `reloaded` 致「未生效 / 被旁路」误读；内容未变（回声）保留旧 `reloaded` 兜底。agent edit/write 直写 config 无独立预应用 hook——唯一热应用入口就是 config-watch，直写经正常 `fs.watch` 路径应用。
 - **scope → applier 注入表**（`gateway-reload-wiring.ts`）：`config` / `plugins` 内建；
   `permission` / `tools` / `mcp` 由装配注入（只注册真实存在的 applier）。请求未注册 scope →
   `unknown reload scope`；单 scope 抛错不中断其余（失败写进该 scope 摘要）。applier 返回差异摘要行。

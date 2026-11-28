@@ -165,7 +165,7 @@ export function diffRestartFields(current: VesselConfig, next: VesselConfig): st
 }
 
 /**
- * 比较两份配置的**顶层键**，返回值发生变化的键名（按 next 键序，缺省键补尾）。
+ * 比较两份配置的**顶层键**，返回值发生变化的键名（按 current 键序，next 新增键补尾）。
  * 与 {@link diffRestartFields} 同一 stableValue 口径，但粒度是顶层键而非重启字段。
  *
  * 用途（q-config-edit-bypass）：热应用后所有 scope applier 都报空差异时，配置内容
