@@ -27,6 +27,8 @@ export interface SessionStoreOptions {
   tenantSessionsDbPath?: string;
   /** 传给 SQLiteSessionStore 做 load/list/delete 过滤与 save 归属校验 */
   tenantId?: string;
+  /** sqlite 后端以只读连接打开（prune dry-run 用）；其他后端忽略 */
+  readonly?: boolean;
 }
 
 /** 按配置选择会话后端；缺省 file（0.5） */
@@ -49,7 +51,10 @@ export function createSessionStore(
       ) {
         console.warn(`⚠ session.storage_path escapes tenant "${opts.tenantId}": ${explicit}`);
       }
-      return new SQLiteSessionStore(explicit ?? opts.tenantSessionsDbPath ?? DEFAULT_SQLITE_PATH);
+      return new SQLiteSessionStore(
+        explicit ?? opts.tenantSessionsDbPath ?? DEFAULT_SQLITE_PATH,
+        opts.readonly === true ? { readonly: true } : undefined,
+      );
     }
     default: {
       const explicit = config?.storagePath;

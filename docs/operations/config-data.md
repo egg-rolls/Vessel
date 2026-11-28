@@ -50,6 +50,8 @@ vessel prune [--older-than <dur>] [--dry-run] [--json] [--yes]
 - 输出按五类汇总（team / agent / session / run / trace）；`--json` 同结构。**缺省 dry-run** 只报告
   条数与体积；必须 `--yes` 才真删（`--dry-run` 优先，两个都给也不删）。真删先取 data-dir 写意图锁
   （gateway/node 在跑时直接拒绝，不重试不降级不 partial）；dry-run 与真删读同一份计划。
+  `session.backend=sqlite` 时 dry-run 用**只读连接**枚举会话（不建库/表/列）；库不存在或
+  不可读时退回保守语义：枚举不出会话 ⇒ 目标 agent 一律留，报告带 note。
 - `--older-than <n><ms|s|m|h|d>`（裸数字按天）是**可选叠加**：只清「归档/停用时刻早于阈值」的对象
   （不是会话最后活动时间）；查不到时刻的默认不清。
 - 守卫：会话仍有活写者（写锁/租约 live 或不可解析）或还有 running/interrupted 可 resume 的 run

@@ -792,7 +792,7 @@ export const en: Record<MessageKey, string> = {
     '  kept: {count} objects have no archive/close timestamp (kept under --older-than)',
   'prune.totals': 'total: {count} items, {bytes}',
   'prune.note.sessionsBackendNotReadonly':
-    'note: dry-run cannot enumerate sessions (session.backend=sqlite has no read-only path), so agent records are kept too; use --yes for the full picture.',
+    'note: the session database (session.backend=sqlite) could not be opened read-only (missing or unreadable), so dry-run cannot enumerate sessions and agent records are kept too.',
   'prune.note.durableDisabled':
     'note: durable runs are disabled (durable.enabled=false); there are no run records to prune.',
   'prune.note.agentsSnapshotUnreadable':

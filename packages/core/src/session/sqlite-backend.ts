@@ -135,8 +135,16 @@ export class SQLiteSessionStore implements SessionStore {
   /**
    * @param dbPath SQLite 数据库文件路径，默认 `.vessel/sessions.db`（与 FileSessionStore 的
    *   `.vessel/sessions` 同级）；传 `:memory:` 走内存库（测试用），不建目录。
+   * @param options readonly=true 时以只读连接打开（prune dry-run 用）：不建目录、不建表、
+   *   不补列，库文件不存在 / 不可读时直接抛错（调用方自行降级）。写方法会被 SQLite 拒绝。
    */
-  constructor(dbPath = '.vessel/sessions.db') {
+  constructor(dbPath = '.vessel/sessions.db', options?: { readonly?: boolean }) {
+    if (options?.readonly === true) {
+      // 只读连接零写盘：不 mkdir、不 init（CREATE TABLE / ALTER 都是写）；旧库缺列时
+      // SELECT * 读出的行缺字段，load 的 `|| undefined` 回退已覆盖。
+      this.db = new Database(dbPath, { readonly: true });
+      return;
+    }
     // SQLite 只创建文件、不创建父目录——首次运行前先补目录（对标 FileSessionStore 的惰性 mkdir）
     if (dbPath !== ':memory:') {
       try {
