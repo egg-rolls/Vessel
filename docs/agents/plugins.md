@@ -28,7 +28,7 @@ applies_to: [N, M]
 
 - 扫描根优先级（高 → 低）：project `./.vessel/plugins` → user `~/.vessel/plugins` → repo 内置 `plugins/` → `node_modules`；同 id 高优先级胜出；覆盖内置需 `vessel.override: true`，否则保留内置、告警并记 `plugin_id_conflict`。
 - `plugins:` 是**覆盖层语义**：默认集（全部已安装的 in-process 能力插件）恒为底，条目只做覆盖——`enabled: false` 显式关、列入即显式启用；新装插件不配置即装载。默认集与外部插件告警 / `VESSEL_NO_EXTERNAL_PLUGINS` 的实现见 `src/plugin/plugin-loader.ts` / `src/plugin/plugin-selection.ts`；策略与 P0-3 残余风险见 AGENTS 硬规则，本文件不复述。
-- 体验插件（child）可热重载（目录 / config watcher + `plugins.reload`）；in-process 插件按能力分档：toggle / settings 可热，**代码改动恒需重启进程**（ESM 缓存），`restart_required` 只报真实待生效差异。机制细节见 [plugins.md](../architecture/plugins.md#热重载)。
+- 体验插件（child）可热重载（目录 / config watcher + `plugins.reload`）；in-process 插件按能力分档：toggle / settings 可热，**代码改动恒需重启进程**（ESM 缓存），`restart_required` 只报真实待生效差异。机制细节见 [plugins.md](../architecture/plugins.md#热重载与-per-capability-生命周期)。
 
 ## 生命周期
 
