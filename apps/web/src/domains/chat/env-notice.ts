@@ -54,7 +54,7 @@ import { DEFAULT_ENV_CADENCE } from '@vessel-agent/config/env-injection';
  * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更），
  *   在 `EnvNoticeScope` 类型里补充，不进解析词表。
  *
- * R-10 单源：核心词表派生 config `DEFAULT_ENV_CADENCE`（`Object.keys`，17 词含 health），
+ * R-10 单源：核心词表派生 config `DEFAULT_ENV_CADENCE`（`Object.keys`，18 词含 script），
  * 只额外保留两个不在节奏表里的历史词（inbox / selfcard，见上）。生产者加词时同步
  * agent `ENV_INFO_SCOPES` + config `DEFAULT_ENV_CADENCE` + i18n 标签（`chat.env.scope.*`）
  * + 插件字面量副本；本数组与 Web settings-registry 词表自动跟随，不再人工对拍。

@@ -11,8 +11,13 @@
  * 信息性非 gate：churn 只是上界，语义确认与更新判断归人；不写 synced/正确，永不 exit 1，
  * 不接 CI / hook。
  *
- * 用法：bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all]
+ * 用法：bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all] [--quiet]
  * 退出码：0 成功（无论有无候选）；2 参数 / 目录 / git 错误；永不 1（无 pass/fail 语义）。
+ *
+ * --quiet（订阅脚本契约，q-subscription-script）：仅输出滞后文档（churnFiles>0 且
+ * lagCommits>=threshold），每行 `滞后N次 <doc> (churn M)`（lag 降序 / path 字典序，
+ * 稳定排序是订阅 diff 模式的前提）；无滞后 ⇒ stdout 全空。不含 coverage / tree gaps /
+ * orphan（quiet = 主信号滞后）。与 --json 组合 ⇒ `{"docs":[…仅滞后…]}`；--doc 优先于 quiet。
  */
 
 import { spawnSync } from 'node:child_process';
@@ -25,7 +30,8 @@ const ROOT = join(import.meta.dir, '..');
 const SCAN_DIRS = ['docs/architecture', 'docs/agents', 'docs/operations'] as const;
 const SYNC_KINDS = new Set(['current', 'advisory']);
 const DEFAULT_THRESHOLD = 10;
-const USAGE = '用法: bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all]\n';
+const USAGE =
+  '用法: bun run scripts/doc-sync.ts [--threshold N] [--json] [--doc <path>] [--all] [--quiet]\n';
 
 interface RunResult {
   exitCode: number;
@@ -242,6 +248,19 @@ function formatLag(docs: SyncDoc[], all: boolean): string[] {
   return out;
 }
 
+/** quiet 模式（订阅脚本契约）：仅滞后文档，稳定排序（lag 降序 / path 字典序）。 */
+function laggingDocs(docs: SyncDoc[]): SyncDoc[] {
+  return docs
+    .filter((doc) => doc.churnFiles > 0 && doc.status.startsWith('滞后'))
+    .sort((a, b) => b.lagCommits - a.lagCommits || a.path.localeCompare(b.path));
+}
+
+function formatQuietLag(docs: SyncDoc[]): string[] {
+  return laggingDocs(docs).map(
+    (doc) => `滞后${doc.lagCommits}次 ${doc.display} (churn ${doc.churnFiles})`,
+  );
+}
+
 function formatCoverage(uncovered: string[], all: boolean): string[] {
   if (uncovered.length === 0) return ['(none)'];
   if (all) return uncovered;
@@ -314,6 +333,7 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
   let threshold = DEFAULT_THRESHOLD;
   let json = false;
   let all = false;
+  let quiet = false;
   let docPath: string | null = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
@@ -329,6 +349,10 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
     }
     if (arg === '--all') {
       all = true;
+      continue;
+    }
+    if (arg === '--quiet') {
+      quiet = true;
       continue;
     }
     if (arg === '--threshold') {
@@ -384,6 +408,20 @@ async function runDocSync(argv: string[]): Promise<RunResult> {
       return { exitCode: 0, stdout: `${JSON.stringify(payload, null, 2)}\n`, stderr: '' };
     }
     return { exitCode: 0, stdout: formatDocDetail(doc, detail), stderr: '' };
+  }
+
+  // quiet（订阅脚本契约）：仅滞后主信号，无滞后 stdout 全空；不算 coverage / tree gaps。
+  if (quiet) {
+    const lagging = laggingDocs(docs);
+    if (json) {
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify({ docs: lagging.map(docFields) }, null, 2)}\n`,
+        stderr: '',
+      };
+    }
+    const rows = formatQuietLag(docs);
+    return { exitCode: 0, stdout: rows.length > 0 ? `${rows.join('\n')}\n` : '', stderr: '' };
   }
 
   const tracked = lines(git('ls-files'));

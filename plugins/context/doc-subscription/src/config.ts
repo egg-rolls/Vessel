@@ -10,6 +10,60 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
 
+/**
+ * 订阅脚本调度（q-subscription-script，设计 §2.3）：
+ * - 'run'（缺省）：每 run 首请求 kickoff；
+ * - 'request'：每请求检查 kickoff（单飞约束下实际频率 = 脚本时长上限）；
+ * - { intervalSeconds: N }：惰性求值 —— 每次 BeforeLlm 检查 now - last_started_at >= N
+ *   才发起；无 run 时不跑（真 timer 常驻模式留 P2 host watcher）。
+ */
+export type ScriptSchedule = 'run' | 'request' | { intervalSeconds: number };
+
+/**
+ * 一条订阅脚本声明（用户配置 allowlist，fail-closed 信任边界，设计 §2.7）：
+ * 命令本体只来自用户配置；模型经 subscribe 工具只能按名订阅已声明的脚本，
+ * 不能注入 / 修改命令。argv 数组 spawn，无 shell。
+ */
+export interface ScriptSpec {
+  /** 订阅名（唯一键，[A-Za-z0-9_-]{1,64}） */
+  name: string;
+  /** argv 数组（非空，全字符串；无 shell） */
+  command: string[];
+  /** 脚本 cwd；缺省 = 装配层 agent cwd（config.cwd） */
+  cwd?: string;
+  /** 调度（缺省 'run'） */
+  schedule: ScriptSchedule;
+  /** 输出模式（缺省 'diff'：与上一版 stdout 做差异；'full'：每次非空投全文） */
+  output: 'diff' | 'full';
+  /** 超时 kill（缺省 30s） */
+  timeoutMs: number;
+  /** stdout 上限（超出截断 + 标记；缺省 64KiB） */
+  maxOutputBytes: number;
+  /** 环境卡 scope 词（缺省 'script'；未登记词回落 'script'，fail-closed） */
+  scope: string;
+}
+
+/** 脚本默认值 */
+export const SCRIPT_DEFAULTS = {
+  timeoutMs: 30000,
+  maxOutputBytes: 65536,
+} as const;
+
+/**
+ * 已登记的脚本 scope 词（字面量副本；生产侧真相 = config `DEFAULT_ENV_CADENCE`，
+ * 依赖方向不能 import config）。P0 只有通用兜底词 'script'（案 B 先行）；
+ * P1 内置专词 doc-lag / code-heaviness 登记时同步这里。
+ */
+export const REGISTERED_SCRIPT_SCOPES: readonly string[] = ['script'];
+
+/** 订阅名语法（与 node_id / 联邦 principal 同形） */
+const SCRIPT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 订阅名是否合法（allowlist 键 / 工具面按名订阅的校验） */
+export function isValidScriptName(name: string): boolean {
+  return SCRIPT_NAME_RE.test(name);
+}
+
 /** 插件配置（解析后形态） */
 export interface DocSubscriptionConfig {
   /** 订阅状态目录；per-session JSON 写在 `<stateDir>/sessions/` */
@@ -47,6 +101,12 @@ export interface DocSubscriptionConfig {
    * `ui-only` ⇒ hook 只落 UI 卡事实（ctx.emitFact），不写 ctx.messages（模型不收）。
    */
   envChannels?: Record<string, EnvChannel>;
+  /**
+   * 订阅脚本 allowlist（q-subscription-script）：用户配置声明的检测命令清单。
+   * 整块非法 / 缺省 ⇒ 空清单（fail-closed，不崩插件）；subscribe source:'script'
+   * 只认这里声明过的名字。
+   */
+  scripts: ScriptSpec[];
 }
 
 /** 默认值 */
@@ -61,6 +121,7 @@ export const DEFAULT_CONFIG: Readonly<DocSubscriptionConfig> = {
   maxDiffLines: 200,
   maxTotalBytesPerRun: 262144,
   enabled: true,
+  scripts: [],
 };
 
 /** 类型守卫：值是否为对象记录 */
@@ -165,6 +226,58 @@ function readEnvChannels(record: Record<string, unknown>): Record<string, EnvCha
   return Object.keys(channels).length > 0 ? channels : undefined;
 }
 
+/**
+ * 解析 scripts allowlist（q-subscription-script，设计 §2.1）：
+ * 沿用既有风格（camelCase/snake_case 双拼写、非法值回落默认、未知键忽略）。
+ * 整块非法 ⇒ 空清单；单条非法（名字 / argv 不合法）⇒ 跳过该条（fail-closed）；
+ * 重名 ⇒ 首条生效。scope 未登记 ⇒ 回落 'script'（注册制防词表无界）。
+ */
+export function parseScriptSpecs(value: unknown): ScriptSpec[] {
+  if (!Array.isArray(value)) return [];
+  const specs: ScriptSpec[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const name = readStringField(item, 'name', 'name');
+    if (name === undefined || !SCRIPT_NAME_RE.test(name) || seen.has(name)) continue;
+    const commandRaw = item.command;
+    if (!Array.isArray(commandRaw)) continue;
+    const command = commandRaw.filter(
+      (arg): arg is string => typeof arg === 'string' && arg.trim() !== '',
+    );
+    if (command.length === 0 || command.length !== commandRaw.length) continue;
+
+    // schedule：'run' / 'request' / { interval_seconds: N }（正有限数）；非法回落 'run'。
+    let schedule: ScriptSchedule = 'run';
+    const scheduleRaw = item.schedule;
+    if (scheduleRaw === 'request') {
+      schedule = 'request';
+    } else if (isRecord(scheduleRaw)) {
+      const interval = readPositiveNumber(scheduleRaw, 'intervalSeconds', 'interval_seconds');
+      if (interval !== undefined) schedule = { intervalSeconds: interval };
+    }
+
+    const cwd = readStringField(item, 'cwd', 'cwd');
+    const scopeRaw = readStringField(item, 'scope', 'scope');
+    const scope =
+      scopeRaw !== undefined && REGISTERED_SCRIPT_SCOPES.includes(scopeRaw) ? scopeRaw : 'script';
+    seen.add(name);
+    specs.push({
+      name,
+      command,
+      ...(cwd !== undefined ? { cwd: path.resolve(expandHomePrefix(cwd)) } : {}),
+      schedule,
+      output: item.output === 'full' ? 'full' : 'diff',
+      timeoutMs: readPositiveNumber(item, 'timeoutMs', 'timeout_ms') ?? SCRIPT_DEFAULTS.timeoutMs,
+      maxOutputBytes:
+        readPositiveNumber(item, 'maxOutputBytes', 'max_output_bytes') ??
+        SCRIPT_DEFAULTS.maxOutputBytes,
+      scope,
+    });
+  }
+  return specs;
+}
+
 /** 把 YAML 配置解析成已知字段（未知键忽略） */
 export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfig {
   const source = isRecord(value) ? value : {};
@@ -208,6 +321,7 @@ export function parseDocSubscriptionConfig(value: unknown): DocSubscriptionConfi
       readPositiveNumber(source, 'maxTotalBytesPerRun', 'max_total_bytes_per_run') ??
       DEFAULT_CONFIG.maxTotalBytesPerRun,
     enabled: readBoolean(source, 'enabled', 'enabled') ?? DEFAULT_CONFIG.enabled,
+    scripts: parseScriptSpecs(source.scripts),
     ...(envGranularity !== undefined ? { envGranularity } : {}),
     ...(envChannels !== undefined ? { envChannels } : {}),
   };

@@ -437,6 +437,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     // P2 热加载：EU envCadence / envChannel 读 live ref（cli 热应用时同步）。
     getEnvInjection: () => liveConfigRef.current.envInjection,
+    // q-subscription-script：doc-subscription 插件 liveConfig 同源（cadence/channel/scripts
+    // 热改即时生效；成员持父 hook 引用也读活配置）。
+    getLiveConfig: () => liveConfigRef.current,
     tenantPaths,
     configSources: loaded.sources,
     configPaths: loaded.paths,

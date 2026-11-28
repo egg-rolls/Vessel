@@ -24,7 +24,7 @@ import {
   splitLines,
 } from '@vessel-agent/basic-tools';
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
-import { type DocSubscriptionConfig, resolveInput } from './config.js';
+import { type DocSubscriptionConfig, isValidScriptName, resolveInput } from './config.js';
 import { unifiedDiff } from './diff.js';
 import {
   describeHealthRev,
@@ -34,6 +34,7 @@ import {
   readHealthSnapshot,
 } from './health.js';
 import { observeEntry } from './hook.js';
+import { type ScriptRunner, scriptFlightKey, scriptSubscriptionKey } from './script.js';
 import {
   type ChangeOrigin,
   type ReadRef,
@@ -51,6 +52,10 @@ export interface SubscribeToolDeps {
   boundary: PathBoundary;
   store: SubscriptionStore;
   config: DocSubscriptionConfig;
+  /** live 配置 getter（q-subscription-script）：allowlist / 调度热改即时生效；缺省回落快照 */
+  liveConfig?: () => DocSubscriptionConfig;
+  /** script 执行器（inspect 诊断 peek 用）；缺省 ⇒ 无在飞诊断 */
+  runner?: ScriptRunner;
 }
 
 /** add 的单个路径结果 */
@@ -179,9 +184,11 @@ function formatRemove(
     typeof args.path === 'string' && args.path.trim() !== '' ? args.path.trim() : undefined;
   const rawNode =
     typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
+  const rawName =
+    typeof args.name === 'string' && args.name.trim() !== '' ? args.name.trim() : undefined;
 
-  if (id === undefined && rawPath === undefined && rawNode === undefined) {
-    return '错误：remove 需要 path、node 或 id。';
+  if (id === undefined && rawPath === undefined && rawNode === undefined && rawName === undefined) {
+    return '错误：remove 需要 path、node、name 或 id。';
   }
 
   let key: string | undefined;
@@ -192,12 +199,14 @@ function formatRemove(
     if (key === undefined) return `not_found: id=${id}`;
   } else if (rawNode !== undefined) {
     key = healthSubscriptionKey(rawNode);
+  } else if (rawName !== undefined) {
+    key = scriptSubscriptionKey(rawName);
   } else if (rawPath !== undefined) {
     key = canonicalPath(resolve(rawPath));
   }
 
   if (key === undefined || state.subscriptions[key] === undefined) {
-    return `not_found: ${rawPath ?? rawNode ?? id}`;
+    return `not_found: ${rawPath ?? rawNode ?? rawName ?? id}`;
   }
   delete state.subscriptions[key];
   return `removed: ${key}`;
@@ -207,6 +216,7 @@ function formatRemove(
 function describeRev(rev: string): string {
   if (rev === '') return 'never';
   if (rev === 'deleted') return 'deleted';
+  if (rev === 'empty') return 'empty';
   if (rev.startsWith('too_large:')) return 'too_large';
   if (rev.startsWith('binary:'))
     return `binary:${rev.slice('binary:'.length, 'binary:'.length + 12)}`;
@@ -227,6 +237,27 @@ function formatList(state: SessionSubscriptionState): string {
     if (entry.source === 'health') {
       lines.push(
         `  ${entry.path} id=${entry.id} source=health rev=${describeHealthRev(entry.rev)} ${changeLabel}`,
+      );
+      continue;
+    }
+    // script 条目（additive）：执行事实行（last_exit / last_run）。
+    if (entry.source === 'script') {
+      const facts = entry.script;
+      const exitLabel =
+        facts === undefined
+          ? 'never_run'
+          : facts.last_exit === null
+            ? facts.last_error !== undefined
+              ? 'failed'
+              : 'running'
+            : String(facts.last_exit);
+      const lastRun =
+        facts !== undefined && facts.last_started_at > 0
+          ? new Date(facts.last_started_at).toISOString()
+          : 'never';
+      lines.push(
+        `  ${entry.path} id=${entry.id} source=script rev=${describeRev(entry.rev)} ` +
+          `last_exit=${exitLabel} last_run=${lastRun} ${changeLabel}`,
       );
       continue;
     }
@@ -255,6 +286,9 @@ function resolveKey(
   const rawNode =
     typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
   if (rawNode !== undefined) return healthSubscriptionKey(rawNode);
+  const rawName =
+    typeof args.name === 'string' && args.name.trim() !== '' ? args.name.trim() : undefined;
+  if (rawName !== undefined) return scriptSubscriptionKey(rawName);
   const rawPath =
     typeof args.path === 'string' && args.path.trim() !== '' ? args.path.trim() : undefined;
   if (rawPath === undefined) return undefined;
@@ -598,6 +632,166 @@ async function inspectHealth(
   return { output: healthInspectEnvelope(entry, attrs, lines.join('\n')), changed: true };
 }
 
+/** 解析 script add 的输入名列表（name + names，保持顺序） */
+function collectNameInputs(args: Record<string, unknown>): string[] {
+  const inputs: string[] = [];
+  const single = args.name;
+  if (typeof single === 'string' && single.trim() !== '') inputs.push(single);
+  const multiple = args.names;
+  if (Array.isArray(multiple)) {
+    for (const item of multiple) {
+      if (typeof item === 'string') inputs.push(item);
+    }
+  }
+  return inputs;
+}
+
+/**
+ * 校验并构造 script 条目（q-subscription-script，设计 §2.7 fail-closed）：
+ * 名字必须合法且在 **live allowlist**（用户配置 plugins.doc-subscription.config.scripts）
+ * 里 —— 模型只能按名订阅已声明的脚本，不能注入 / 修改命令。
+ * 基线：rev=''（首次成功输出全量投递，裁点 2：存量问题立刻可见；不同于 file/health
+ * 的订阅时基线抑制）。重复 add 保留已有游标 / snapshot / 执行事实。
+ */
+function prepareScriptEntry(
+  input: string,
+  config: DocSubscriptionConfig,
+  existing: SubscriptionEntry | undefined,
+): AddOutcome {
+  const trimmed = input.trim();
+  if (trimmed === '') return { input, reason: 'empty' };
+  if (!isValidScriptName(trimmed)) return { input, reason: 'invalid_script_name' };
+  if (!config.scripts.some((spec) => spec.name === trimmed)) {
+    return { input, reason: 'not_in_allowlist' };
+  }
+  return {
+    input: trimmed,
+    entry: {
+      id: subscriptionId(trimmed),
+      path: trimmed,
+      input: trimmed,
+      source: 'script',
+      rev: existing?.rev ?? '',
+      notified_rev: existing?.notified_rev ?? '',
+      seen_rev: existing?.seen_rev ?? '',
+      size: existing?.size ?? 0,
+      mtime_ms: existing?.mtime_ms ?? 0,
+      notified_at: existing?.notified_at ?? 0,
+      seen_at: existing?.seen_at ?? 0,
+      origin: 'manual',
+      reads: [],
+      ...(existing?.snapshot !== undefined ? { snapshot: existing.snapshot } : {}),
+      ...(existing?.script !== undefined ? { script: existing.script } : {}),
+    },
+  };
+}
+
+/** script inspect 的 XML 信封（与 file / health 同族；name 替代 path 属性） */
+function scriptInspectEnvelope(
+  entry: SubscriptionEntry,
+  attrs: Record<string, string>,
+  body: string,
+): string {
+  const attrText = [
+    `name="${escapeXmlAttr(entry.path)}"`,
+    `id="${escapeXmlAttr(entry.id)}"`,
+    ...Object.entries(attrs).map(([key, value]) => `${key}="${escapeXmlAttr(value)}"`),
+  ].join(' ');
+  return `<subscription-inspect ${attrText}>\n${body}\n</subscription-inspect>`;
+}
+
+/**
+ * 显式读取 script 订阅：返回最近一次成功 stdout 全文（设计 §2.6：通知只带 diff /
+ * 摘要，全文在 inspect）+ 执行事实（last_exit / duration / schedule / output）。
+ * 成功返回才推进 seen_rev（与 file / health 同口径）；无输出不推进。
+ * 命令本体来自 live allowlist（只读展示；模型不能经工具修改）。
+ */
+function inspectScript(
+  state: SessionSubscriptionState,
+  args: Record<string, unknown>,
+  deps: SubscribeToolDeps,
+  config: DocSubscriptionConfig,
+  now: number,
+): InspectOutcome {
+  const key = resolveKey(state, args, deps);
+  if (key === undefined || state.subscriptions[key] === undefined) {
+    return { output: 'not_found: inspect 需要已订阅的 name 或 id。', changed: false };
+  }
+  const entry = state.subscriptions[key];
+  if (entry === undefined || entry.source !== 'script') {
+    return { output: 'not_found', changed: false };
+  }
+  const spec = config.scripts.find((candidate) => candidate.name === entry.path);
+  const facts = entry.script;
+  const attrs: Record<string, string> = {
+    rev:
+      entry.rev === ''
+        ? 'never'
+        : entry.rev === 'empty'
+          ? 'empty'
+          : `sha256:${entry.rev.slice(0, 12)}`,
+    exit:
+      facts === undefined
+        ? 'never_run'
+        : facts.last_exit === null
+          ? facts.last_error !== undefined
+            ? 'failed'
+            : 'running'
+          : String(facts.last_exit),
+  };
+  if (spec !== undefined) {
+    attrs.schedule =
+      typeof spec.schedule === 'object'
+        ? `interval:${spec.schedule.intervalSeconds}s`
+        : spec.schedule;
+    attrs.output = spec.output;
+  } else {
+    attrs.status = 'not_in_allowlist';
+  }
+
+  const factLines: string[] = [];
+  if (facts !== undefined) {
+    const exitText =
+      facts.last_exit === null
+        ? facts.last_error !== undefined
+          ? 'failed'
+          : 'running'
+        : String(facts.last_exit);
+    factLines.push(`last_exit: ${exitText}`);
+    factLines.push(`last_duration_ms: ${facts.last_duration_ms}`);
+    if (facts.last_started_at > 0) {
+      factLines.push(
+        `last_started_at: ${facts.last_started_at} (${new Date(facts.last_started_at).toISOString()})`,
+      );
+    }
+    if (facts.last_error !== undefined) factLines.push(`last_error: ${facts.last_error}`);
+  }
+  if (spec !== undefined) factLines.push(`command: ${JSON.stringify(spec.command)}`);
+  const inFlight = deps.runner?.isInFlight(scriptFlightKey(state.session_id, entry.path)) ?? false;
+  if (inFlight) factLines.push('status: running (a new execution is in flight)');
+
+  // 无全文可给：从未完成 / 空输出 / 超 maxFullBytes 未存 snapshot。
+  if (entry.snapshot === undefined) {
+    const body =
+      entry.rev === 'empty'
+        ? 'Script produced no output (empty = no issues).'
+        : entry.rev === ''
+          ? 'No output yet; the script has not completed a run.'
+          : `Output is ${entry.size} bytes (over the full-content limit); use bash to run the script directly.`;
+    return {
+      output: scriptInspectEnvelope(entry, attrs, [...factLines, body].join('\n')),
+      changed: false,
+    };
+  }
+
+  state.subscriptions[key] = { ...entry, seen_rev: entry.rev, seen_at: now };
+  const body = [...factLines, '', entry.snapshot].join('\n');
+  return {
+    output: scriptInspectEnvelope(entry, { ...attrs, change: 'full' }, body),
+    changed: true,
+  };
+}
+
 /** 构造 subscribe 工具 */
 export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
   return {
@@ -610,6 +804,10 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       'source:"health" subscribes a node\'s health instead of a file: node is a local node_id ' +
       'or a federation address <principal>@<node_id>:<team_id>; reachability flips, version ' +
       'changes and restarts (started_at) produce a health notice, inspect returns the snapshot. ' +
+      'source:"script" subscribes a detection script declared in the user config allowlist ' +
+      '(plugins.doc-subscription.config.scripts): name must match a declared script (you cannot ' +
+      'add or change commands); its stdout changes produce a script notice (empty output = no ' +
+      'notice), inspect returns the latest full output. ' +
       'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
@@ -621,7 +819,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         },
         source: {
           type: 'string',
-          enum: ['file', 'health'],
+          enum: ['file', 'health', 'script'],
           description: 'Subscription source type (add only; default file)',
         },
         path: { type: 'string', description: 'Single file path (add / remove / inspect)' },
@@ -640,6 +838,16 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
           items: { type: 'string' },
           description: 'Multiple node targets (source:health add only)',
         },
+        name: {
+          type: 'string',
+          description:
+            'Single script name (source:script add / remove / inspect): must be declared in the user config allowlist',
+        },
+        names: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Multiple script names (source:script add only)',
+        },
         id: { type: 'string', description: 'Subscription id (remove / inspect)' },
       },
     },
@@ -655,6 +863,16 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       }
 
       const sessionId = ctx.session_id ?? 'default';
+      // live 配置（q-subscription-script）：allowlist / 调度每次调用求值，热改即时生效。
+      let config = deps.config;
+      if (deps.liveConfig !== undefined) {
+        try {
+          config = deps.liveConfig();
+        } catch {
+          config = deps.config;
+        }
+      }
+      const effectiveDeps: SubscribeToolDeps = { ...deps, config };
       let state: SessionSubscriptionState;
       try {
         state = await deps.store.load(sessionId);
@@ -665,13 +883,16 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       if (action === 'list') return formatList(state);
 
       if (action === 'inspect') {
-        // health 源（additive）：按条目 source 分派；file 路径逐字节不变。
-        const inspectKey = resolveKey(state, args, deps);
-        const isHealth =
-          inspectKey !== undefined && state.subscriptions[inspectKey]?.source === 'health';
-        const outcome = isHealth
-          ? await inspectHealth(state, args, deps, Date.now())
-          : await inspectSubscription(state, args, deps, Date.now());
+        // health / script 源（additive）：按条目 source 分派；file 路径逐字节不变。
+        const inspectKey = resolveKey(state, args, effectiveDeps);
+        const inspectSource =
+          inspectKey !== undefined ? state.subscriptions[inspectKey]?.source : undefined;
+        const outcome =
+          inspectSource === 'health'
+            ? await inspectHealth(state, args, effectiveDeps, Date.now())
+            : inspectSource === 'script'
+              ? inspectScript(state, args, effectiveDeps, config, Date.now())
+              : await inspectSubscription(state, args, effectiveDeps, Date.now());
         if (outcome.changed) {
           try {
             await deps.store.save(state);
@@ -686,11 +907,12 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         if (
           (typeof args.path !== 'string' || args.path.trim() === '') &&
           (typeof args.node !== 'string' || args.node.trim() === '') &&
+          (typeof args.name !== 'string' || args.name.trim() === '') &&
           (typeof args.id !== 'string' || args.id.trim() === '')
         ) {
-          return '错误：remove 需要 path、node 或 id。';
+          return '错误：remove 需要 path、node、name 或 id。';
         }
-        const result = formatRemove(state, args, (input) => resolveInput(deps.config, input));
+        const result = formatRemove(state, args, (input) => resolveInput(config, input));
         if (result.startsWith('removed:')) {
           try {
             await deps.store.save(state);
@@ -701,11 +923,57 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         return result;
       }
 
-      // add：source 泛化（q-health-subscription）——缺省 'file'（零回归）；
-      // 'health' 走 node/nodes 目标分支，不碰文件边界 / stat / 敏感名判定。
+      // add：source 泛化（q-health-subscription / q-subscription-script）——缺省 'file'
+      //（零回归）；'health' 走 node/nodes 目标分支；'script' 走 name/names allowlist 分支。
       const source = args.source ?? 'file';
-      if (source !== 'file' && source !== 'health') {
-        return '错误：source 必须是 file / health。';
+      if (source !== 'file' && source !== 'health' && source !== 'script') {
+        return '错误：source 必须是 file / health / script。';
+      }
+
+      if (source === 'script') {
+        const inputs = collectNameInputs(args);
+        if (inputs.length === 0) return '错误：source:script add 需要 name 或 names。';
+        const added: SubscriptionEntry[] = [];
+        const rejected: Array<{ input: string; reason: string }> = [];
+        const seen = new Set<string>();
+        for (const input of inputs) {
+          const name = input.trim();
+          if (seen.has(name)) continue;
+          seen.add(name);
+          const key = scriptSubscriptionKey(name);
+          const outcome = prepareScriptEntry(name, config, state.subscriptions[key]);
+          if (outcome.entry === undefined) {
+            rejected.push({ input: outcome.input, reason: outcome.reason ?? 'invalid' });
+            continue;
+          }
+          state.subscriptions[key] = outcome.entry;
+          added.push(outcome.entry);
+        }
+        if (added.length > 0) {
+          try {
+            await deps.store.save(state);
+          } catch {
+            return '错误：保存订阅状态失败。';
+          }
+        }
+        const lines: string[] = [];
+        if (added.length > 0) {
+          lines.push(`added ${added.length}:`);
+          for (const entry of added) lines.push(`  ${entry.path} (script)`);
+          lines.push(
+            'Script output changes will produce a short notice (empty output = no notice); ' +
+              'use action "inspect" to view the latest full output.',
+          );
+        }
+        if (rejected.length > 0) {
+          lines.push(`rejected ${rejected.length}:`);
+          for (const item of rejected) lines.push(`  ${item.reason}: ${item.input}`);
+          lines.push(
+            'not_in_allowlist: only scripts declared in plugins.doc-subscription.config.scripts ' +
+              'can be subscribed; ask the user to declare the script in config.',
+          );
+        }
+        return lines.join('\n');
       }
 
       if (source === 'health') {
@@ -759,7 +1027,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       const seen = new Set<string>();
 
       for (const input of inputs) {
-        const existingCanonical = canonicalPath(resolveInput(deps.config, input.trim()));
+        const existingCanonical = canonicalPath(resolveInput(config, input.trim()));
         if (seen.has(existingCanonical)) continue;
         seen.add(existingCanonical);
 
