@@ -3039,6 +3039,55 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
   }),
   // ── 批 C1：舰队 stop / restart（S4） ──
   defineCommand({
+    path: ['start'],
+    surface: 'one-shot',
+    flags: ['--yes', '--instance', '--port', '--all', '--timeout', '--data-dir'],
+    flagOverrides: {
+      '--timeout': { invalidError: (raw) => `Invalid --timeout: ${raw} (expected e.g. 10s)` },
+    },
+    exitCodes: [
+      { code: 0, summary: 'start.exit.ok' },
+      { code: 1, summary: 'start.exit.failed' },
+      { code: 2, summary: 'start.exit.usage' },
+    ],
+    positional: '[<name>]',
+    positionalErrors: { extra: () => 'start accepts at most one name' },
+    // D-6：远程 start 不做——--connect 系显式拒绝（exit 2 用法错误）。
+    unknownFlagError: (token) =>
+      token === '--connect' ||
+      token === '--connect-token' ||
+      token === '--ca' ||
+      token === '--connect-ca'
+        ? 'vessel start does not accept --connect/--connect-token/--ca (remote start is not supported; remote stop: vessel stop --connect)'
+        : `Unknown argument for start: ${token}`,
+    validate: (p) => {
+      const f = p.flags;
+      const hasSelector =
+        f['--instance'] !== undefined || f['--port'] !== undefined || f['--all'] === true;
+      if (p.positionals[0] !== undefined && hasSelector) {
+        return 'start <name> cannot be combined with --instance, --port, or --all';
+      }
+      return null;
+    },
+    load: async () => {
+      const { startFleetCommand } = await import('./commands/fleet/start-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const g = parsed.globals;
+          const name = parsed.positionals[0];
+          return startFleetCommand({
+            ...(name !== undefined ? { name } : {}),
+            selector: name === undefined ? normalizedSelector(f) : selectorFromFlags(f),
+            yes: f['--yes'],
+            ...(f['--timeout'] !== undefined ? { timeoutMs: f['--timeout'] } : {}),
+            ...(g.dataDirArg !== null ? { dataDir: g.dataDirArg } : {}),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
     path: ['stop'],
     surface: 'one-shot',
     flags: [

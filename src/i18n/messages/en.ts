@@ -161,6 +161,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamArchive': 'archive a team (no new messages accepted)',
   'help.usage': 'Usage',
   'help.flags': 'Flags',
+  'help.exitCodes': 'Exit codes',
   'help.subcommands': 'Subcommands',
   'help.groupHelpHint': 'Run a subcommand with --help for its usage and flags.',
   'help.tryCommand': "Try '{command} --help'",
@@ -489,6 +490,22 @@ export const en: Record<MessageKey, string> = {
   'stop.warning.activeSessions':
     'warning: nodes may hold active sessions; killing them is not recoverable.',
   'stop.nothingRunning': 'No running fleet in the stop scope.',
+  // vessel start (cli-single-source T1; topology §4.2 form A)
+  'help.cmd.start':
+    'Start this fleet (platform + auto_start nodes/hub); skips running instances, reports failures without rollback',
+  'start.inventory.title': 'Fleet start (data root: {dataDir})',
+  'start.envWarning':
+    'Data root comes from the VESSEL_DATA_DIR env fallback; pin the fleet boundary with explicit --data-dir or config.',
+  'start.unknownName':
+    'Unknown target: {name} (neither a gateway instance nor a registered node name)',
+  'start.skipped': 'Skipped {instance}: already running',
+  'start.refused':
+    'Refused to start {instance}: state {state} (files untouched; verify pid/lock ownership first)',
+  'start.nothing': 'No targets to start.',
+  'start.done': 'Start summary: started {started} · skipped {skipped} · failed {failed}',
+  'start.exit.ok': 'All ready / all already running (skipped)',
+  'start.exit.failed': 'Any component failed / unknown target / unjudgeable state refused',
+  'start.exit.usage': 'Usage error (parse layer)',
   'stop.confirm.prompt': 'Stop the fleet above? [y/N] ',
   'stop.cancelled': 'Cancelled; no process was killed.',
   'stop.nonInteractive':

@@ -50,6 +50,8 @@ export interface CliHelpCommand {
   readonly usage?: string;
   /** 同名 flag 在本命令里含义不同时的覆盖说明 */
   readonly flagHelp?: Partial<Record<string, MessageKey>>;
+  /** 退出码脚注（§8.5；缺省不声明 = 无脚注） */
+  readonly exitCodes?: readonly { readonly code: number; readonly summary: MessageKey }[];
 }
 
 /** flag 字面量（原 CliFlag 白名单 → schema FLAG_DEFS 字面量联合；渲染层宽形状）。 */
@@ -177,6 +179,7 @@ export function projectHelp(schema: readonly CommandSpec[]): CliHelpCommand[] {
         ...(Object.keys(flagValue).length > 0 ? { flagValue } : {}),
         ...(spec.usage !== undefined ? { usage: spec.usage } : {}),
         ...(Object.keys(flagHelp).length > 0 ? { flagHelp } : {}),
+        ...(spec.exitCodes !== undefined ? { exitCodes: spec.exitCodes } : {}),
       } satisfies CliHelpCommand;
     });
 }

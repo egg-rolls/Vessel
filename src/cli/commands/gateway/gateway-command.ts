@@ -2485,6 +2485,11 @@ export async function startDaemonCommand(
     port?: number;
     host?: string;
     daemonLog?: string;
+    /** K7（cli-single-source T1）：代码隔离加法透传 → startGatewayDaemon 既有缝（daemon.ts:43-44）。 */
+    entryPath?: string;
+    execPath?: string;
+    /** 健康确认等待上限覆盖（缺省平台 60s / node 15s 组件预算）。 */
+    waitMs?: number;
   },
 ): Promise<number> {
   const context = await resolveContext(options);
@@ -2561,8 +2566,11 @@ export async function startDaemonCommand(
     // 平台要等每个 auto_start 节点就绪后才写 PID；节点 readiness 上限 20s，
     // 父进程等待必须覆盖“启动失败 → 平台回滚退出”的路径，避免过早硬杀。
     ...(stateKind === 'platform' ? { waitMs: 60_000 } : {}),
+    ...(options.waitMs !== undefined ? { waitMs: options.waitMs } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
+    ...(options.entryPath !== undefined ? { entryPath: options.entryPath } : {}),
+    ...(options.execPath !== undefined ? { execPath: options.execPath } : {}),
     ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
     ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
   });

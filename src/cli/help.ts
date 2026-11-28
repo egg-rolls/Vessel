@@ -252,6 +252,12 @@ function renderCommandHelp(node: HelpNode): string {
     `  ${ui.section(t('help.flags'))}`,
     align(rows, columnWidth(rows)),
   ];
+  if (spec.exitCodes !== undefined && spec.exitCodes.length > 0) {
+    lines.push('', `  ${ui.section(t('help.exitCodes'))}`);
+    for (const entry of spec.exitCodes) {
+      lines.push(`  ${entry.code}  ${t(entry.summary)}`);
+    }
+  }
   if (node.children.length > 0) lines.push('', ...subcommandList(node));
   return lines.join('\n');
 }
