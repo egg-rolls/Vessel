@@ -1385,6 +1385,22 @@ button.tool-image-thumb:focus-visible {
   padding: 2px 0 8px;
 }
 
+/* 用户裁定（q-card-padding-relax）：工具卡 / 环境卡上下 padding 各 +6px 防拥挤。
+   只 scoped 到这两种卡（同壳 StreamCard），通用 .event-block 规则不动 ——
+   agent 条等它卡不受影响。折叠态卡头 4→10（上下各 +6）；展开态体底 8→14（同 +6）。 */
+.tool-card > summary,
+.tool-card > .event-block-summary,
+.env-notice-card > summary,
+.env-notice-card > .event-block-summary {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.tool-card > .event-block-body,
+.env-notice-card > .event-block-body {
+  padding-bottom: 14px;
+}
+
 .event-raw-label {
   font-size: var(--size-xs);
   letter-spacing: 0.02em;
