@@ -32,6 +32,7 @@ import type {
 } from '../../packages/core/src/index';
 import { resolveDataDir } from '../data/data-paths';
 import { resolveAgentCwd } from '../data/path-resolution';
+import { agentEventsPort } from '../runtime/agent-events-bridge';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
@@ -285,6 +286,13 @@ export function buildPluginConfigMap(
       },
     };
   }
+  // 好友边事件端口（q-sub-unify-p1 M6）：晚绑定 bridge，install 时注册 listener，
+  // wiring 后 bindAgentEventsService 接上真实 service。JSON.stringify 丢函数值 ⇒
+  // 热应用键比较不受影响（与 liveConfig 同口径）。
+  map['doc-subscription'] = {
+    ...(map['doc-subscription'] ?? {}),
+    agentEvents: agentEventsPort,
+  };
   return map;
 }
 
@@ -325,12 +333,12 @@ function applySkillsLibraryIsolation(
 
 /**
  * 插件产哪些 env scope（asm 知道，插件自己不声明）：doc-subscription → files / health /
- * script / doc-lag / code-heaviness（health 源 q-health-subscription；script 源
- * q-subscription-script；内置检测器专词 q-subscription-script-p1 案 B），
+ * agent / script / doc-lag / code-heaviness（health 源 q-health-subscription；agent 源
+ * q-sub-unify-p1；script 源 q-subscription-script；内置检测器专词 q-subscription-script-p1 案 B），
  * basic-tools → lock / conflict（写协调 producer）。
  */
 const ENV_GRANULARITY_SCOPES: Readonly<Record<string, readonly string[]>> = {
-  'doc-subscription': ['files', 'health', 'script', 'doc-lag', 'code-heaviness'],
+  'doc-subscription': ['files', 'health', 'agent', 'script', 'doc-lag', 'code-heaviness'],
   'basic-tools': ['lock', 'conflict'],
 };
 

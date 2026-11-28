@@ -35,6 +35,16 @@ export const SUBSCRIPTION_NOTICE_SCOPE = 'files';
 export const HEALTH_NOTICE_SCOPE = 'health';
 
 /**
+ * 环境信息的 scope 词：成员活动变更（q-sub-unify-p1，additive，★D5 统一 agent 词）。
+ *
+ * 与 `files` / `health` 同一形状（首行 `scope: 摘要` + `  · ` 明细行），Web 环境卡认得它，
+ * 卡头标签是「成员活动」。词表对拍范围同 health：agent `ENV_INFO_SCOPES` /
+ * config `DEFAULT_ENV_CADENCE` / Web 词表（R-10 派生）+ i18n `chat.env.scope.agent`。
+ * 裸 scope 前缀，无方括号（方括号 legacy 只属固定推送 [inbox]/[runtime]，P2/P4）。
+ */
+export const AGENT_NOTICE_SCOPE = 'agent';
+
+/**
  * 环境信息的 scope 词：订阅脚本检测结果（q-subscription-script，additive）。
  *
  * 与 `files` / `health` 同一形状（首行 `scope: 摘要` + `  · ` 明细行），Web 环境卡认得它，
@@ -220,6 +230,29 @@ export function formatHealthNotice(nodes: readonly string[], total: number): str
 /** script 明细里的调用提示（英文：面向模型，与其它运行时上下文同口径）。 */
 const SCRIPT_INSPECT_HINT =
   'Call subscribe with action "inspect" and the name to view the full output.';
+
+/** agent 明细里的调用提示（英文：面向模型，与其它运行时上下文同口径）。 */
+const AGENT_INSPECT_HINT =
+  'Call subscribe with action "inspect" and the id or agent to view member activity.';
+
+/**
+ * 一批变更成员 → 一条 agent 通知正文（首行 `agent: N subscribed agents changed`，
+ * 之后每行 `  · <agent … />`）。照抄 formatHealthNotice 骨架（q-sub-unify-p1，★D5）：
+ * 裸 scope 前缀，无方括号；行预算同口径：元数据 ≤8 + 溢出概括 + inspect 提示 + 首行 ≤ 11 行。
+ *
+ * `agents` 是已经格式化好的单 agent 行（`<agent target="…" id="…" state="…" … />`）；
+ * `total` 是实际变更总数（可以大于 `agents.length`，多出来的用「… and N more」概括）。
+ */
+export function formatAgentNotice(agents: readonly string[], total: number): string {
+  const kept = agents.slice(0, SUBSCRIPTION_NOTICE_DETAILS_MAX);
+  const dropped = total - kept.length;
+  const details = kept.map((agent) => `${SUBSCRIPTION_NOTICE_DETAIL_MARK}${agent}`);
+  if (dropped > 0) {
+    details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}… and ${dropped} more`);
+  }
+  details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}${AGENT_INSPECT_HINT}`);
+  return [`${AGENT_NOTICE_SCOPE}: ${total} subscribed agents changed`, ...details].join('\n');
+}
 
 /** 一个脚本变化的通知素材（hook 组装；线格式交给 formatScriptNotice） */
 export interface ScriptNoticeEntry {

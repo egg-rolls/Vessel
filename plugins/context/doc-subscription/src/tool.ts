@@ -24,6 +24,13 @@ import {
   splitLines,
 } from '@vessel-agent/basic-tools';
 import type { ToolContext, ToolDefinition } from '@vessel-agent/core';
+import {
+  agentSignature,
+  agentSubscriptionKey,
+  describeAgentRev,
+  isValidAgentTarget,
+  readAgentSnapshot,
+} from './agent.js';
 import { type DocSubscriptionConfig, isValidScriptName, resolveInput } from './config.js';
 import { unifiedDiff } from './diff.js';
 import {
@@ -203,9 +210,17 @@ function formatRemove(
     typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
   const rawName =
     typeof args.name === 'string' && args.name.trim() !== '' ? args.name.trim() : undefined;
+  const rawTarget =
+    typeof args.target === 'string' && args.target.trim() !== '' ? args.target.trim() : undefined;
 
-  if (id === undefined && rawPath === undefined && rawNode === undefined && rawName === undefined) {
-    return '错误：remove 需要 path、node、name 或 id。';
+  if (
+    id === undefined &&
+    rawPath === undefined &&
+    rawNode === undefined &&
+    rawName === undefined &&
+    rawTarget === undefined
+  ) {
+    return '错误：remove 需要 path、node、target、name 或 id。';
   }
 
   let key: string | undefined;
@@ -216,6 +231,8 @@ function formatRemove(
     if (key === undefined) return `not_found: id=${id}`;
   } else if (rawNode !== undefined) {
     key = healthSubscriptionKey(rawNode);
+  } else if (rawTarget !== undefined) {
+    key = agentSubscriptionKey(rawTarget);
   } else if (rawName !== undefined) {
     key = scriptSubscriptionKey(rawName);
   } else if (rawPath !== undefined) {
@@ -223,7 +240,7 @@ function formatRemove(
   }
 
   if (key === undefined || state.subscriptions[key] === undefined) {
-    return `not_found: ${rawPath ?? rawNode ?? rawName ?? id}`;
+    return `not_found: ${rawPath ?? rawNode ?? rawTarget ?? rawName ?? id}`;
   }
   delete state.subscriptions[key];
   return `removed: ${key}`;
@@ -254,6 +271,14 @@ function formatList(state: SessionSubscriptionState): string {
     if (entry.source === 'health') {
       lines.push(
         `  ${entry.path} id=${entry.id} source=health rev=${describeHealthRev(entry.rev)} ${changeLabel}`,
+      );
+      continue;
+    }
+    // agent 条目（q-sub-unify-p1，additive）：活动签名展示行；muted/friend 标记 additive。
+    if (entry.source === 'agent') {
+      const marks = `${entry.muted === true ? ' muted' : ''}${entry.friend !== undefined ? ` friend=${entry.friend.origin}` : ''}`;
+      lines.push(
+        `  ${entry.path} id=${entry.id} source=agent rev=${describeAgentRev(entry.rev)}${marks} ${changeLabel}`,
       );
       continue;
     }
@@ -303,6 +328,9 @@ function resolveKey(
   const rawNode =
     typeof args.node === 'string' && args.node.trim() !== '' ? args.node.trim() : undefined;
   if (rawNode !== undefined) return healthSubscriptionKey(rawNode);
+  const rawTarget =
+    typeof args.target === 'string' && args.target.trim() !== '' ? args.target.trim() : undefined;
+  if (rawTarget !== undefined) return agentSubscriptionKey(rawTarget);
   const rawName =
     typeof args.name === 'string' && args.name.trim() !== '' ? args.name.trim() : undefined;
   if (rawName !== undefined) return scriptSubscriptionKey(rawName);
@@ -649,6 +677,149 @@ async function inspectHealth(
   return { output: healthInspectEnvelope(entry, attrs, lines.join('\n')), changed: true };
 }
 
+/** 解析 agent add 的输入目标列表（target + targets，保持顺序；q-sub-unify-p1） */
+function collectAgentInputs(args: Record<string, unknown>): string[] {
+  const inputs: string[] = [];
+  const single = args.target;
+  if (typeof single === 'string' && single.trim() !== '') inputs.push(single);
+  const multiple = args.targets;
+  if (Array.isArray(multiple)) {
+    for (const item of multiple) {
+      if (typeof item === 'string') inputs.push(item);
+    }
+  }
+  return inputs;
+}
+
+/**
+ * 校验并构造 agent 条目（q-sub-unify-p1，照抄 prepareHealthEntry）。
+ * 基线：快照已在 ⇒ rev = notified_rev = 当前签名；快照缺失（watcher 尚未落 /
+ * private fail-closed）⇒ rev=''，首次观察通知当前状态。重复 add 保留已有游标。
+ * 已有 friend 块 / muted / origin 保留（好友边是成员级事实，不被手动 add 覆盖）。
+ */
+async function prepareAgentEntry(
+  input: string,
+  deps: SubscribeToolDeps,
+  existing: SubscriptionEntry | undefined,
+): Promise<AddOutcome> {
+  const trimmed = input.trim();
+  if (trimmed === '') return { input, reason: 'empty' };
+  if (!isValidAgentTarget(trimmed)) return { input, reason: 'invalid_agent_target' };
+
+  const snapshot = await readAgentSnapshot(deps.config.stateDir, trimmed);
+  const baseline = snapshot !== undefined ? agentSignature(snapshot) : '';
+  return {
+    input: trimmed,
+    entry: {
+      id: subscriptionId(trimmed),
+      path: trimmed,
+      input: trimmed,
+      source: 'agent',
+      rev: existing?.rev ?? baseline,
+      notified_rev: existing?.notified_rev ?? baseline,
+      seen_rev: existing?.seen_rev ?? '',
+      size: 0,
+      mtime_ms: snapshot?.checked_at ?? 0,
+      notified_at: existing?.notified_at ?? 0,
+      seen_at: existing?.seen_at ?? 0,
+      origin: existing?.origin ?? 'manual',
+      reads: [],
+      ...(existing?.muted === true ? { muted: true } : {}),
+      ...(existing?.friend !== undefined ? { friend: existing.friend } : {}),
+    },
+  };
+}
+
+/** agent inspect 的 XML 信封（与 health inspect 同族；target 替代 node 属性） */
+function agentInspectEnvelope(
+  entry: SubscriptionEntry,
+  attrs: Record<string, string>,
+  body: string,
+): string {
+  const attrText = [
+    `agent="${escapeXmlAttr(entry.path)}"`,
+    `id="${escapeXmlAttr(entry.id)}"`,
+    ...Object.entries(attrs).map(([key, value]) => `${key}="${escapeXmlAttr(value)}"`),
+  ].join(' ');
+  return `<subscription-inspect ${attrText}>\n${body}\n</subscription-inspect>`;
+}
+
+/**
+ * 显式读取 agent 订阅快照：返回宿主最近一次折叠的活动事实（state / presence /
+ * role / last_run_ts / name / team_id / checked_at）。成功返回才推进 seen_rev；
+ * 快照缺失不推进任何游标（照抄 inspectHealth）。
+ */
+async function inspectAgent(
+  state: SessionSubscriptionState,
+  args: Record<string, unknown>,
+  deps: SubscribeToolDeps,
+  now: number,
+): Promise<InspectOutcome> {
+  const key = resolveKey(state, args, deps);
+  if (key === undefined || state.subscriptions[key] === undefined) {
+    return { output: 'not_found: inspect 需要已订阅的 agent 或 id。', changed: false };
+  }
+  const entry = state.subscriptions[key];
+  if (entry === undefined) return { output: 'not_found', changed: false };
+
+  const snapshot = await readAgentSnapshot(deps.config.stateDir, entry.path);
+  if (snapshot === undefined) {
+    return {
+      output: agentInspectEnvelope(
+        entry,
+        { status: 'no_snapshot' },
+        'No activity snapshot yet; the host agent watcher has not observed this member (private members never produce snapshots).',
+      ),
+      changed: false,
+    };
+  }
+
+  const rev = agentSignature(snapshot);
+  const attrs: Record<string, string> = {
+    rev,
+    state: snapshot.state ?? '-',
+    change: entry.seen_rev === rev ? 'none' : 'full',
+  };
+  if (snapshot.presence !== undefined) attrs.presence = snapshot.presence;
+  if (snapshot.role !== undefined) attrs.role = snapshot.role;
+  if (snapshot.last_run_ts !== undefined) attrs.last_run_ts = String(snapshot.last_run_ts);
+  if (snapshot.name !== undefined) attrs.name = snapshot.name;
+  if (snapshot.team_id !== undefined) attrs.team_id = snapshot.team_id;
+
+  const lines: string[] = [`target: ${snapshot.target}`];
+  if (snapshot.name !== undefined) lines.push(`name: ${snapshot.name}`);
+  if (snapshot.team_id !== undefined) lines.push(`team_id: ${snapshot.team_id}`);
+  if (snapshot.visibility !== undefined) lines.push(`visibility: ${snapshot.visibility}`);
+  lines.push(`state: ${snapshot.state ?? '-'}`);
+  lines.push(`presence: ${snapshot.presence ?? '-'}`);
+  lines.push(`role: ${snapshot.role ?? '-'}`);
+  if (snapshot.last_run_ts !== undefined) {
+    lines.push(
+      `last_run_ts: ${snapshot.last_run_ts} (${new Date(snapshot.last_run_ts).toISOString()})`,
+    );
+  }
+  if (snapshot.last_event_type !== undefined)
+    lines.push(`last_event_type: ${snapshot.last_event_type}`);
+  if (snapshot.via !== undefined) lines.push(`via: ${snapshot.via}`);
+  lines.push(`checked_at: ${snapshot.checked_at} (${new Date(snapshot.checked_at).toISOString()})`);
+  if (entry.friend !== undefined) {
+    lines.push(
+      `friend: origin=${entry.friend.origin} since=${entry.friend.since}${entry.friend.nick !== undefined ? ` nick=${entry.friend.nick}` : ''}`,
+    );
+  }
+
+  state.subscriptions[key] = {
+    ...entry,
+    rev,
+    notified_rev: rev,
+    seen_rev: rev,
+    mtime_ms: snapshot.checked_at,
+    seen_at: now,
+    notified_at: entry.notified_rev === rev ? entry.notified_at : now,
+  };
+  return { output: agentInspectEnvelope(entry, attrs, lines.join('\n')), changed: true };
+}
+
 /** 解析 script add 的输入名列表（name + names，保持顺序） */
 function collectNameInputs(args: Record<string, unknown>): string[] {
   const inputs: string[] = [];
@@ -825,6 +996,10 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
       '(plugins.doc-subscription.config.scripts): name must match a declared script (you cannot ' +
       'add or change commands); its stdout changes produce a script notice (empty output = no ' +
       'notice), inspect returns the latest full output. ' +
+      'source:"agent" subscribes a member\'s activity instead of a file: target is a local ' +
+      'agent_id or a federation address <principal>@<node_id>:<team_id>; state/presence flips, ' +
+      'role changes and run completions produce an agent notice, inspect returns the activity ' +
+      'snapshot (private members never produce snapshots). ' +
       'use remove to clear subscriptions you no longer need (e.g. when switching tasks).',
     inputSchema: {
       type: 'object',
@@ -836,7 +1011,7 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         },
         source: {
           type: 'string',
-          enum: ['file', 'health', 'script'],
+          enum: ['file', 'health', 'script', 'agent'],
           description: 'Subscription source type (add only; default file)',
         },
         path: { type: 'string', description: 'Single file path (add / remove / inspect)' },
@@ -854,6 +1029,16 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description: 'Multiple node targets (source:health add only)',
+        },
+        target: {
+          type: 'string',
+          description:
+            'Single agent target (source:agent add / remove / inspect): local agent_id or <principal>@<node_id>:<team_id>',
+        },
+        targets: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Multiple agent targets (source:agent add only)',
         },
         name: {
           type: 'string',
@@ -900,9 +1085,11 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         const outcome =
           inspectSource === 'health'
             ? await inspectHealth(state, args, effectiveDeps, Date.now())
-            : inspectSource === 'script'
-              ? inspectScript(state, args, effectiveDeps, config, Date.now())
-              : await inspectSubscription(state, args, effectiveDeps, Date.now());
+            : inspectSource === 'agent'
+              ? await inspectAgent(state, args, effectiveDeps, Date.now())
+              : inspectSource === 'script'
+                ? inspectScript(state, args, effectiveDeps, config, Date.now())
+                : await inspectSubscription(state, args, effectiveDeps, Date.now());
         if (outcome.changed) {
           try {
             await deps.store.save(state);
@@ -917,10 +1104,11 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         if (
           (typeof args.path !== 'string' || args.path.trim() === '') &&
           (typeof args.node !== 'string' || args.node.trim() === '') &&
+          (typeof args.target !== 'string' || args.target.trim() === '') &&
           (typeof args.name !== 'string' || args.name.trim() === '') &&
           (typeof args.id !== 'string' || args.id.trim() === '')
         ) {
-          return '错误：remove 需要 path、node、name 或 id。';
+          return '错误：remove 需要 path、node、target、name 或 id。';
         }
         const result = formatRemove(state, args, (input) => resolveInput(config, input));
         if (result.startsWith('removed:')) {
@@ -941,11 +1129,56 @@ export function createSubscribeTool(deps: SubscribeToolDeps): ToolDefinition {
         return result;
       }
 
-      // add：source 泛化（q-health-subscription / q-subscription-script）——缺省 'file'
-      //（零回归）；'health' 走 node/nodes 目标分支；'script' 走 name/names allowlist 分支。
+      // add：source 泛化（q-health-subscription / q-subscription-script / q-sub-unify-p1）——
+      // 缺省 'file'（零回归）；'health' 走 node/nodes；'script' 走 name/names；'agent' 走 target/targets。
       const source = args.source ?? 'file';
-      if (source !== 'file' && source !== 'health' && source !== 'script') {
-        return '错误：source 必须是 file / health / script。';
+      if (source !== 'file' && source !== 'health' && source !== 'script' && source !== 'agent') {
+        return '错误：source 必须是 file / health / script / agent。';
+      }
+
+      if (source === 'agent') {
+        const inputs = collectAgentInputs(args);
+        if (inputs.length === 0) return '错误：source:agent add 需要 target 或 targets。';
+        const added: SubscriptionEntry[] = [];
+        const rejected: Array<{ input: string; reason: string }> = [];
+        const seen = new Set<string>();
+        for (const input of inputs) {
+          const target = input.trim();
+          if (seen.has(target)) continue;
+          seen.add(target);
+          const key = agentSubscriptionKey(target);
+          const outcome = await prepareAgentEntry(target, deps, state.subscriptions[key]);
+          if (outcome.entry === undefined) {
+            rejected.push({ input: outcome.input, reason: outcome.reason ?? 'invalid' });
+            continue;
+          }
+          state.subscriptions[key] = outcome.entry;
+          added.push(outcome.entry);
+        }
+        if (added.length > 0) {
+          try {
+            await deps.store.save(state);
+          } catch {
+            return '错误：保存订阅状态失败。';
+          }
+        }
+        const lines: string[] = [];
+        if (added.length > 0) {
+          lines.push(`added ${added.length}:`);
+          for (const entry of added) {
+            const friendMark = entry.friend !== undefined ? ` (friend=${entry.friend.origin})` : '';
+            lines.push(`  ${entry.path} (agent)${friendMark}`);
+          }
+          lines.push(
+            'Activity changes (state / presence / role / run completion) will produce a short notice; ' +
+              'use action "inspect" to view the activity snapshot.',
+          );
+        }
+        if (rejected.length > 0) {
+          lines.push(`rejected ${rejected.length}:`);
+          for (const item of rejected) lines.push(`  ${item.reason}: ${item.input}`);
+        }
+        return lines.join('\n');
       }
 
       if (source === 'script') {

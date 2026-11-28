@@ -66,6 +66,7 @@ import { createRunControl } from '../run/run-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from '../session/session-lock';
 import type { McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
+import type { AgentActivityWatch } from './agent-activity-watch';
 import { assembleAgentWiring, finishAgentAssembly } from './agent-assembly';
 import { bootstrapConnect, withConnectCliOverrides } from './bootstrap-connect';
 import type { BootstrapOptions, BootstrapResult } from './bootstrap-types';
@@ -561,6 +562,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let peerNotices: PeerNoticeRouter | undefined;
   /** node 健康订阅 watcher（q-health-subscription；需求驱动周期探测，快照供插件观察）。 */
   let nodeHealthWatch: NodeHealthWatch | undefined;
+  /** agent 活动订阅 watcher（q-sub-unify-p1；双流事件驱动，快照供插件 agent 源观察）。 */
+  let agentActivityWatch: AgentActivityWatch | undefined;
   /**
    * 图片 blob 池的 GC 定时器（0.56 P1）。缺省开：孤儿 blob 不清会一直占着 2 GiB 池，
    * 触顶之后新图不再内联（静默降级）。第一趟固定 dry-run（只报「将删 N / 共 M」）。
@@ -625,6 +628,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     noticeBus = assembly.noticeBus;
     peerNotices = assembly.peerNotices;
     nodeHealthWatch = assembly.nodeHealthWatch;
+    agentActivityWatch = assembly.agentActivityWatch;
     federationApply = assembly.federationApply;
     feishuTeamId = assembly.feishuTeamId;
     feishuAgentService = assembly.feishuAgentService;
@@ -876,6 +880,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     resolveNodeHealthWatch: () => nodeHealthWatch,
     clearNodeHealthWatch: () => {
       nodeHealthWatch = undefined;
+    },
+    resolveAgentActivityWatch: () => agentActivityWatch,
+    clearAgentActivityWatch: () => {
+      agentActivityWatch = undefined;
     },
     resolveImageBlobGc: () => imageBlobGc,
     clearImageBlobGc: () => {

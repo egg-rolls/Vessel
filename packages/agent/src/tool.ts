@@ -403,6 +403,12 @@ export interface AgentToolOptions {
   /** 成员 ExecutionUnit 的 Team 能力（send / list）；缺失时这些动作报错 */
   team?: AgentTeamService;
   /**
+   * 好友边投影（q-sub-unify-p1 M6，additive）：返回 viewer 的好友成员 id 集。
+   * 装配层注入（读订阅状态 friend 块）；缺省 ⇒ list 输出逐字不变（零回归）。
+   * canView 已由 rosterFor 管道保证；friend 标记是 canView ∧ friend 双过滤。
+   */
+  friendsOf?: (viewerId: string) => Promise<ReadonlySet<string>>;
+  /**
    * `read` 的只读会话读取端口（装配层注入，与 `sessions.get` RPC 同一份 SessionState）。
    *
    * 不新增 RPC：只把已经落盘的会话消息读出来，供父级自己看成员报告（收口不再自动
@@ -1177,6 +1183,19 @@ export function createAgentTool(
             }
             if (state !== undefined) {
               roster = roster.filter((entry) => entry.state === state);
+            }
+            // 好友区（q-sub-unify-p1 M6，additive）：canView ∧ friend 双过滤。
+            // 无 port / 无好友 ⇒ 输出逐字不变（零回归）；有好友 ⇒ 条目加 friend:true。
+            if (options.friendsOf !== undefined) {
+              const caller = await service.identify(callerSession as string);
+              if (caller !== undefined) {
+                const friends = await options.friendsOf(caller.id);
+                if (friends.size > 0) {
+                  roster = roster.map((entry) =>
+                    friends.has(entry.agent_id) ? { ...entry, friend: true } : entry,
+                  );
+                }
+              }
             }
             return JSON.stringify(withoutBodyHistory(roster));
           }

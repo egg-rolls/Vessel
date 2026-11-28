@@ -135,6 +135,11 @@ export interface AgentServiceWiringOptions {
    * 与 `permission.respond` 无需第二套协议。
    */
   parentEvents?: EventStream;
+  /**
+   * 好友边投影（q-sub-unify-p1 M6，additive）：viewer 的好友成员 id 集。
+   * 装配层注入（读订阅状态 friend 块）；缺省 ⇒ agent list 输出逐字不变。
+   */
+  friendsOf?: (viewerId: string) => Promise<ReadonlySet<string>>;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberExecutionPermissionMode;
   /**
@@ -623,6 +628,8 @@ export async function createAgentServiceWiring(
       ownerSessionId: options.sessionId,
       team,
       humanApproval: options.humanApproval === true,
+      // 好友边投影（q-sub-unify-p1 M6）：装配层注入；缺省 ⇒ list 输出逐字不变。
+      ...(options.friendsOf !== undefined ? { friendsOf: options.friendsOf } : {}),
       // read 走既有 SessionStore（与 sessions.get RPC 同一份 SessionState），只读。
       ...(options.session !== undefined
         ? {

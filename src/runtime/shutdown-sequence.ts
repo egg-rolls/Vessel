@@ -24,6 +24,8 @@ import type { createPluginHostManager } from '../plugin/plugin-host-assembly';
 import type { startPluginWatch } from '../plugin/plugin-watch';
 import type { SessionLock } from '../session/session-lock';
 import type { EngineSupervisor } from '../tools-engine/supervisor';
+import type { AgentActivityWatch } from './agent-activity-watch';
+import { unbindAgentEventsService } from './agent-events-bridge';
 import type { BootstrapResult } from './bootstrap-types';
 import type { NodeHealthWatch } from './node-health-watch';
 import type { TenantRuntimeBundle } from './tenant-runtime-factory';
@@ -49,6 +51,8 @@ export interface ShutdownSequenceContext {
   clearPeerNotices: () => void;
   resolveNodeHealthWatch: () => NodeHealthWatch | undefined;
   clearNodeHealthWatch: () => void;
+  resolveAgentActivityWatch: () => AgentActivityWatch | undefined;
+  clearAgentActivityWatch: () => void;
   resolveImageBlobGc: () => ImageBlobGcRunner | undefined;
   clearImageBlobGc: () => void;
   resolveStagingGc: () => StagingGcRunner | undefined;
@@ -79,6 +83,8 @@ export function createShutdownSequence(ctx: ShutdownSequenceContext) {
     clearPeerNotices,
     resolveNodeHealthWatch,
     clearNodeHealthWatch,
+    resolveAgentActivityWatch,
+    clearAgentActivityWatch,
     resolveImageBlobGc,
     clearImageBlobGc,
     resolveStagingGc,
@@ -175,6 +181,19 @@ export function createShutdownSequence(ctx: ShutdownSequenceContext) {
       // 清定时器是 best-effort
     }
     clearNodeHealthWatch();
+    // q-sub-unify-p1：agent 活动 watcher 停掉（双流 unsubscribe + 清定时器；在飞 tick 自然跑完）。
+    try {
+      resolveAgentActivityWatch()?.stop();
+    } catch {
+      // 断链 / 清定时器是 best-effort
+    }
+    clearAgentActivityWatch();
+    // q-sub-unify-p1 M6：好友边事件桥断链（best-effort）。
+    try {
+      unbindAgentEventsService();
+    } catch {
+      // 断链是 best-effort
+    }
     // 0.56 P1：blob GC 定时器（在飞的那一趟照旧跑完，不阻塞退出）。
     resolveImageBlobGc()?.stop();
     clearImageBlobGc();

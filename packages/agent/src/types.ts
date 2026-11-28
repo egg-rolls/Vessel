@@ -2343,6 +2343,12 @@ export interface TeamMemberSummary {
    * 团队视角只能看到 `state=failed` 而看不到「因为什么跑不动」，于是会把消息继续投进去。
    */
   blocked?: BodyBlocked;
+  /**
+   * 好友边标记（q-sub-unify-p1 M6，additive）：viewer 与该成员有 friend 边时 true。
+   * 缺省不落字段（无好友 / 无投影 port 时输出逐字不变，零回归）。
+   * canView ∧ friend 双过滤：canView 由 rosterFor 管道保证，friend 由投影 port 提供。
+   */
+  friend?: boolean;
 }
 
 export interface TeamSummary {

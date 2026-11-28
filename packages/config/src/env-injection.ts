@@ -42,6 +42,8 @@ const ENV_CADENCE_TABLE = {
   conflict: 'request',
   files: 'run',
   health: 'run',
+  // 成员活动（q-sub-unify-p1，★D5 统一 agent 词）：默认 run = 每 run 首请求观察活动快照。
+  agent: 'run',
   // 订阅脚本（q-subscription-script）：通用检测脚本订阅的兜底 scope 词（案 B 注册制）；
   // 默认 run = 每 run 首请求 kickoff/drain。
   script: 'run',
