@@ -5,7 +5,7 @@
  * 所有字段使用 camelCase（ADR-019）。config loader 自动将 YAML 的 snake_case 映射过来。
  */
 
-import type { EnvCadence, EnvChannel } from '@vessel-agent/core';
+import type { EnvCadence, EnvChannel } from '@vessel-agent/core/types/env-cadence';
 
 /** Provider 配置 */
 export interface ProviderConfig {
@@ -258,8 +258,8 @@ export interface ContextConfig {
  * 由前缀不变量 / EU 生命周期钉死为 run，配 `request` 会被校验拒绝（不静默钳制）；
  * `off` 允许（D6：静默不破坏前缀，只是模型不知情，UI 文案警示）。
  *
- * 轴 C 投递通道（P2，D5 完整交付全 16 词）：`model+ui`（缺省 = 现状）/ `ui-only`
- * （UI 可见 = 事件广播，模型不注入）。`off` 时通道被忽略。
+ * 轴 C 投递通道（P2，D5 完整交付全词表，派生自 DEFAULT_ENV_CADENCE）：`model+ui`
+ * （缺省 = 现状）/ `ui-only`（UI 可见 = 事件广播，模型不注入）。`off` 时通道被忽略。
  */
 export interface EnvInjectionConfig {
   /** 内置默认表未收录的 scope 的兜底节奏；都缺省时回落 'run'。 */

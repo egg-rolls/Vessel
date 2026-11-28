@@ -16,7 +16,10 @@
       "@vessel-agent/plugin-sdk": ["../../packages/plugin-sdk/src/index.ts"],
       // q-addr-display：地址显示纯函数按源码消费（零 import leaf，不拖 agent 包依赖图；
       // 先例：plugin-ui / plugin-sdk）。只映射这一个子路径，包根不开放。
-      "@vessel-agent/agent/address-display": ["../../packages/agent/src/address-display.ts"]
+      "@vessel-agent/agent/address-display": ["../../packages/agent/src/address-display.ts"],
+      // R-10 单源：env 节奏表叶模块按源码消费（import type 运行时零依赖，同
+      // address-display 先例）。只映射这一个子路径，config 包根不开放。
+      "@vessel-agent/config/env-injection": ["../../packages/config/src/env-injection.ts"]
     },
     "skipLibCheck": true,
     "resolveJsonModule": true,
