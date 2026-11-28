@@ -209,6 +209,34 @@ const ENTRIES: Readonly<Record<string, Omit<ErrorCodeMeta, 'code'>>> = {
   // node_draining → gateway_restarting 的既有映射在 src/run/run-control.ts（可重试）。
   node_draining: meta('agent', 'lifecycle', true, { rpcCode: 'gateway_restarting', since: '0.52' }),
 
+  // ── q-error-e2（§3.5）：drain 证据指引码（node.drain.skipped 按 reason 登记）。
+  //    只定证据不修行为（F1/SD-2 归 q-infra-hardening，已在 main）；无既有 RPC 映射
+  //    不臆造 rpcCode；hintKey 就位，四段 i18n 全文属 E3。 ──
+  node_drain_no_record: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_no_record',
+    since: 'q-error-e2',
+  }),
+  node_drain_unauthorized: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_unauthorized',
+    since: 'q-error-e2',
+  }),
+  node_drain_method_not_found: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_method_not_found',
+    since: 'q-error-e2',
+  }),
+  node_drain_network: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_network',
+    since: 'q-error-e2',
+  }),
+  node_drain_timeout: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_timeout',
+    since: 'q-error-e2',
+  }),
+  node_drain_quiesce_timeout: meta('node', 'lifecycle', false, {
+    hintKey: 'error.hint.node_drain_quiesce_timeout',
+    since: 'q-error-e2',
+  }),
+
   // ── TeamErrorCode（rpcCode 按 mapTeamError 实查：default → invalid_params） ──
   team_not_found: meta('agent', 'agent', false, { rpcCode: 'not_found', since: 'pre-E1' }),
   team_conversation_not_found: meta('agent', 'agent', false, {

@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  errorSummary,
   formatClearedToolResult,
   indexToolCalls,
   isClearedToolResult,
@@ -1321,49 +1322,84 @@ function agentErrorMessage(error: unknown): string {
  *
  * q-error-e1（设计 §3.1 / D2）：分类收敛为查单一注册表（lookupErrorCode → rpcCode），
  * 不再 switch 硬编码；wire message/details 特例是线上契约不是分类，保留为后处理。
- * 不新增 `RpcErrorCode`：`not_visible` 用 `not_found` + `details.reason` 表达（安全裁定②）；
- * `restart_failed` / `restart_rollback_failed` / `activate_failed` / `create_failed`
- * 只作为 `internal` 的 message reason，不泄漏原始 `invalid_input`。
+ * 不新增 `RpcErrorCode`：`not_visible` 用 `not_found` + `details.reason` 表达（安全裁定②）。
+ * q-error-e2（§3.3/§3.6）：手拼前缀（create_failed:/restart_failed: 等）废除，
+ * 改由 details 携 error_id/operation/cause 链 + source 结构化上下文（spawn 契约
+ * resolution/candidates 等）；冻结码映射不变。
  * r10：`run_in_progress: <runId|spawn>` 的 wire message 固定为 `run_in_progress`，
  * 真实 runId 只进 `details.run_id`。
  * 文本兜底保留但必须标 `classified_by:'message'`；未注册码标 `'registry-miss'`。
  */
+/**
+ * E2 §3.3/§3.6：source 错误定位字段 additive 上 wire（details）——error_id 沿用
+ * stamped（兜底生成标 id_origin:'summary'）、operation、cause 链摘要、source
+ * 非敏感结构化上下文（spawn 契约 resolution/candidates/parent_id/team_id/model_ref）。
+ * stack 全文不上 wire（裁定⑤）。
+ */
+function controlErrorLocation(error: unknown): Record<string, unknown> {
+  const summary = errorSummary(error);
+  const fields: Record<string, unknown> = {};
+  if (typeof error === 'object' && error !== null) {
+    const record = error as { operation?: unknown; details?: unknown };
+    if (
+      typeof record.details === 'object' &&
+      record.details !== null &&
+      !Array.isArray(record.details)
+    ) {
+      Object.assign(fields, record.details);
+    }
+    if (typeof record.operation === 'string' && record.operation.length > 0) {
+      fields.operation = record.operation;
+    }
+  }
+  fields.error_id = summary.error_id;
+  if (summary.id_origin === 'summary') fields.id_origin = 'summary';
+  if (summary.chain.length > 0) fields.cause = summary.chain;
+  return fields;
+}
+
 function mapSessionControlError(error: unknown): never {
   if (error instanceof RpcError) throw error;
   const code = agentErrorCode(error);
   const message = agentErrorMessage(error);
   const meta = code !== undefined ? lookupErrorCode(code) : undefined;
+  const location = controlErrorLocation(error);
 
   // ── wire 特例（message/details 契约，先于查表） ──
   if (code === 'unknown_member' && message.includes('session_not_found')) {
-    throw new RpcError('session_not_found', 'Session not found');
+    throw new RpcError('session_not_found', 'Session not found', location);
   }
   if (code === 'member_not_visible') {
-    throw new RpcError('not_found', message, { reason: 'not_visible' });
+    throw new RpcError('not_found', message, { ...location, reason: 'not_visible' });
   }
   if (code === 'conflict') {
     const running = runInProgressReason(message);
     if (running !== undefined) {
-      throw new RpcError(
-        'conflict',
-        'run_in_progress',
-        running.runId !== undefined ? { run_id: running.runId } : undefined,
-      );
+      throw new RpcError('conflict', 'run_in_progress', {
+        ...location,
+        ...(running.runId !== undefined ? { run_id: running.runId } : {}),
+      });
     }
   }
   if (code === 'member_closed') {
     throw new RpcError(
       'conflict',
       message.includes('agent_closed') ? message : `agent_closed: ${message}`,
+      location,
     );
   }
   if (code === 'team_frozen' || code === 'team_full') {
-    throw new RpcError('conflict', message.includes(code) ? message : `${code}: ${message}`);
+    throw new RpcError(
+      'conflict',
+      message.includes(code) ? message : `${code}: ${message}`,
+      location,
+    );
   }
 
   // ── 查注册表：领域码 → 冻结码唯一映射口 ──
   if (meta?.rpcCode !== undefined) {
     throw new RpcError(meta.rpcCode, message, {
+      ...location,
       domain_code: code,
       classified_by: 'registry',
       ...(code === 'unknown_member' ? { resource: 'agent' } : {}),
@@ -1373,25 +1409,33 @@ function mapSessionControlError(error: unknown): never {
   // ── 文本兜底（无稳定 code / 注册码无 rpcCode / adapter 直接 reject Error）：
   //    按 reason token 判定，产物必须标 classified_by:'message'（D2 留痕）。 ──
   if (message.includes('session_not_found')) {
-    throw new RpcError('session_not_found', 'Session not found', { classified_by: 'message' });
+    throw new RpcError('session_not_found', 'Session not found', {
+      ...location,
+      classified_by: 'message',
+    });
   }
   if (message.includes('not_primary')) {
-    throw new RpcError('conflict', 'not_primary', { classified_by: 'message' });
+    throw new RpcError('conflict', 'not_primary', { ...location, classified_by: 'message' });
   }
   if (message.includes('run_in_progress')) {
     const running = runInProgressReason(message) ?? {};
     throw new RpcError('conflict', 'run_in_progress', {
+      ...location,
       ...(running.runId !== undefined ? { run_id: running.runId } : {}),
       classified_by: 'message',
     });
   }
   if (message.includes('source_private')) {
-    throw new RpcError('invalid_params', 'source_private', { classified_by: 'message' });
+    throw new RpcError('invalid_params', 'source_private', {
+      ...location,
+      classified_by: 'message',
+    });
   }
   if (message.includes('agent_closed')) {
-    throw new RpcError('conflict', 'agent_closed', { classified_by: 'message' });
+    throw new RpcError('conflict', 'agent_closed', { ...location, classified_by: 'message' });
   }
   throw new RpcError('internal', message, {
+    ...location,
     ...(code !== undefined ? { domain_code: code } : {}),
     classified_by:
       meta !== undefined ? 'registry' : code !== undefined ? 'registry-miss' : 'message',

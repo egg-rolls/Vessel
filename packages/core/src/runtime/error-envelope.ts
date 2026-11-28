@@ -1,9 +1,11 @@
 /**
  * 结构化错误 envelope（0.14 P0，DECISION-025 §1.2）。
  *
- * 纯函数：只读取错误对象与调用方提示，不发布事件、不写文件。
+ * 只读取错误对象与调用方提示，不发布事件、不写文件。
  * 输出用于 `run.failed` / `tool.call.failed` 的 additive 字段；
  * 原 `error` 文本保持不变，调用方继续按原文展示。
+ * E2（§3.3）：additive 定位字段 error_id/operation/cause/at；errorSummary 兜底
+ * id 会不可枚举 stamp 回错误对象（裁定 G，不改 JSON 序列化面）。
  *
  * @module @vessel-agent/core/runtime
  */
@@ -16,6 +18,7 @@ import type {
 } from '../types/error.js';
 import { type ErrorCodeMeta, lookupErrorCode } from '../types/error-registry.js';
 import { RunAlreadyRunningError, RunResumeError } from '../types/run-record-store.js';
+import { errorSummary, firstStackFrame } from './error-summary.js';
 import { PermissionAbortedError, PermissionTimeoutError } from './permission-policy.js';
 
 const PERMISSION_DENIED_PATTERNS: readonly RegExp[] = [
@@ -237,6 +240,43 @@ function classifyTool(message: string): Classification {
  * @param options 阶段 / 来源 / 补充细节提示
  */
 export function toErrorEnvelope(
+  error: unknown,
+  options: ToErrorEnvelopeOptions = {},
+): ErrorEnvelope {
+  return withLocation(classifyErrorEnvelope(error, options), error);
+}
+
+/** 读错误对象上的单行构造点（stamped at）；普通 Error 兜底取 stack 首帧 */
+function readAt(error: unknown): string | undefined {
+  if (typeof error === 'object' && error !== null) {
+    const at = (error as { at?: unknown }).at;
+    if (typeof at === 'string' && at.length > 0) return at;
+  }
+  return error instanceof Error ? firstStackFrame(error.stack) : undefined;
+}
+
+/**
+ * E2 §3.3 定位字段单点附加（裁定⑤）：error_id 沿用 stamped / 兜底生成；
+ * operation 读本层；cause 链摘要（每层 code+message+operation，截断 500）；
+ * at 单行 file:line。stack 全文不上 wire；脱敏红线不动。
+ */
+function withLocation(envelope: ErrorEnvelope, error: unknown): ErrorEnvelope {
+  const summary = errorSummary(error);
+  const located: ErrorEnvelope = { ...envelope, error_id: summary.error_id };
+  if (typeof error === 'object' && error !== null) {
+    const operation = (error as { operation?: unknown }).operation;
+    if (typeof operation === 'string' && operation.length > 0) located.operation = operation;
+  }
+  if (summary.chain.length > 0) located.cause = summary.chain;
+  const at = readAt(error);
+  if (at !== undefined) located.at = at;
+  if (summary.id_origin === 'summary') {
+    located.details = { ...located.details, id_origin: 'summary' };
+  }
+  return located;
+}
+
+function classifyErrorEnvelope(
   error: unknown,
   options: ToErrorEnvelopeOptions = {},
 ): ErrorEnvelope {

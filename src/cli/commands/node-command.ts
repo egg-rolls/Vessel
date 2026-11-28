@@ -16,13 +16,14 @@ import * as path from 'node:path';
 import {
   DATA_DIR_CLI_MARKER_ENV,
   loadConfig,
+  tokenFingerprint,
   type VesselConfig,
 } from '../../../packages/config/src/index';
 import { formatEventLine } from '../../../packages/serve/src/index';
 import { expandHome, resolveDataDir } from '../../data/data-paths';
 import { gatewayLogPath, startGatewayDaemon } from '../../gateway/daemon';
 import { loadNodeRegistry } from '../../gateway/node-registry';
-import { readSpawnedChildren, resolveNodeStopToken } from '../../gateway/node-supervisor';
+import { readSpawnedChildren, resolveNodeStopCredential } from '../../gateway/node-supervisor';
 import {
   cleanupGatewayStateEntry,
   collectGatewayState,
@@ -36,6 +37,7 @@ import {
 import { gatewayBaseUrl, reloadGateway, shutdownGateway } from '../../gateway/reload';
 import {
   type DrainRun,
+  drainSkippedHint,
   nodeRunSampler,
   POST_QUIESCE_EXIT_TIMEOUT_MS,
   persistStopAuditLine,
@@ -273,6 +275,17 @@ function nonEmptyStr(value: string | undefined): string | undefined {
 async function resolveStopTokenForTarget(
   context: ResolvedNodeContext,
 ): Promise<string | undefined> {
+  return (await resolveStopCredentialForTarget(context)).token;
+}
+
+/**
+ * q-error-e2（§3.5）：resolveStopTokenForTarget 的结构化兄弟（解析逻辑单源）。
+ * 额外返回凭据来源（drain 证据 credential_source）；token 值绝不进证据。
+ */
+async function resolveStopCredentialForTarget(context: ResolvedNodeContext): Promise<{
+  token: string | undefined;
+  source: 'anonymous' | 'derived' | 'explicit' | 'injected';
+}> {
   const env = context.env;
   const cliDataDir =
     env[DATA_DIR_CLI_MARKER_ENV] === '1' ? nonEmptyStr(env.VESSEL_DATA_DIR) : undefined;
@@ -291,15 +304,22 @@ async function resolveStopTokenForTarget(
       dataDir: context.dataDir,
       env,
     });
-    return resolution.ok ? resolution.value.token : undefined;
+    if (resolution.ok && resolution.value.token !== undefined && resolution.value.token !== '') {
+      const source = resolution.value.source;
+      return { token: resolution.value.token, source: source === 'none' ? 'anonymous' : source };
+    }
+    return { token: undefined, source: 'anonymous' };
   }
-  const token = await resolveNodeStopToken({
+  const credential = await resolveNodeStopCredential({
     nodeId: readKnownNodeId(context.dataDir) ?? '',
     dataDir: context.dataDir,
     registryDataDir: configOwnDataDir,
     env,
   });
-  return token === '' ? undefined : token;
+  return {
+    token: credential.token === '' ? undefined : credential.token,
+    source: credential.source,
+  };
 }
 
 /**
@@ -341,7 +361,9 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   const printErr = deps.printErr ?? console.error;
   const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
   // F1/SD-2 链A：凭据以目标 node 自己的 config/dataDir 为权威（舰队 node 不发用户 config token）。
-  const token = await resolveStopTokenForTarget(context);
+  // E2 §3.5：结构化解析（token + source），source 进 drain 证据。
+  const stopCredential = await resolveStopCredentialForTarget(context);
+  const token = stopCredential.token;
   const snapshot = await collectGatewayState(context.dataDir, {
     ...(token !== undefined ? { token } : {}),
   });
@@ -421,6 +443,8 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   });
   // F1/SD-2：凭据错配（401）回退强杀前先试一次匿名优雅（零配置 node 回环匿名可能仍开着）。
   let samplerToken = token ?? '';
+  // E2 §3.5：凭据来源进 drain 证据（匿名重试成功 → anonymous）。
+  let credentialSource = stopCredential.source;
   if (!graceful.ok && graceful.code === 'unauthorized' && (token ?? '') !== '') {
     const anonymous = await shutdownGateway({
       record,
@@ -431,6 +455,7 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
     if (anonymous.ok) {
       graceful = anonymous;
       samplerToken = '';
+      credentialSource = 'anonymous';
     }
   }
   if (graceful.ok) {
@@ -509,18 +534,26 @@ async function nodeStopCommand(deps: NodeCommandDeps, force = false): Promise<nu
   }
   // 优雅受理失败（老版本无该方法 / 网络）→ 回退既有强杀，代打 node.drain.skipped。
   const skippedReason = graceful.ok ? 'error' : (graceful.code ?? 'error');
-  printErr(
-    ui.warn(
-      formatEventLine('node.drain.skipped', {
-        pid: record.pid,
-        reason: skippedReason,
-      }),
-    ),
-  );
+  // E2 §3.5：证据契约（target/credential_source/http_status/指纹/hint；token 值绝不进）。
+  const skippedHint = drainSkippedHint(skippedReason);
+  const skippedFields = {
+    pid: record.pid,
+    reason: skippedReason,
+    target: `${record.host}:${record.port}`,
+    credential_source: credentialSource,
+    ...(!graceful.ok && graceful.http_status !== undefined
+      ? { http_status: graceful.http_status }
+      : {}),
+    ...(samplerToken !== '' ? { token_fingerprint: tokenFingerprint(samplerToken) } : {}),
+    ...(skippedHint !== undefined
+      ? { hint: skippedHint.hint, hint_key: skippedHint.hint_key }
+      : {}),
+  };
+  printErr(ui.warn(formatEventLine('node.drain.skipped', skippedFields)));
   // F1/SD-2：drain.skipped 证据持久化到 node 实例日志（对齐 stop.forced 先例，O7）。
   await persistStopAuditLine(
     gatewayLogPath(context.dataDir, DEFAULT_GATEWAY_INSTANCE),
-    formatEventLine('node.drain.skipped', { pid: record.pid, reason: skippedReason }),
+    formatEventLine('node.drain.skipped', skippedFields),
   );
   try {
     await killNodeTree(context.platform, record.pid, 'SIGTERM');

@@ -11,6 +11,8 @@
  * @module @vessel-agent/serve
  */
 
+import type { RunTrigger } from '@vessel-agent/core';
+
 /** 成员可见性（与 packages/agent 的 MemberVisibility 同值）。 */
 export type AgentVisibilityLike = 'private' | 'team' | 'tenant';
 
@@ -149,6 +151,11 @@ export interface AgentSendLikeInput {
   /** 0.41：只 append inbox + 摘要唤醒，不抢占、不产生普通 run；与 interrupt 互斥。 */
   notify?: boolean;
   message_id?: string;
+  /**
+   * q-error-e2 §3.7（仅内部装配，不暴露为 RPC 参数）：RPC 触发的 run correlation。
+   * 只普通 send（非 interrupt/notify）填；app 适配器透传进 admit。
+   */
+  triggered_by?: RunTrigger;
 }
 
 /** `agents.dispatch` 的单个条目。 */
@@ -354,6 +361,22 @@ export interface SessionRestoreFilesLikeInput {
 export interface SessionRestoreFilesLikeResult {
   files_restored: number;
   files_skipped: number;
+}
+
+/**
+ * 注册 ref 校验失败的结构化形状（q-error-e2 §3.6）。
+ * 与 packages/agent 的 ModelRefErrorInfo 同形（结构类型兼容，分包方向不倒置）：
+ * wiring 直接透传 ModelRefError 字段，不再拼 string。
+ */
+export interface ModelRefErrorLike {
+  /** 稳定领域码（当前唯一 'unknown_ref'） */
+  code: string;
+  /** 未命中的 ref 原文 */
+  ref: string;
+  /** 人读错误文案（不含候选拼接） */
+  message: string;
+  /** 注册 ref 候选；非 ModelRefError 兜底时缺省 */
+  candidates?: string[];
 }
 
 /**

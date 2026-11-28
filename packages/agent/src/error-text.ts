@@ -7,9 +7,10 @@
  * 跨层边界读结构化字段走 errorSummary / 注册表。
  *
  * 渲染口径（lead 裁定 B）：message 原样；仅当 cause 链非空时追加链摘要
- * （每层 code: message）。顶层不加 code 前缀——既有调用点大量
- * `spawn_failed: ${errorText(e)}` 手拼前缀，加顶层 code 会双前缀。
- * agent 包自产错误均无 cause ⇒ 现网展示文本逐字不变。
+ * （每层 code: message）。顶层不加 code 前缀。
+ * q-error-e2（§3.3/§3.6）：收口点手拼前缀（spawn_failed:/create_failed: 等）
+ * 已废除，改 AgentError options 第三参携 cause/operation/details；cause 链
+ * 摘要由此函数渲染进展示文本，结构化链同时上 wire（details.cause）。
  *
  * @module @vessel-agent/agent
  */

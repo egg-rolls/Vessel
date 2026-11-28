@@ -11,11 +11,27 @@ interface BaseEventPayload {
   [key: string]: unknown;
 }
 
+/**
+ * RPC 触发的 run correlation（q-error-e2 §3.7，裁定④显式字段，additive）。
+ * 由 RPC 入口（runs.start / agents.send）从信封 id + 方法名构建，沿
+ * AdmitInput → AgentMessage（内存元数据）→ RunOptions 显式穿链，不用 ALS。
+ */
+export interface RunTrigger {
+  /** RPC 请求信封 id（correlation 根） */
+  request_id: string;
+  /** 触发方法名（如 runs.start / agents.send） */
+  rpc_method: string;
+  /** 目标 agent id（入口未显式指定时缺省；解析后的真值在事件顶层 agent_id） */
+  agent_id?: string;
+}
+
 /** Run 开始事件 payload */
 export interface RunStartedPayload extends BaseEventPayload {
   run_id: string;
   session_id?: string;
   input: string;
+  /** RPC 触发的 run 携带（q-error-e2 §3.7，additive）；内部触发缺省 */
+  triggered_by?: RunTrigger;
   /**
    * 输入消息的 `Message.name`（additive；缺省不写）。
    *

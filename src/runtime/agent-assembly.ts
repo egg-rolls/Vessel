@@ -270,7 +270,9 @@ export async function assembleAgentWiring(ctx: AgentAssemblyContext): Promise<Ag
     model: agentPlan.model ?? providerModelRef,
     modelWire: agentPlan.model ?? providerModel,
     // 第 6 修（CHAIN-11/SPAWN-05）：tool 层 create/hire 显式 pin 与 RPC 同闸。
-    ...(bundle.validateModelRef !== undefined ? { modelRefError: bundle.validateModelRef } : {}),
+    ...(bundle.validateModelRefDetailed !== undefined
+      ? { modelRefError: bundle.validateModelRefDetailed }
+      : {}),
     limits: agentPlan.limits ?? limits,
     termination: memberTermination,
     ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),

@@ -29,6 +29,7 @@ import {
   type MemberExecutionPermissionMode,
   type MemberPermissionState,
   type MemberStatus,
+  type ModelRefErrorInfo,
   memberCwdFromTeam,
   type PeerStopSink,
   type TeamDeclaration,
@@ -101,8 +102,9 @@ export interface AgentServiceWiringOptions {
   /**
    * 第 6 修（CHAIN-11/SPAWN-05）：显式 model pin 校验口（透传 AgentService，
    * 与 gateway 参数闸同源）；缺省不校验（mock）。
+   * q-error-e2（§3.6）：结构化透传（code/ref/message/candidates）。
    */
-  modelRefError?: (ref: string) => string | undefined;
+  modelRefError?: (ref: string) => ModelRefErrorInfo | undefined;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
   contextMaxTokens?: number;

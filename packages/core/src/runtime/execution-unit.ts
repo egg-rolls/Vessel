@@ -3229,6 +3229,9 @@ export class ExecutionUnit {
         session_id: sessionId,
         input: userMessage.content,
         ...(userMessage.name !== undefined ? { input_name: userMessage.name } : {}),
+        // q-error-e2 §3.7（additive）：RPC 触发的 run 携 correlation；缺省不写，
+        // 内部触发的载荷与今天逐字节一致。
+        ...(opts?.triggered_by !== undefined ? { triggered_by: opts.triggered_by } : {}),
       },
       ts: Date.now(),
     });

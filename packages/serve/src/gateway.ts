@@ -104,7 +104,7 @@ export type {
   SelfRestartResult,
 } from './gateway/methods/admin.js';
 
-import type { AgentControlLike } from './agent-control.js';
+import type { AgentControlLike, ModelRefErrorLike } from './agent-control.js';
 import {
   createConfigMethods,
   createPluginsMethods,
@@ -366,8 +366,9 @@ export interface GatewayOptions {
   /**
    * P3 收紧（两面重构 §11.1）：agents.create/update 的 model 参数未注册 ref 校验
    * （装配层注入 registry 纯校验；缺省不校验，零回归）。
+   * q-error-e2（§3.6）：结构化透传（code/ref/message/candidates），不再拼 string。
    */
-  modelRefError?: (ref: string) => string | undefined;
+  modelRefError?: (ref: string) => ModelRefErrorLike | undefined;
   /**
    * S7：跨节点 federation 入站面（asm 归一化后注入，含已解析 peer token）。
    * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。

@@ -1166,6 +1166,14 @@ export class MemberExecutionHost implements MemberExecutionPort {
     this.modelWire = wireModel ?? model;
   }
 
+  /**
+   * q-error-e2（§3.6，裁定 B）：宿主缺省 ref 只读面（MemberExecutionPort additive）。
+   * spawn_failed 证据契约 default 档 resolution.ref 用；与 spawn 回落端同源。
+   */
+  defaultModelRef(): string | undefined {
+    return this.model;
+  }
+
   async spawn(member: MemberExecutionMember): Promise<void> {
     if (this.entries.has(member.session_id)) {
       throw new Error(`member runtime already spawned: ${member.session_id}`);
@@ -1486,6 +1494,8 @@ export class MemberExecutionHost implements MemberExecutionPort {
           ...pendingNotices.map((notice) => noticeMessage(notice.text, notice.timestamp)),
           sourceMessage,
         ],
+        // E2 §3.7：RPC correlation 显式透传（裁定④）；内部触发缺省不写。
+        ...(message.triggered_by !== undefined ? { triggered_by: message.triggered_by } : {}),
       };
       const content =
         resume && entry.runtime.resumeSession !== undefined

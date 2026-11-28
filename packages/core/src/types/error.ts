@@ -53,6 +53,21 @@ export interface ErrorEnvelope {
    * - 'message'：文本/状态兜底（把「猜」变成显式可观测事实）。
    */
   classified_by?: 'type' | 'registry' | 'registry-miss' | 'message';
+  /** 事故短 id（q-error-e2 §3.3，additive）：出生点 stamped，包装层沿用 */
+  error_id?: string;
+  /** 本层「我在做什么」（q-error-e2 §3.3，additive，替代手拼前缀） */
+  operation?: string;
+  /** cause 链摘要（q-error-e2 §3.3，additive）：每层 code+message+operation，message 截断 500 */
+  cause?: ErrorCauseLink[];
+  /** 构造点单行 file:line（q-error-e2 §3.3，additive）；stack 全文仅 trace/日志不上 wire */
+  at?: string;
+}
+
+/** cause 链上一环的摘要（q-error-e2 §3.3，裁定⑤：摘要上 wire，stack 不上） */
+export interface ErrorCauseLink {
+  code?: string;
+  message: string;
+  operation?: string;
 }
 
 /**
@@ -61,7 +76,8 @@ export interface ErrorEnvelope {
  * 不强制单一基类：各包错误类（AgentError/ModelRefError/RpcError/TimelineError…）
  * 逐步满足本形状；跨层边界转换必须先读这些结构化字段，读不到才允许文本兜底
  * 且产物必须标 `classified_by: 'message'`。
- * errorId/at 字段本期只定义不生产（出生点 stamped 属 E2，§3.3）。
+ * errorId/at 自 q-error-e2（§3.3）起生产：类构造 stamped（不可枚举，裁定 G），
+ * 普通 Error 经 errorSummary 兜底生成（id_origin:'summary'）。
  */
 export interface VesselErrorShape {
   /** 稳定领域码（snake_case） */

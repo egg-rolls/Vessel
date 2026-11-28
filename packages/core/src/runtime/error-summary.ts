@@ -6,10 +6,14 @@
  * 跨层边界转换必须先读结构化字段（code/category/details/cause），读不到才允许
  * 文本兜底且必须标 `classified_by: 'message'`。
  *
- * 纯函数：不发布事件、不写文件、不生成 id（error_id 出生点 stamped 属 E2）。
+ * 不发布事件、不写文件。E2（§3.3）起承担 error_id 兜底生产：已 stamped 的错误
+ * 沿用同一 id；普通 Error 首次摘要时生成并以**不可枚举属性** stamp 回错误对象
+ * （一事故一 id，不改 JSON 序列化面，裁定 G）。
  *
  * @module @vessel-agent/core/runtime
  */
+
+import { randomBytes } from 'node:crypto';
 
 /** cause 链深度上限（防环 + 防超长链撑爆日志/事件） */
 const MAX_CAUSE_DEPTH = 8;
@@ -28,6 +32,73 @@ export interface ErrorSummary {
   code?: string;
   message: string;
   chain: ErrorSummaryLink[];
+  /** 事故短 id（E2 §3.3）：stamped 沿用；普通 Error 兜底生成 */
+  error_id: string;
+  /** id 来源：'stamped'=出生点已盖；'summary'=本函数兜底生成（裁定⑤） */
+  id_origin: 'stamped' | 'summary';
+}
+
+/** base32 字母表（RFC 4648 小写，无易混字符歧义需求，8 字符 = 40 bit 随机） */
+const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
+
+/**
+ * 出生点事故短 id（E2 §3.3）：8 字符 base32，crypto 随机。
+ * 包装层沿用同一 id（读 errorId），只有出生点与兜底摘要生成新 id。
+ *
+ * RFC 4648 位打包：randomBytes(5) = 40 bit → 恰 8 个 5-bit 组，无 padding。
+ * （canary 微修：原逐 byte % 32 只取每字节低 5 bit，恒 5 字符 25 bit，熵减半。）
+ */
+export function newErrorId(): string {
+  const bytes = randomBytes(5);
+  let id = '';
+  let value = 0;
+  let bits = 0;
+  for (const byte of bytes) {
+    value = (value << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      id += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
+      bits -= 5;
+    }
+  }
+  return id;
+}
+
+/**
+ * 取 stack 首个 `at …` 帧（单行 file:line，E2 §3.3 的 at 字段）。
+ * skip 用于跳过构造器/助手自身帧（出生点 = 调用方帧）；stack 全文不上 wire。
+ */
+export function firstStackFrame(stack: string | undefined, skip?: RegExp[]): string | undefined {
+  if (typeof stack !== 'string') return undefined;
+  for (const line of stack.split('\n')) {
+    const frame = line.trim();
+    if (!frame.startsWith('at ')) continue;
+    if (skip !== undefined && skip.some((pattern) => pattern.test(frame))) continue;
+    return frame;
+  }
+  return undefined;
+}
+
+/**
+ * 以不可枚举属性 stamp errorId（裁定 G）：JSON.stringify / 展开均不见，
+ * 跨层 `.errorId` 读取正常；已有 id 不覆盖（一事故一 id）。
+ */
+export function stampErrorId(error: unknown, id: string): void {
+  if (typeof error !== 'object' || error === null) return;
+  const existing = (error as { errorId?: unknown }).errorId;
+  if (typeof existing === 'string' && existing.length > 0) return;
+  Object.defineProperty(error, 'errorId', {
+    value: id,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
+}
+
+function errorIdOf(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const id = (error as { errorId?: unknown }).errorId;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
 function truncate(message: string): string {
@@ -63,6 +134,9 @@ function causeOf(error: unknown): unknown {
  *
  * - 顶层 code/message 读错误自身；chain 沿原生 cause 展开（深度上限 8，Set 防环）。
  * - 每层只取 code + message + operation（脱敏红线：不带 details/stack 全文）。
+ * - error_id：已 stamped 沿用（id_origin:'stamped'）；普通 Error 兜底生成并
+ *   不可枚举 stamp 回错误对象（id_origin:'summary'，一事故一 id）；非对象错误
+ *   无法 stamp，每次生成新 id。
  */
 export function errorSummary(error: unknown): ErrorSummary {
   const chain: ErrorSummaryLink[] = [];
@@ -85,7 +159,15 @@ export function errorSummary(error: unknown): ErrorSummary {
     current = cause;
     depth += 1;
   }
-  const summary: ErrorSummary = { message: messageOf(error), chain };
+  const stamped = errorIdOf(error);
+  const errorId = stamped ?? newErrorId();
+  if (stamped === undefined) stampErrorId(error, errorId);
+  const summary: ErrorSummary = {
+    message: messageOf(error),
+    chain,
+    error_id: errorId,
+    id_origin: stamped === undefined ? 'summary' : 'stamped',
+  };
   const code = codeOf(error);
   if (code !== undefined) summary.code = code;
   return summary;

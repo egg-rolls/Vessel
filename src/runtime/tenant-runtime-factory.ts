@@ -14,7 +14,7 @@
  */
 
 import { join } from 'node:path';
-import { createInboxMemberBodyContribution } from '@vessel-agent/agent';
+import { createInboxMemberBodyContribution, type ModelRefErrorInfo } from '@vessel-agent/agent';
 import {
   deriveSessionMeta,
   FileProjectionCache,
@@ -242,9 +242,10 @@ export interface TenantRuntimeBundle {
   applyProviderModel: (model: string, next?: VesselConfig) => void;
   /**
    * P3 收紧（两面重构 §11.1）：ModelRef 纯校验（gateway agents/sessions 参数闸）。
-   * 未命中注册表且无 legacy 透传 → 错误文案 + 候选；mock 模式缺省。
+   * 未命中注册表且无 legacy 透传 → 结构化错误（code/ref/message/candidates）；
+   * mock 模式缺省。q-error-e2（§3.6）：string 拍扁改结构化透传。
    */
-  validateModelRef?: (ref: string) => string | undefined;
+  validateModelRefDetailed?: (ref: string) => ModelRefErrorInfo | undefined;
   /**
    * 缺省模型身份热应用预览（第 6 修 SPAWN-03）：registry 存在时注入，
    * config scope 用它按运行期同口径（legacyPresent 单向闸）解析 from/to 身份；
@@ -1738,7 +1739,9 @@ export async function buildTenantRuntime(
       ownerProfile.model = model;
       if (next !== undefined) registry?.applyConfig(next);
     },
-    ...(registry !== undefined ? { validateModelRef: registry.validateModelRef } : {}),
+    ...(registry !== undefined
+      ? { validateModelRefDetailed: registry.validateModelRefDetailed }
+      : {}),
     ...(registry !== undefined ? { previewDefaultModel: registry.previewDefaultModel } : {}),
     // provider 类能力插件（model-registry）由 wiring 收集；显式启用时 selection 的
     // 显式分支不排除 provider 类，同一插件会再进通用装载名单——两条路各持同一

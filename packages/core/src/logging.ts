@@ -18,7 +18,7 @@
  */
 
 import { emitLogLine } from './log-hub.js';
-import type { Logger } from './types/logging.js';
+import type { LogFields, Logger } from './types/logging.js';
 
 export { writeStderrNotice } from './log-hub.js';
 
@@ -42,5 +42,23 @@ export function createStderrLogger(): Logger {
     info: (message, fields) => emitLogLine('info', message, fields),
     warn: (message, fields) => emitLogLine('warn', message, fields),
     error: (message, fields) => emitLogLine('error', message, fields),
+  };
+}
+
+/**
+ * 携 base 字段的同形 Logger 助手（q-error-e2 §3.7，裁定④）。
+ *
+ * correlation 走**显式字段**（不用 AsyncLocalStorage、不引 OTel）：调用方把
+ * run_id/session_id/agent_id/request_id/error_id 等约定键（见 types/logging.ts
+ * LogFields 注释与 docs LogFields 约定键文档）绑进 base，逐层透传。
+ * 调用点字段覆盖 base；Logger 端口形状不变，log-hub 脱敏/级别/EPIPE 不变量全不动。
+ */
+export function withFields(logger: Logger, base: LogFields): Logger {
+  const merge = (fields?: LogFields): LogFields => ({ ...base, ...fields });
+  return {
+    debug: (message, fields) => logger.debug(message, merge(fields)),
+    info: (message, fields) => logger.info(message, merge(fields)),
+    warn: (message, fields) => logger.warn(message, merge(fields)),
+    error: (message, fields) => logger.error(message, merge(fields)),
   };
 }

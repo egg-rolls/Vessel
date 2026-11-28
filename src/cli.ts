@@ -1702,8 +1702,8 @@ async function runWithConfig(result: BootstrapResult) {
       },
       hub: eventHub,
       // P3 收紧（两面重构 §11.1）：agents.create/update model 参数未注册 ref 校验。
-      ...(gatewayBundle.validateModelRef !== undefined
-        ? { modelRefError: gatewayBundle.validateModelRef }
+      ...(gatewayBundle.validateModelRefDetailed !== undefined
+        ? { modelRefError: gatewayBundle.validateModelRefDetailed }
         : {}),
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
       redactor: gatewayBundle.redactor,
