@@ -455,12 +455,20 @@ export function createNodeHealthWatch(options: NodeHealthWatchOptions): NodeHeal
     }
   };
 
+  // 不变式：每 tick 完成后再排下一拍（链式 re-arm），探测耗时不叠 tick；stop 断链。
+  // re-arm 所有权只在调度器回调链上——tick() 本身保持纯净（manual/诊断调用不 re-arm）。
+  const schedule = (): void => {
+    timer = setTimer(() => {
+      void tick().finally(() => {
+        if (!stopped) schedule();
+      });
+    }, intervalMs);
+  };
+
   return {
     start() {
       if (timer !== undefined || stopped) return;
-      timer = setTimer(() => {
-        void tick();
-      }, intervalMs);
+      schedule();
       // 启动即跑一轮：订阅者不必等第一个节拍才看到基线快照。
       void tick();
     },
