@@ -427,7 +427,7 @@ cd apps/web && bun run build
 
 ### 怎么更新代码而不丢正在跑的工作？
 
-平台代码更新用 `vessel gateway restart`（handoff，run 不断）；整舰队重启用 `vessel restart`，缺省不限时优雅 drain，等活跃 run 自然跑完。agent 也可以在自己的 run 里预约优雅自重启：`vessel restart --self --prompt "<续作嘱托>"`，重启后嘱托自动投递续作。`--force` 是唯一的非优雅退出，会留审计。
+平台代码更新用 `vessel gateway restart`（handoff，run 不断）；整舰队重启用 `vessel restart`，缺省不限时优雅 drain，等活跃 run 自然跑完。整舰队启动用 `vessel start`（平台 + auto_start 节点/hub；已运行的跳过，失败如实报告不回滚；组件级启动仍用 `vessel gateway|node|hub start`）。agent 也可以在自己的 run 里预约优雅自重启：`vessel restart --self --prompt "<续作嘱托>"`，重启后嘱托自动投递续作。`--force` 是唯一的非优雅退出，会留审计。
 
 ## 写给 AI
 

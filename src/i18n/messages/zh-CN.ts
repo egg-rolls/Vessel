@@ -58,7 +58,7 @@ export const zhCN = {
   'help.cmd.modelCredentialsList': '列出凭证元数据（baseUrl / hasValue / usedBy；不含值）',
   'help.cmd.modelTest': '对已保存模型条目或凭证做连通性测试（发真实请求，可能产生费用）',
   'help.cmd.gatewayStart':
-    '启动 gateway（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例',
+    '启动 gateway 平台（缺省后台分离、就绪即退）；--foreground 保留前台；--instance 命名实例。舰队级（平台 + auto_start 节点/hub）用 vessel start',
   'help.cmd.gatewayList': '列出 gateway 实例与 PID 文件',
   'help.cmd.gatewayStop':
     '优雅停止平台进程（等活跃 run 自然跑完，不限时 + 进度；--force 强杀并审计）；缺省只停平台层，--stop-nodes 连 node/hub 一起停',
@@ -74,7 +74,8 @@ export const zhCN = {
   'help.cmd.tokenRotate': '轮换根密钥：所有派生 token 一起换',
   'help.cmd.nodeToken': '查看本机 node token 的来源；--print 才打印值',
   'help.cmd.gatewayNodesList': '列出 nodes.json 中的本地节点与健康状态（不含 token）',
-  'help.cmd.gatewayNodesAdd': '注册本地节点；下次 gateway start 生效',
+  'help.cmd.gatewayNodesAdd':
+    '注册本地节点（只登记，不启动）；启动用 vessel start，或下次 gateway start 生效',
   'help.cmd.gatewayNodesRemove': '从 nodes.json 移除节点；下次 gateway start 生效',
   'help.cmd.nodeStart': '只启动 Node API（缺省 8644；与 gateway 共用实例锁）',
   'help.cmd.nodeStatus': '查看 Node API 监听与 health（--rpc 查看 health/queue）',
@@ -376,6 +377,7 @@ export const zhCN = {
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.startedNode': '节点：{name}（端口 {port}）',
   'gateway.logPath': '日志：{path}',
+  'gateway.startFleetHint': '舰队级启动（已运行跳过 + 汇总）：vessel start',
   'gateway.webDistMissing':
     'Web 控制台静态资源缺失：{path}。新克隆的仓库必须先构建一次：`bun run build:web`（= `cd apps/web && bun run build`）；或在配置里设 gateway.web_dist（或 env VESSEL_STATIC_DIR）指向已有产物，然后重新 start。',
   'gateway.webDistStale':
@@ -461,7 +463,8 @@ export const zhCN = {
   'stop.warning.activeSessions': '警示：node 上可能有活会话，杀掉不可恢复。',
   'stop.nothingRunning': '停止范围内没有运行中的舰队。',
   // vessel start（cli-single-source T1；topology §4.2 形态 A）
-  'help.cmd.start': '启动本舰队（平台 + auto_start 节点/hub）；已运行的跳过，失败如实报告不回滚',
+  'help.cmd.start':
+    '启动本舰队（平台 + auto_start 节点/hub）；已运行跳过，失败如实报告不回滚。三层区分：舰队 vessel start / 组件 vessel gateway|node|hub start / 登记 vessel gateway nodes add（不启动）',
   'start.inventory.title': '舰队启动（数据根：{dataDir}）',
   'start.envWarning': '数据根来自 VESSEL_DATA_DIR env 兜底；显式 --data-dir 或配置可固定舰队边界。',
   'start.unknownName': '未知目标：{name}（不是 gateway 实例，也不是登记 node 名）',

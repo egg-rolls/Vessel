@@ -2591,6 +2591,7 @@ export async function startDaemonCommand(
       print(ui.dim(t('gateway.startedNode', { name: nodeName, port: result.record.port })));
     }
     print(ui.dim(t('gateway.logPath', { path: result.logPath })));
+    print(ui.dim(t('gateway.startFleetHint')));
     return 0;
   }
 

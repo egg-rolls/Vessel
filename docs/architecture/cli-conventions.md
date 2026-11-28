@@ -43,12 +43,12 @@ status/restart（drain + 受控重生），没有独立 start/stop。停止按�
 
 | 类别 | 命令 | 层 | 性质 | 状态 |
 |---|---|---|---|---|
-| A 舰队编排 | `vessel start` | 顶层 | 全舰队起（逐实例编排 gateway start + auto_start node/hub adopt） | 〔提案〕 |
+| A 舰队编排 | `vessel start [--yes] [--instance\|--port\|--all] [--timeout] [<name>]` | 顶层 | 全舰队起（检测 → 分流 → startDaemonCommand 共享接缝 → 健康确认；已运行跳过，失败不回滚；远程 start 不支持） | 〔现行〕 |
 | A 舰队编排 | `vessel stop [--yes] [--timeout] [--instance\|--port\|--all] [--connect …]` | 顶层 | 全舰队优雅停（清点 → 确认 → 共享接缝 → 残留报告） | 〔现行〕 |
 | A 舰队编排 | `vessel status [--json]` | 顶层 | 舰队一屏只读报告（配置 + 实例 + attach） | 〔现行〕 |
 | B 组件生命周期 | `vessel gateway start\|stop\|restart\|status\|reload\|list` | 命名空间 | 平台层；stop/restart 缺省 handoff 保 node/hub | 〔现行〕 |
 | B 组件生命周期 | `vessel node start\|stop\|status\|reload` | 命名空间 | Node API 监听与实例锁；`restart` 见 §2 矩阵 | 〔现行〕（restart〔提案〕） |
-| B 组件生命周期 | `vessel hub start` | 命名空间 | 本地 Hub；`stop`/`status` 见 §2 矩阵 | 〔现行〕（stop/status〔提案〕） |
+| B 组件生命周期 | `vessel hub start [--daemon]` | 命名空间 | 本地 Hub；`--daemon` 分离（等 hub.lock）；`stop`/`status` 见 §2 矩阵 | 〔现行〕（stop/status〔提案〕） |
 | B 组件生命周期 | `vessel tools-engine status\|restart` | 命名空间 | node 监管子进程；**无独立 start/stop**（§3.3） | 〔提案〕 |
 | B' 组件服务安装 | `vessel gateway install-service\|uninstall-service` | 命名空间 | systemd/launchd/schtasks 安装面，不是进程动词 | 〔现行〕 |
 | C 组件数据面 | `vessel gateway nodes list\|add\|remove` | 命名空间 | registry 只写数据，不起停进程 | 〔现行〕 |
@@ -189,7 +189,7 @@ vessel stop（舰队）
 
 - 命令内手写 ANSI 转义或自造颜色判断（第二个颜色闸门 = 漂移源）；
 - 命令内自造表格对齐（必须走渲染器的 `displayWidth` 对齐，CJK/全角按 2 列）；
-- 同一语义两套文案（help 与用法错误已单一数据源 `cli-help-spec.ts`，输出同理）。
+- 同一语义两套文案（help 与用法错误已单一数据源 `command-spec.ts` + `project.ts` 投射，输出同理）。
 
 ### 4.2 通道纪律
 
@@ -262,7 +262,7 @@ vessel stop（舰队）
   next: <一条可执行的下一步>
 ```
 
-- 用法错误末尾统一附 `Try 'vessel <cmd...> --help'`（文案与 help 单一数据源 cli-help-spec）。
+- 用法错误末尾统一附 `Try 'vessel <cmd...> --help'`（文案与 help 单一数据源 command-spec + project 投射）。
 - `next` 对运行时错误**必填**：给一条能直接跑的命令或能直接查的文件
   （如 `vessel node start`、`检查 <dataDir>/platform.pid`），不给「请联系管理员」式空话。
 - 警告不是错误：不打稳定码、不影响退出码、走 stderr（§4.2）。
@@ -315,15 +315,17 @@ vessel stop（舰队）
 
 ```
 src/cli/
-  args.ts        ← src/cli-args.ts        纯解析（语法与互斥），无副作用
-  help-spec.ts   ← src/cli-help-spec.ts   help / 子命令列表 / 用法错误的单一数据源
-  help.ts        ← src/cli-help.ts        按位置 help 渲染
+  command-spec.ts （cli-single-source）   命令/flag 单一真相源：FLAG_DEFS + COMMAND_SCHEMA（纯数据 + 懒实现引用）
+  project.ts      （cli-single-source）   六投射纯函数：分派 / help / 总览 / 补全 / flag 表 / i18n 键
+  parse-engine.ts （cli-single-source）   通用 argv 引擎（读 schema；入口模式层 + 逐命令约束）
+  args.ts        ← src/cli-args.ts        域命令类型 + 保留常量（解析已收敛到 command-spec + parse-engine）
+  help.ts        ← src/cli-help.ts        按位置 help 渲染（输入 = project 投射；渲染层零手写命令表）
   output.ts      ← src/ui-style.ts        渲染契约 §4 单一实现（吸收 displayWidth / shouldUseColor）
   errors.ts      （新）                  稳定码注册 + 错误包 §6（码 → 语义 → 退出码 → next 模板）
   exit-codes.ts  （新）                  退出码枚举 §5 单一事实源
-  registry.ts    ← src/commands/registry.ts  分派接缝：match → run → 返回退出码
+  registry.ts    ← src/commands/registry.ts  locale 辅助（分派已收敛到 project.projectDispatch）
   commands/
-    fleet/       ← stop-command.ts / status-command.ts；start〔新增〕
+    fleet/       ← stop-command.ts / status-command.ts / start-command.ts（舰队 start，形态 A）
     gateway/     ← gateway-command.ts / gateway-nodes-command.ts
     node/        ← node-command.ts
     hub/         ← hub-command.ts
@@ -356,9 +358,11 @@ src/cli/
    `--keep-nodes` 保留为兼容别名）。
 2. **废弃流程**：文档标 deprecated → 别名至少保留一个 minor 版本 → major 移除并写 changelog；
    永不静默换码/换形状。
-3. **新动词**必须先进 §2 矩阵：写明归属理由（适用 / 不适用），再进 help-spec 与 registry；
+3. **新动词**必须先进 §2 矩阵：写明归属理由（适用 / 不适用），再进 command-spec schema
+   （一条 CommandSpec，六投射自动跟上：分派 / help / 总览 / 补全 / 保留字 / i18n 键）；
    顶层裸动词不再新增（只属舰队）。
-4. **新命令**三件套齐备才算完成：分类表（§1.2）登记 + help-spec 条目 + 稳定码/退出码登记；
+4. **新命令**三件套齐备才算完成：分类表（§1.2）登记 + schema 条目（command-spec.ts）+
+   稳定码/退出码登记（exitCodes 脚注经投射渲染）；
    输出一律走单一渲染模块，禁止私造 ANSI / 对齐 / 颜色闸门。
 5. **文档同步**：本文 kind: target；某节落地后翻〔现行〕，事实源指针（cli-wiring /
    gateway-lifecycle）同步更新，避免规范与现态两份漂移。

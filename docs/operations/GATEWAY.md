@@ -60,7 +60,7 @@ vessel gateway nodes list [--json]
 
 服务管理器托管的是**平台层**。要连 node 一起常驻，给每个 node 单独配常驻（`vessel node start --daemon --config …` ＋ 各自的计划任务/unit）。`gateway stop` 缺省只停平台层，不动本机 spawn 的 node/hub（见 §4）。
 
-## 4. 停止与重启
+## 4. 停止、重启与启动
 
 **缺省只停平台层，不动 node/hub**——它们身上可能跑着会话，杀掉不可恢复。破坏性动作必须显式。
 
@@ -74,6 +74,8 @@ vessel gateway nodes list [--json]
 | `vessel stop` | 停 | 一起停（manifest 归属可复核的；owned 池 engine 进程内 terminate） | 舰队级：缺省 resolved data root 全实例，`--instance/--port` 收窄；本地缺省不限时 drain；全根清点 + y/N 确认，`--yes` 跳过，非交互无 `--yes` 拒绝 exit 1 |
 | `vessel stop --connect <url>` | 远程平台停 | 远程舰队（registry 级清点） | 需 `gateway.remote_shutdown` opt-in + 平台 token + 反代密钥；远程缺省 10s 预算、**不强杀**，超时如实 exit 1；只认显式 `--connect`（不认 env） |
 | `vessel restart [name]` | stop→start | docker 式编排 | name 先匹配 gateway 实例名、再匹配 registry node 名（委托 node restart）；缺省本舰队全量；**stop 未全成 → 不 start**；`--force` 传播；确认一次覆盖 stop+start |
+| `vessel start [name]` | 起 | auto_start node/hub 由平台管线承载 | 舰队级启动（形态 A）：检测 → 已运行跳过 / stale+absent 经 `startDaemonCommand` 共享接缝 / unknown+foreign-host 拒绝；name 先匹配实例名、再匹配 registry node 名（委托 node start）；缺省本 dataDir 舰队；`--timeout` 可选上限；**不自动回滚**（失败如实报告，重跑收敛）；**不接受 `--connect`**（远程 start 不支持，exit 2）；`--yes` 兼容 noop（缺省无确认） |
+| `vessel hub start --daemon` | — | hub 分离启动 | 守卫（dataDir 冲突 / 已运行）→ spawn 分离 `vessel hub start --data-dir <hubDataDir>` → 等 `hub.lock`（15s）→ 打印 pid/url/log；缺省仍前台 |
 
 - **restart 缺省保持运行模式**：读目标实例 pid record 的 `daemon` 标记，不带 `--daemon` 按原模式重启；显式 `--daemon` 强制后台；旧记录无标记 / 无运行实例 → 前台。`restart --all` 仍要求显式 `--daemon`。
 - 判别依据是归属：pid + `started_at` + `node_id`（node）/ `hub.lock`（hub）三元复核；adopt / 外部启动的进程**永远**不在终止名单里。

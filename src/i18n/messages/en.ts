@@ -65,7 +65,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.modelTest':
     'connectivity test against a saved entry or credential (sends a real request; may incur cost)',
   'help.cmd.gatewayStart':
-    'start detached and exit once the platform is up (default); --foreground keeps it in front; --instance names it',
+    'start the gateway platform detached and exit once up (default); --foreground keeps it in front; --instance names it. Fleet-level (platform + auto_start nodes/hub): vessel start',
   'help.cmd.gatewayList': 'list gateway instances and PID files',
   'help.cmd.gatewayStop':
     'stop the platform process gracefully (waits for active runs to finish, unlimited + progress; --force kills with audit); default keeps node/hub, --stop-nodes stops them too',
@@ -81,7 +81,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.tokenRotate': 'rotate the root secret: every derived token changes',
   'help.cmd.nodeToken': 'show where this node token comes from; --print prints the value',
   'help.cmd.gatewayNodesList': 'list local nodes from nodes.json with health (never prints tokens)',
-  'help.cmd.gatewayNodesAdd': 'register a local node; takes effect on the next gateway start',
+  'help.cmd.gatewayNodesAdd':
+    'register a local node (registration only, does not start it); start with vessel start, or it takes effect on the next gateway start',
   'help.cmd.gatewayNodesRemove':
     'remove a node from nodes.json; takes effect on the next gateway start',
   'help.cmd.nodeStart': 'start only the Node API (default 8644; shares the gateway instance lock)',
@@ -400,6 +401,7 @@ export const en: Record<MessageKey, string> = {
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.startedNode': 'node: {name} (port {port})',
   'gateway.logPath': 'Log: {path}',
+  'gateway.startFleetHint': 'Fleet-level start (skips running + summary): vessel start',
   'gateway.webDistMissing':
     'Web console assets are missing at {path}. Build them once (a fresh clone has none): `bun run build:web` (= `cd apps/web && bun run build`), or set gateway.web_dist (config) / VESSEL_STATIC_DIR (env) to an existing build, then start again.',
   'gateway.webDistStale':
@@ -492,7 +494,7 @@ export const en: Record<MessageKey, string> = {
   'stop.nothingRunning': 'No running fleet in the stop scope.',
   // vessel start (cli-single-source T1; topology §4.2 form A)
   'help.cmd.start':
-    'Start this fleet (platform + auto_start nodes/hub); skips running instances, reports failures without rollback',
+    'Start this fleet (platform + auto_start nodes/hub); skips running instances, reports failures without rollback. Three layers: fleet vessel start / component vessel gateway|node|hub start / registration vessel gateway nodes add (does not start)',
   'start.inventory.title': 'Fleet start (data root: {dataDir})',
   'start.envWarning':
     'Data root comes from the VESSEL_DATA_DIR env fallback; pin the fleet boundary with explicit --data-dir or config.',
