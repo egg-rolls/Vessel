@@ -179,7 +179,7 @@ import { createPluginSurface } from './plugin/plugin-surface';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
 import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
-import { hasBootRegistryKey } from './runtime/model-registry-wiring';
+import { hasBootRegistryKey, legacyPresentFromSources } from './runtime/model-registry-wiring';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
 import { RUNTIME_NOTICE_HOOK } from './runtime/runtime-notice-hook';
@@ -708,11 +708,16 @@ applyLocale((config.ui as { language?: string } | undefined)?.language);
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
 // registry 注册凭证已配置时同样不触向导（与 bootstrap 启动闸同口径）。
+// CHAIN-05：legacyPresent 取本地 bundle 的 configSources 精确判定（与运行期装配同口径）。
 if (
   !useMock &&
   interactive &&
   !resolveEffectiveApiKey(config) &&
-  !hasBootRegistryKey(config, resolveDataDir(config))
+  !hasBootRegistryKey(
+    config,
+    resolveDataDir(config),
+    legacyPresentFromSources(initialResult.bundle?.configSources),
+  )
 ) {
   // 首启分支内 dynamic import：常规启动不加载 wizard（S4 §2.3）。
   const { runSetupWizard } = await import('../packages/tui/src/wizard/setup-wizard');

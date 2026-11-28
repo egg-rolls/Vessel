@@ -23,6 +23,7 @@ import { createDecipheriv } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import {
+  type ConfigSources,
   DERIVED_TOKEN_PREFIX,
   type DefaultModelIdentity,
   defaultModelForProvider,
@@ -131,14 +132,33 @@ function readCredentialEnvelope(dataDir: string, id: string): CredentialEnvelope
 }
 
 /**
+ * provider.* 是否有非 default 层来源（§7.4 legacyPresent 精确口径，与
+ * tenant-runtime-factory / registry-store 同一公式）。启动闸与运行期装配共用，
+ * 不再各持一份判定（CHAIN-05）。
+ */
+export function legacyPresentFromSources(sources: ConfigSources | undefined): boolean {
+  return Object.entries(sources ?? {}).some(
+    ([key, source]) => (key === 'provider' || key.startsWith('provider.')) && source !== 'default',
+  );
+}
+
+/**
  * 启动闸的 registry 侧判定：有效默认解析到注册条目时，其凭证是否「已配置」
  * （信封在库，或 env 间接值非空）。与请求侧 apiKeyFor 同源选路：legacy 链路由
  * resolveEffectiveApiKey 判定，此处只看注册条目；只查存在性、不解密——解密失败
  * 仍由请求侧 D10 fail-loud 负责。纯 registry 配置（无 legacy provider.* 块）
  * 由此通过启动闸，不再被误判「未配置 API Key」。
+ *
+ * `legacyPresent` 必须传运行期同口径的精确值（legacyPresentFromSources）：
+ * 缺省 true 只是无 sources 时的保守回落（CHAIN-05：闸此前恒用缺省 true，
+ * 与运行期精确判定分裂——纯 registry 配置下闸按幻影 legacy 透传判凭证）。
  */
-export function hasBootRegistryKey(config: VesselConfig, dataDir: string): boolean {
-  const snapshot = synthesizeLegacyRegistry(config);
+export function hasBootRegistryKey(
+  config: VesselConfig,
+  dataDir: string,
+  legacyPresent = true,
+): boolean {
+  const snapshot = synthesizeLegacyRegistry(config, legacyPresent);
   // CHAIN-04：与运行期 resolveModel 同一 env 优先级（§2.6 冻结）——VESSEL_MODEL 非空
   // 以其为 ref（env 赢 models.default）。闸此前只解析 models.default：env 指向的注册
   // 条目凭证已配置时仍被误判「未配置 API Key」，或查错条目的凭证。
