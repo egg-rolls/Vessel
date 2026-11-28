@@ -1030,6 +1030,8 @@ button.tool-image-thumb:focus-visible {
   margin: 0;
   font-size: 11px;
   color: var(--muted);
+  /* q-error-e3（§3.9）：四段指引多行渲染（既有类 additive，零新组件）。 */
+  white-space: pre-line;
 }
 
 .stream-notice .run-error,

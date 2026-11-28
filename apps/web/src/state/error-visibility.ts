@@ -17,6 +17,10 @@ export interface ErrorMeta {
   phase?: string;
   retryable?: boolean;
   httpStatus?: number;
+  /** q-error-e3 additive：envelope error_id（CLI 下钻入口：vessel errors --id）。 */
+  errorId?: string;
+  /** q-error-e3 additive：details.candidates（「你是不是想选 X」既有文本位）。 */
+  candidates?: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -96,14 +100,25 @@ export function errorMetaOf(data: unknown): ErrorMeta | undefined {
   if (typeof httpStatus === 'number' && Number.isFinite(httpStatus)) {
     meta.httpStatus = httpStatus;
   }
+  // q-error-e3 additive：error_id + details.candidates（缺失保持原行为）。
+  const errorId = data.error_id ?? data.errorId;
+  if (typeof errorId === 'string' && errorId.length > 0) meta.errorId = errorId;
+  const details = isRecord(data.details) ? data.details : undefined;
+  if (details !== undefined && Array.isArray(details.candidates)) {
+    const candidates = details.candidates.filter(
+      (item): item is string => typeof item === 'string' && item.length > 0,
+    );
+    if (candidates.length > 0) meta.candidates = candidates;
+  }
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
-/** 紧凑 chip 文本：`code · category · phase`。 */
+/** 紧凑 chip 文本：`code · category · phase`（q-error-e3 additive：error_id）。 */
 export function formatErrorMeta(meta: ErrorMeta | undefined): string {
   if (!meta) return '';
   const parts = [meta.code, meta.category, meta.phase].filter(
     (part): part is string => typeof part === 'string' && part.length > 0,
   );
+  if (meta.errorId !== undefined) parts.push(meta.errorId);
   return parts.join(' · ');
 }
