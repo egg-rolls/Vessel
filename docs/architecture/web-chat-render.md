@@ -39,7 +39,7 @@ paths: [apps/web/src/domains/chat/transcript-items.ts, apps/web/src/domains/chat
 ## 5. 卡片与子 agent
 
 - `StreamCard` 是唯一卡壳（四槽卡头 / children 决定展开，结构与交互约定见 WEB-UI.md）；`ToolCard` / `AgentMessageCard` / `EnvCard` / `AskAnswerCard` / `RotateHandoffCard` / 失败卡都复用，不自造卡头。工具项折叠在 `tool-cards.ts:foldToolItems`，历史 tool 消息在 `history-tools.ts:buildHistoryToolItems`。
-- `EventRow.tsx`：原始事件行，档位取自 `state/event-visibility.ts:tierOf`（三档表与登记义务见 [events.md#event-visibility](events.md#event-visibility)）。
+- `EventRow.tsx`：原始事件行，档位取自 `state/event-visibility.ts:tierOf`（三档表与登记义务见 [event-visibility.md](event-visibility.md)）。
 - `SubagentTranscript.tsx`：`?agent=` 深链；`buildGroup` 把 child run 的 `subagent.*` 事件归一成普通 run 事件复用 `RunItems`。**登记的过渡例外**：仍从 entries 批量分组，受环形缓冲裁剪影响（早期子 agent 事件被淘汰会缺行），待 item 物化后修。
 - 发言人名唯一实现 `AssistantSpeaker`（`ReasoningBlock.tsx` 导出，live 与历史共用）；发送方解析 `agent-sender.ts`，成员名展示 `agent-labels.ts`。
 
