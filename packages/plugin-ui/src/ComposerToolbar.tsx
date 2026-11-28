@@ -138,7 +138,9 @@ function renderToolbarAction(
   );
   // key 放在最外层（包装层可能换掉元素类型）；Fragment 不产生额外 DOM。
   return (
-    <Fragment key={action.id}>{wrapAction === undefined ? button : wrapAction(action, button)}</Fragment>
+    <Fragment key={action.id}>
+      {wrapAction === undefined ? button : wrapAction(action, button)}
+    </Fragment>
   );
 }
 
