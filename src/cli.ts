@@ -178,7 +178,7 @@ import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { createPluginSurface } from './plugin/plugin-surface';
 import { type PluginWatchHandle, startPluginWatch } from './plugin/plugin-watch';
 import { createRunControl } from './run/run-control';
-import { type BootstrapResult, bootstrap, resolveKanbanBoardPath } from './runtime/bootstrap';
+import { type BootstrapResult, bootstrap } from './runtime/bootstrap';
 import { hasBootRegistryKey } from './runtime/model-registry-wiring';
 import { installProcessErrorHandlers } from './runtime/process-handlers';
 import { createRuntimeNoticeBus } from './runtime/runtime-notice';
@@ -1433,11 +1433,9 @@ async function runWithConfig(result: BootstrapResult) {
     // 声明在这里（reload 闭包也要用），只读一次：热重载沿用同一份，直到下次 join。
     const hubDerivedOrigins = await readHubNodeTrustedOrigins(dataDir);
 
-    // q-kanban-proxy：kanban deps 提为可变对象（同一引用进 gatewayOptions.kanban）。
-    // kanban.* handler 每次调用读 deps.boardPath → 热应用原地改即活生效。
-    // 解析表达式 = bootstrap 导出的 resolveKanbanBoardPath（R-6 起启动装配与热应用、
-    // 网络面与 localDispatcher 面共用的唯一真相；~ 展开、相对进程 cwd → 缺省板）。
-    const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
+    // q-kanban-proxy → P2 收集器（ADR-107）：kanban 可变 deps 由 kanban feature
+    // 单点持有（result.assembly.dispatcher.kanban 与 result.kanbanDeps 同一对象，
+    // 两表面共消费）；热应用经 result.assembly.hotApply.config.applyKanban 注入。
 
     const reloadRunner = createGatewayReloadRunner({
       // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
@@ -1540,19 +1538,13 @@ async function runWithConfig(result: BootstrapResult) {
         }
         return lines;
       },
-      // q-kanban-proxy：kanban 热应用——重解析 boardPath 原地更新 kanbanDeps
-      // （handler 每次调用读 deps.boardPath，下一次 kanban.get/archive 即用新板）。
-      // 解析结果未变（如仅 trim 差异）不产差异行，避免无意义 notice。
-      applyKanban: (next) => {
-        const from = kanbanDeps.boardPath;
-        const to = resolveKanbanBoardPath(next.kanban);
-        kanbanDeps.boardPath = to;
-        // R-6：localDispatcher（vessel op=rpc 路）的 deps 同步原地更新，两路同一语义。
-        if (result.kanbanDeps !== undefined) {
-          result.kanbanDeps.boardPath = to;
-        }
-        return from === to ? [] : [`kanban: board path ${from} → ${to} (hot-applied)`];
-      },
+      // q-kanban-proxy → P2 收集器（ADR-107）：kanban 热应用由 feature 声明
+      // （重解析 boardPath 原地更新单份可变 deps，两表面同一对象即两路活生效；
+      // 差异行格式逐字保留）。缺省（connect 模式等无收集结果）⇒ 变化域进
+      // requires_restart，与迁移前未注入语义一致。
+      ...(result.assembly?.hotApply.config.applyKanban !== undefined
+        ? { applyKanban: result.assembly.hotApply.config.applyKanban }
+        : {}),
       // auto-gc P1：autoPrune 热应用——调度器自启动起读 live resolver 闭包（每趟求值
       // 最新 enabled / interval / olderThan / dryRun，cadence 不冻结启动值）；这里把
       // 重载配置喂进调度器持有的活引用并 reschedule 立即重排挂起定时器（O4：热改即
@@ -1636,13 +1628,9 @@ async function runWithConfig(result: BootstrapResult) {
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
       // 0.15：命名实例落到 <dataDir>/instances/<instance>，避免同 dataDir 互相覆盖。
       interactionsDir: ensureInteractionsDir(dataDir, foregroundGatewayInstance),
-      // q-kanban-view：任务看板读面 + 用户验收归档写面（kanban.*）。
-      // 路径 = config kanban.board_path（~ 展开、相对进程 cwd）→ 缺省
-      // <cwd>/docs/dev/kanban/board.json（cwd = repo 根 / 舰队 worktree 根）。
-      // archive.json 恒取板同目录（serve 侧派生，不读文件内指针）。
-      // q-kanban-proxy：kanbanDeps 是可变对象（声明在 reloadRunner 前），
-      // config.set kanban.boardPath / 手改 YAML 经 applyKanban 原地热更新。
-      kanban: kanbanDeps,
+      // q-kanban-view / q-kanban-proxy：kanban.* 已迁 P2 收集器
+      // （src/assembly/features/kanban.ts，经下方 result.assembly.dispatcher 展开；
+      // 可变 deps 与本地面同一对象，applyKanban 热应用原地更新）。
       // q-async-bash-viz：jobs.* 已迁 P2 收集器（src/assembly/features/jobs.ts，
       // 经下方 result.assembly.dispatcher 展开；本地面同份 additive 获得 jobs.*）。
       // 0.12 / CONTRACT-hot-apply：`gateway.reload` 的唯一热应用入口。

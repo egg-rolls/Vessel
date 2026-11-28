@@ -87,11 +87,7 @@ import { readPackageVersion } from '../shared/version';
 import type { McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
 import { assembleAgentWiring, finishAgentAssembly } from './agent-assembly';
-import {
-  bootstrapConnect,
-  resolveKanbanBoardPath,
-  withConnectCliOverrides,
-} from './bootstrap-connect';
+import { bootstrapConnect, withConnectCliOverrides } from './bootstrap-connect';
 import type { BootstrapOptions, BootstrapResult } from './bootstrap-types';
 import { createGcAssembly } from './gc-assembly';
 import { hasBootRegistryKey } from './model-registry-wiring';
@@ -746,10 +742,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
   });
 
-  // R-6：kanban deps（可变对象，同一引用进 localDispatcher opts.kanban 与 result.kanbanDeps）。
-  // 解析走共享 resolveKanbanBoardPath（cli 网络面同源）；热应用由 cli applyKanban 原地改。
-  const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
-
   // bootstrap P0（设计稿 §5）：本地面与 cli 网络面共用同一插件读面工厂。
   // 修复两处缺口：①原手写 plugins() 跳过 child（mode==='child' → continue）但本地面
   // 没有补 statuses 行 → marketplace/usage 等体验插件整行不可见；②opts 未传
@@ -963,13 +955,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 装配后段，dispatch 发生时早已初始化（TDZ 无虞）。additive 只补 restart；
     // selfRestart/shutdown/reload 的本地面缺口另议，不在本批扩面。
     restart: async (input) => gatewayRestart(input),
-    // R-6（q-tooling-cosmetic，同 R-1 模式）：vessel op=rpc 走的是本 localDispatcher
-    // （vesselRpcPort），kanban.* 必须在这里同样注入 deps，否则设计主入口
-    // not_found「board path is not configured」——cli.ts 的网络 gatewayOptions 只是另一路。
-    // 可变对象：cli 的 applyKanban 热应用经 result.kanbanDeps 原地更新（handler 每次调用读）。
-    kanban: kanbanDeps,
     // P2 收集器（ADR-107）：feature 贡献的 RPC deps 统一展开（本批：attachments
-    // 三键；后续 jobs/kanban/restart 逐个迁入）。键冲突 fail-closed 在收集器内。
+    // 三键 / jobs / kanban；restart 随后迁入）。键冲突 fail-closed 在收集器内。
+    // R-6 的 kanban 可变对象由 kanban feature 单点持有（dispatcher 与 result
+    // 同一引用），cli applyKanban 热应用原地改即两路活生效。
     ...collectedFeatures.dispatcher,
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
@@ -1113,10 +1102,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(federationApply !== undefined ? { federationApply } : {}),
     // auto-gc P1 热应用：调度器活配置引用的原地更新入口（cli 的 applyAutoPrune 用）。
     ...(applyAutoPruneConfig !== undefined ? { applyAutoPruneConfig } : {}),
-    // R-6：localDispatcher 的 kanban deps 透传（cli applyKanban 热应用原地更新）。
-    kanbanDeps,
-    // P2 收集器（ADR-107）：dispatcher phase 收集结果透传——cli 网络面展开同一份
-    // deps/hotApply（两表面同源；本批 attachments，后续 feature 逐个迁入）。
+    // P2 收集器（ADR-107）：result 透传字段统一展开（本批：kanbanDeps——与
+    // dispatcher.kanban 同一可变对象，cli applyKanban 热应用原地更新）。
+    ...collectedFeatures.result,
+    // dispatcher phase 收集结果透传——cli 网络面展开同一份 deps/hotApply
+    // （两表面同源；本批 attachments/jobs/kanban，restart 随后迁入）。
     assembly: collectedFeatures,
     nodeId,
     nodeName,
