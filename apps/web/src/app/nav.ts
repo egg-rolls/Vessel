@@ -108,57 +108,96 @@ export function isDomainActive(route: Route, domain: Domain): boolean {
 }
 
 /**
- * 顶栏路径文本（不放 gateway/token 表单）。
+ * 面包屑分段（q-breadcrumb-clickable）：每段自带导航目标，全段可点击。
+ * `route` = 壳层路由；`hash` = 直接 hash 导航（agent 深链不在壳层 Route 里）。
+ * 末段 = 当前页（route 即当前路由，点击导航自身，保留深链参数）。
+ */
+export interface BreadcrumbSegment {
+  label: string;
+  route?: Route;
+  hash?: string;
+}
+
+/**
+ * 顶栏路径分段（不放 gateway/token 表单）。
  *
  * `nodeNames`（nodeKey → 展示名，`useNodeNames()` 的结果）缺省 = 空表：节点详情
  * 面包屑退 nodeKey 原文（不丢深链语义，URL hash 不变）。拿到名字时显示名字而非
  * UUID（问题3：详情页标题早有名字，顶栏却直显 node id）。
+ *
+ * 父级段导航到所属列表（保留 tab 等视图参数），末段导航当前路由自身。
  */
-export function routeBreadcrumb(route: Route, nodeNames?: ReadonlyMap<string, string>): string {
+export function routeBreadcrumbSegments(
+  route: Route,
+  nodeNames?: ReadonlyMap<string, string>,
+): BreadcrumbSegment[] {
   switch (route.domain) {
     case 'chat':
-      return route.sessionId ? t('breadcrumb.chat.session') : t('breadcrumb.chat');
+      return route.sessionId
+        ? [
+            { label: t('breadcrumb.chat'), route: { domain: 'chat' } },
+            { label: t('breadcrumb.chat.conversation'), route },
+          ]
+        : [{ label: t('breadcrumb.chat'), route }];
     case 'pending':
-      return t('breadcrumb.pending');
+      return [{ label: t('breadcrumb.pending'), route }];
     case 'runs': {
+      const list: Route = { domain: 'runs', tab: route.tab };
       const tab =
         route.tab === 'durable' ? t('breadcrumb.runs.durable') : t('breadcrumb.runs.live');
-      return route.runId
-        ? t('breadcrumb.runs.detailRun', { tab })
-        : t('breadcrumb.runs.detail', { tab });
+      const segments: BreadcrumbSegment[] = [
+        { label: t('breadcrumb.runs'), route: list },
+        { label: tab, route: route.runId ? list : route },
+      ];
+      if (route.runId) segments.push({ label: t('breadcrumb.runs.details'), route });
+      return segments;
     }
     case 'hub':
-      return t('breadcrumb.hub');
+      return [{ label: t('breadcrumb.hub'), route }];
     case 'gateway':
-      return t('breadcrumb.gateway');
+      return [{ label: t('breadcrumb.gateway'), route }];
     case 'pluginHost':
-      return t('breadcrumb.pluginHost');
+      return [{ label: t('breadcrumb.pluginHost'), route }];
     case 'nodes':
       return route.nodeKey
-        ? t('breadcrumb.nodes.detail', { node: nodeNames?.get(route.nodeKey) ?? route.nodeKey })
-        : t('breadcrumb.nodes');
+        ? [
+            { label: t('breadcrumb.nodes'), route: { domain: 'nodes' } },
+            { label: nodeNames?.get(route.nodeKey) ?? route.nodeKey, route },
+          ]
+        : [{ label: t('breadcrumb.nodes'), route }];
     case 'teams':
-      if (!('teamId' in route)) return t('breadcrumb.teams');
-      return route.agentId
-        ? t('breadcrumb.teams.agent')
-        : t('breadcrumb.teams.detail', { team: route.teamId });
+      if (!('teamId' in route)) return [{ label: t('breadcrumb.teams'), route }];
+      return [
+        { label: t('breadcrumb.teams'), route: { domain: 'teams' } },
+        { label: route.agentId ? t('breadcrumb.teams.agent') : route.teamId, route },
+      ];
     case 'agents':
-      return t('breadcrumb.agents');
+      return [{ label: t('breadcrumb.agents'), route }];
     case 'tools':
-      return t('breadcrumb.tools');
+      return [{ label: t('breadcrumb.tools'), route }];
     case 'mcp':
-      return t('breadcrumb.mcp');
+      return [{ label: t('breadcrumb.mcp'), route }];
     case 'channels':
-      return t('breadcrumb.channels');
+      return [{ label: t('breadcrumb.channels'), route }];
     case 'kanban':
-      return t('breadcrumb.kanban');
+      return [{ label: t('breadcrumb.kanban'), route }];
     case 'observe':
-      return t(`breadcrumb.observe.${route.tab}`);
+      return [
+        { label: t('breadcrumb.observe'), route: { domain: 'observe', tab: 'metrics' } },
+        { label: t(`breadcrumb.observe.${route.tab}`), route },
+      ];
     case 'plugins':
-      return t('breadcrumb.plugins');
+      return [{ label: t('breadcrumb.plugins'), route }];
     case 'capabilities':
-      return t('breadcrumb.capabilities');
+      return [{ label: t('breadcrumb.capabilities'), route }];
     case 'settings':
-      return t('breadcrumb.settings');
+      return [{ label: t('breadcrumb.settings'), route }];
   }
+}
+
+/** 扁平文案（AppShell 导航播报用）：分段 label 以「›」连接，与旧口径一致。 */
+export function routeBreadcrumb(route: Route, nodeNames?: ReadonlyMap<string, string>): string {
+  return routeBreadcrumbSegments(route, nodeNames)
+    .map((segment) => segment.label)
+    .join(' › ');
 }
