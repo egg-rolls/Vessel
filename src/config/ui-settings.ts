@@ -165,6 +165,8 @@ export type SettableConfigKey =
   | 'ui.addressStyle'
   | 'ui.askUser'
   | 'ui.expandCards'
+  // q-addr-display / q-addressstyle-config-gap：地址显示三档（YAML ui.address_style）。
+  | 'ui.addressStyle'
   | 'observability.showProcessErrors'
   | 'observability.log.level'
   | 'observability.log.color'
@@ -257,6 +259,9 @@ const CONFIG_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = {
   'ui.addressStyle': { block: 'ui', yamlKey: 'address_style' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
   'ui.expandCards': { block: 'ui', yamlKey: 'expand_cards' },
+  // q-addr-display / q-addressstyle-config-gap：地址显示三档（与 serve ENUM_KEYS /
+  // config validator UI_ADDRESS_STYLES 同界；Web settings-registry 早已登记此键）。
+  'ui.addressStyle': { block: 'ui', yamlKey: 'address_style' },
   'observability.showProcessErrors': {
     block: 'observability',
     yamlKey: 'show_process_errors',

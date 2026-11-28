@@ -260,6 +260,15 @@ export async function configSetCommand(
         stderr: t('config.set.invalidErrorLevel', { value }),
       };
     }
+  } else if (key === 'ui.addressStyle') {
+    // q-addressstyle-config-gap：与 config validator / serve config.set 同界（三档枚举）。
+    if (!['name', 'compact', 'full'].includes(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidEnum', { key, allowed: 'name | compact | full' }),
+      };
+    }
   } else if (key === 'observability.showProcessErrors') {
     if (value !== 'true' && value !== 'false') {
       return {

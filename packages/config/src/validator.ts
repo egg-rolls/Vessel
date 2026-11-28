@@ -4458,6 +4458,9 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'askUser',
     'expandCards',
     'depthColor',
+    // q-addr-display / q-addressstyle-config-gap：地址显示三档（值域护栏在 validateUi；
+    // 此前漏登记 ⇒ yaml 写了 ui.address_style 会被未知键检查拒绝，config.set 写路径断）。
+    'addressStyle',
   ],
   // q-msg-visibility：消息显示五 toggle（未知键由 findUnknownNestedKeys 报）。
   'ui.messageVisibility': ['reasoning', 'tools', 'environment', 'source', 'system'],

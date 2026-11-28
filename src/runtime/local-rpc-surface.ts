@@ -48,6 +48,13 @@ export interface LocalRpcSurfaceInput {
   session: LocalRpcOptions['session'];
   timelineLog: TenantRuntimeBundle['timelineLog'];
   config: VesselConfig;
+  /**
+   * P2 活配置引用（q-config-get-fresh / O5）：config.get / config.sources 视图读
+   * `liveConfigRef.current` 而非启动期 `config` —— cli 热应用同步 `.current` 后
+   * 本地面（vessel 元工具 op=rpc / TUI）与网络面同一活配置，视图=真相。
+   * 纯本地 REPL 下 ref 不热更新 ⇒ 回退启动快照语义不变（同 pluginSurface 先例）。
+   */
+  liveConfigRef: { current: VesselConfig };
   bundle: TenantRuntimeBundle;
   localPluginHostManager: PluginHostManager;
   reloadLocalPlugins: ReturnType<typeof createPluginReloader>;
@@ -80,6 +87,7 @@ export function buildLocalRpcSurface(input: LocalRpcSurfaceInput): LocalRpcDispa
     session,
     timelineLog,
     config,
+    liveConfigRef,
     bundle,
     localPluginHostManager,
     reloadLocalPlugins,
@@ -183,7 +191,12 @@ export function buildLocalRpcSurface(input: LocalRpcSurfaceInput): LocalRpcDispa
     config: {
       snapshot: async (): Promise<ConfigSnapshotLike> =>
         buildConfigSnapshot({
-          config: sanitizeConfigForSnapshot(config),
+          // q-config-get-fresh（O5）：读活配置引用——cli 热应用（yaml watch /
+          // config.set 写后 trigger）同步 `.current` 后，本地面 config.get 立即
+          // 反映新策略，与网络面 tenantConfigControl 同口径（视图=真相）。
+          // sources/paths 仍取启动期 loaded：热应用不换文件来源，与网络面
+          // gatewayBundle.configSources/configPaths 口径一致。
+          config: sanitizeConfigForSnapshot(liveConfigRef.current),
           sources: loaded.sources,
           paths: loaded.paths,
           tenantId,

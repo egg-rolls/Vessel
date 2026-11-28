@@ -80,3 +80,16 @@ observability:
 0.4714）、`chromaLight`（[0,0.37]，默认 0.0887）、`lightnessDark`（[0.73,0.95]，默认 0.85）、
 `chromaDark`（[0,0.37]，默认 0.13）。值域 = 对比度护栏（gamut 映射只降 C 不动 L）；
 越界由 validator 报带值域的错误。RPC 键 camelCase（`ui.depthColor.*`），落盘 YAML `ui.depth_color`。
+
+## 地址显示格式（`ui.address_style`）
+
+三档枚举 `name | compact | full`（缺省 **name**）：来源地址的显示风格——name 档优先展示名
+（node 名 / agent 名）、compact 短 id、full 完整地址。只影响**显示层**，路由地址恒 canonical
+full-id。RPC / CLI 键 `ui.addressStyle`，落盘 YAML `ui.address_style`；值域护栏在 validator
+（`UI_ADDRESS_STYLES`），serve `config.set` ENUM_KEYS 与 CLI `setUserConfigValue` 同界。
+
+- Web：Settings → Display 写 `config.set`；时间线来源卡 / 环境卡 / 工具卡经 `useAddressStyle`
+  读 `config.get` 视图，热应用后即生效。
+- agent 侧来源卡 node 段渲染风格是装配期只读快照（`runtime.addressStyle`），改档需重启生效。
+- 登记史（q-addressstyle-config-gap）：q-addr-display 落了类型 / 值域 / serve 与 Web 登记，
+  但 `KNOWN_BLOCK_KEYS.ui` 与 CLI `CONFIG_SET_TARGETS` 漏登记 ⇒ 写路径断；现已补齐。
