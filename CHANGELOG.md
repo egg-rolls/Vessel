@@ -10,6 +10,10 @@
 > 版本 = 代码契约身份，不绑发版节奏。major=2（单一真相源架构 breaking）。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
+## [2.2.9] - 2026-11-28
+
+> 修复批（轻收口自动立节；变更明细候补，见 git log 与 docs/versions/CURRENT.md）。
+
 ## [2.2.8] - 2026-11-28
 
 > 修复批（轻收口自动立节；变更明细候补，见 git log 与 docs/versions/CURRENT.md）。
