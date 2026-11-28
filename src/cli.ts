@@ -107,11 +107,6 @@ import {
   registerRuntimeNoticeHook,
 } from './config/hot-apply-assembly';
 import { visionSurfaceOf } from './config/vision-settings';
-import {
-  createConfigAttachmentPreviewer,
-  createConfigAttachmentStager,
-} from './data/attachment-staging';
-import { createConfigAttachmentLister } from './data/attachments-list';
 import { expandHome, resolveDataDir } from './data/data-paths';
 import { resolveAgentCwd } from './data/path-resolution';
 import { setToolPolicy } from './data/permission-store';
@@ -1781,13 +1776,11 @@ async function runWithConfig(result: BootstrapResult) {
             askAnswerDelivery: createAskAnswerDelivery(result.agent.service),
           }
         : {}),
-      // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
-      // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
-      listAttachments: createConfigAttachmentLister({ getConfig: () => liveConfig }),
-      // file-ref-ux（A2/A3/A4）：暂存上传 + 预览/过期探针（与 bootstrap 本地
-      // dispatcher 同一份装配；TTL GC 由 bootstrap 统一启动）。
-      stageAttachment: createConfigAttachmentStager({ getConfig: () => liveConfig }),
-      previewAttachment: createConfigAttachmentPreviewer({ getConfig: () => liveConfig }),
+      // P2 收集器（ADR-107）：feature 贡献的 RPC deps 与 bootstrap 本地面共消费
+      // 同一份收集结果（本批 attachments 三键；后续 jobs/kanban/restart 逐个迁入，
+      // 对应下方手写键随之删除）。getConfig 读 liveConfigRef——cli 热应用同步写
+      // 该活引用，网络面语义逐字节不变。
+      ...(result.assembly?.dispatcher ?? {}),
       // 单执行面的 RPC 数据源：config / trace / session 数据 / metrics。
       defaultTenantId: result.tenantId,
       config: tenantConfigControl,

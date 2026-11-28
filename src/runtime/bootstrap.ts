@@ -37,16 +37,14 @@ import {
 import { resolveAgentWiring } from '../agent/agent-wiring';
 import { createAskAnswerDelivery } from '../agent/ask-answer-delivery';
 import type { PeerNoticeRouter } from '../agent/peer-notices';
+import { collectFeatures } from '../assembly/collect';
+import type { AssemblyContext } from '../assembly/feature';
+import { ASSEMBLY_FEATURES } from '../assembly/features';
 import { formatConfigErrors } from '../config/config-error-format';
 import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
 import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
-import {
-  createConfigAttachmentPreviewer,
-  createConfigAttachmentStager,
-  type StagingGcRunner,
-} from '../data/attachment-staging';
-import { createConfigAttachmentLister } from '../data/attachments-list';
+import type { StagingGcRunner } from '../data/attachment-staging';
 import type { AutoPruneRunner } from '../data/auto-prune';
 import { withDataLock } from '../data/data-lock';
 import {
@@ -769,6 +767,29 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     pendingInProcessRestart: () => reloadLocalPlugins.pendingInProcessRestart(),
   });
 
+  // ── P2 声明式收集器（ADR-107）──────────────────────
+  // phase 硬闸的 dispatcher 调用点：晚于 agent 装配（startOwner 已在上方完成），
+  // 早于两表面 opts 构造。收集结果一份，本地面在此展开、网络面经 result.assembly
+  // 透传给 cli 展开——「忘接一路」（R-1/R-6）结构上不可能。脊柱不进收集器。
+  const assemblyContext: AssemblyContext = {
+    config,
+    liveConfig: liveConfigRef,
+    bundle,
+    tenantPaths,
+    dataDir,
+    tenantId,
+    nodeId,
+    nodeName,
+    logger,
+    engineClient,
+    executionRuntime,
+    agent: { current: agentControl?.control },
+    notice: { current: noticeBus },
+    pluginManager: { current: localPluginHostManager },
+    gatewayRestart: { current: gatewayRestart },
+  };
+  const collectedFeatures = collectFeatures(ASSEMBLY_FEATURES, assemblyContext, 'dispatcher');
+
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
     session,
@@ -936,9 +957,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(agentControl !== undefined
       ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
       : {}),
-    // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
-    // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
-    listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
     // R-1（q-restart-tool）：vessel op=rpc 走的是本 localDispatcher（vesselRpcPort），
     // gateway.restart 必须在这里同样注入，否则设计主入口 not_supported——
     // cli.ts 的网络 gatewayOptions 只是另一路。惰性包装：gatewayRestart 定义在
@@ -950,10 +968,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // not_found「board path is not configured」——cli.ts 的网络 gatewayOptions 只是另一路。
     // 可变对象：cli 的 applyKanban 热应用经 result.kanbanDeps 原地更新（handler 每次调用读）。
     kanban: kanbanDeps,
-    // file-ref-ux（A2/A3/A4）：暂存上传 + 预览/过期探针。边界与入池同一份
-    // basic-tools 配置；暂存根已由 buildPathBoundary 追加进允许根。
-    stageAttachment: createConfigAttachmentStager({ getConfig: () => config }),
-    previewAttachment: createConfigAttachmentPreviewer({ getConfig: () => config }),
+    // P2 收集器（ADR-107）：feature 贡献的 RPC deps 统一展开（本批：attachments
+    // 三键；后续 jobs/kanban/restart 逐个迁入）。键冲突 fail-closed 在收集器内。
+    ...collectedFeatures.dispatcher,
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
@@ -1098,6 +1115,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(applyAutoPruneConfig !== undefined ? { applyAutoPruneConfig } : {}),
     // R-6：localDispatcher 的 kanban deps 透传（cli applyKanban 热应用原地更新）。
     kanbanDeps,
+    // P2 收集器（ADR-107）：dispatcher phase 收集结果透传——cli 网络面展开同一份
+    // deps/hotApply（两表面同源；本批 attachments，后续 feature 逐个迁入）。
+    assembly: collectedFeatures,
     nodeId,
     nodeName,
     mcp: mcpControl,
