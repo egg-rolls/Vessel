@@ -9,6 +9,7 @@ import type { TeamControl } from '../../gateway/team-control';
 import type { AskUserRequest, PermissionRequest, SessionDetail } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { PaletteItem } from '../../state/palette';
+import { filterRetiredSessions } from '../../state/retired-visibility';
 import {
   filterSessions,
   inflightFromScheduler,
@@ -16,7 +17,6 @@ import {
   sessionTitle,
   takeSessions,
 } from '../../state/sessions';
-import { filterRetiredSessions } from '../../state/retired-visibility';
 import { resourceData } from '../../state/useResource';
 import { useShowArchived } from '../../state/useShowArchived';
 import { useShowRetiredSessions } from '../../state/useShowRetiredSessions';
