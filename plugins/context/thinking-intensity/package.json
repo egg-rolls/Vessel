@@ -164,6 +164,8 @@
           "thinking-intensity.level.low": "Low",
           "thinking-intensity.level.medium": "Medium",
           "thinking-intensity.level.high": "High",
+          "thinking-intensity.hint.none": "This model's thinking is not controllable (always on or always off); only Auto applies.",
+          "thinking-intensity.hint.level_unsupported": "This model does not support the selected level; no thinking parameters were injected.",
           "thinking-intensity.toolbar.label": "Thinking"
         },
         "zh-CN": {
@@ -181,6 +183,8 @@
           "thinking-intensity.level.low": "低",
           "thinking-intensity.level.medium": "中",
           "thinking-intensity.level.high": "高",
+          "thinking-intensity.hint.none": "该模型思考不可控（恒开或恒关），仅自动档生效。",
+          "thinking-intensity.hint.level_unsupported": "该模型不支持所选档位，未注入思考参数。",
           "thinking-intensity.toolbar.label": "思考"
         }
       }

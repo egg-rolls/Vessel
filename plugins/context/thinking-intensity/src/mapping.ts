@@ -37,6 +37,11 @@ export interface MappingEntry {
   readonly modelPattern: RegExp;
   readonly shape: Shape;
   readonly status: Status;
+  /**
+   * 能力说明（i18n key，宿主菜单 footer 经插件 catalog 解析显示；q-ti-hint）。
+   * none 形状必填：解释「为什么只有 auto 可选」。缺省 = 无说明行。
+   */
+  readonly hint?: string;
   /** 该模型可用的非 auto 档位（UI 能力过滤；不支持的档位不静默替换）。 */
   availableLevels(model: string): ConcreteLevel[];
   /** 档位 → wire 参数；不支持的档位返回 undefined（不注入）。纯函数，无 I/O。 */
@@ -45,6 +50,9 @@ export interface MappingEntry {
 
 const ALL_LEVELS: ConcreteLevel[] = ['off', 'low', 'medium', 'high'];
 const NO_OFF: ConcreteLevel[] = ['low', 'medium', 'high'];
+
+/** none 形状共用的能力说明 key（插件 i18n catalog 提供 en/zh 文案）。 */
+const NONE_HINT_KEY = 'thinking-intensity.hint.none';
 
 function budgetFor(level: ConcreteLevel, budgets: Budgets): number | undefined {
   if (level === 'low') return budgets.low;
@@ -119,6 +127,7 @@ export const MAPPING: readonly MappingEntry[] = [
     modelPattern: /^deepseek-reasoner/,
     shape: 'none',
     status: 'stable',
+    hint: NONE_HINT_KEY,
     availableLevels: () => [],
     map: () => undefined,
   },
@@ -128,6 +137,7 @@ export const MAPPING: readonly MappingEntry[] = [
     modelPattern: /kimi/i,
     shape: 'none',
     status: 'stable',
+    hint: NONE_HINT_KEY,
     availableLevels: () => [],
     map: () => undefined,
   },
@@ -137,6 +147,7 @@ export const MAPPING: readonly MappingEntry[] = [
     modelPattern: /.*/,
     shape: 'none',
     status: 'stable',
+    hint: NONE_HINT_KEY,
     availableLevels: () => [],
     map: () => undefined,
   },
