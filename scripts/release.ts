@@ -8,7 +8,11 @@
  *   bun run scripts/release.ts --bump minor [--auto-tag] # 全量·重收口（功能批）
  *   bun run scripts/release.ts --bump major [--auto-tag] # 全量·重收口（破坏批）
  *   bun run scripts/release.ts <version> [--auto-tag]    # 显式版本（重跑/修复漂移，幂等）
+ *   bun run scripts/release.ts --suggest-bump            # 只推导 bump 建议（conventional commits），不收口
  *   任一组合 + --dry-run                                  # 只预演计划，不落盘不 git
+ *
+ * bump 推导（q-semver-auto-bump）：上个 v* tag 以来的 commit history →
+ * breaking→major / feat→minor / fix-only→patch；只作建议（advisory），不强制、不改变收口行为。
  *
  * 双模式（bump 类型准则：feat→minor / fix-only→patch / breaking→major）：
  * - **增量（patch）轻收口**：manifest 统一 + CHANGELOG 条目 append（缺节时只立骨架，
@@ -172,11 +176,15 @@ function printUsage(): void {
   console.log(`Usage:
   bun run scripts/release.ts --bump patch|minor|major [--dry-run] [--auto-tag]
   bun run scripts/release.ts <version> [--dry-run] [--auto-tag]
+  bun run scripts/release.ts --suggest-bump
 
 模式：patch=增量轻收口（manifest+CHANGELOG append+CURRENT.md+commit）；
 minor/major=全量重收口（+版本文档+INDEX 登记；CHANGELOG 完整节缺则报错候补）。
 --auto-tag：打 annotated tag vX.Y.Z（不 push；push 触发 release.yml）。
-显式版本：重跑/修复漂移（与根版本相同=只同步不 bump）。`);
+显式版本：重跑/修复漂移（与根版本相同=只同步不 bump）。
+--suggest-bump：从上个 v* tag 以来的 conventional commits 推导 bump 类型
+（breaking→major / feat→minor / fix→patch），只打印建议+证据，不收口。
+正常收口也会打印同一推导作 advisory（与 --bump 不一致时告警，不强制）。`);
 }
 
 /** 显式版本 → bump 类型（与根版本相同 = 漂移修复，按轻收口只同步不 bump）。 */
@@ -196,10 +204,97 @@ function deriveKind(current: string, target: string): BumpKind {
   );
 }
 
+// ── bump 类型推导（q-semver-auto-bump：conventional commits → 建议，只建议不强制）──
+
+/** 一条 commit 的 conventional 解析结果（非 conventional → other）。 */
+type CommitSignal = 'major' | 'minor' | 'patch' | 'other';
+
+const CONVENTIONAL_HEADER = /^(\w+)(\([^)]*\))?(!)?:\s*.+$/;
+
+/** 单条 commit message（含 body）→ 信号：breaking→major / feat→minor / fix→patch。 */
+export function commitSignal(message: string): CommitSignal {
+  const [header = '', ...bodyLines] = message.split('\n');
+  const match = CONVENTIONAL_HEADER.exec(header.trim());
+  const body = bodyLines.join('\n');
+  if (/^BREAKING[ -]CHANGE:/m.test(body) || match?.[3] === '!') return 'major';
+  if (match === null) return 'other';
+  const type = (match[1] ?? '').toLowerCase();
+  if (type === 'feat') return 'minor';
+  if (type === 'fix') return 'patch';
+  return 'other';
+}
+
+export interface BumpSuggestion {
+  /** null = 无 conventional 信号（不臆造建议） */
+  kind: BumpKind | null;
+  counts: Record<CommitSignal, number>;
+  /** 证据：breaking / feat 的 subject（各截前 3 条） */
+  breaking: string[];
+  feats: string[];
+  total: number;
+}
+
+/** commit history → bump 建议：任一 breaking→major，否则任一 feat→minor，否则任一 fix→patch。 */
+export function suggestBumpFromCommits(messages: readonly string[]): BumpSuggestion {
+  const counts: Record<CommitSignal, number> = { major: 0, minor: 0, patch: 0, other: 0 };
+  const breaking: string[] = [];
+  const feats: string[] = [];
+  for (const message of messages) {
+    if (message.trim() === '') continue;
+    const signal = commitSignal(message);
+    counts[signal] += 1;
+    const subject = (message.split('\n')[0] ?? '').trim();
+    if (signal === 'major' && breaking.length < 3) breaking.push(subject);
+    if (signal === 'minor' && feats.length < 3) feats.push(subject);
+  }
+  const kind: BumpKind | null =
+    counts.major > 0 ? 'major' : counts.minor > 0 ? 'minor' : counts.patch > 0 ? 'patch' : null;
+  return { kind, counts, breaking, feats, total: messages.filter((m) => m.trim() !== '').length };
+}
+
+/** 上一个 v* tag 以来的 commit messages（无 tag → 最近 300 条）；git 不可用 → null。 */
+function collectCommitMessages(): string[] | null {
+  if (!gitAvailable()) return null;
+  const describe = git(['describe', '--tags', '--abbrev=0', '--match', 'v*']);
+  const range = describe.ok && describe.stdout !== '' ? [`${describe.stdout}..HEAD`] : [];
+  const limit = range.length === 0 ? ['-n', '300'] : [];
+  const log = git(['log', '-z', '--format=%B', ...limit, ...range]);
+  if (!log.ok) return null;
+  return log.stdout.split('\0').filter((message) => message.trim() !== '');
+}
+
+/** 建议行（advisory）：推导 + 证据；与本次 kind 不一致时只告警不拦截。 */
+function printSuggestion(suggestion: BumpSuggestion, chosen?: BumpKind): void {
+  const { kind, counts, breaking, feats, total } = suggestion;
+  if (kind === null) {
+    console.log(`[suggest] ${total} 条 commit 无 conventional 信号（feat/fix/breaking），不臆造建议`);
+    return;
+  }
+  console.log(
+    `[suggest] commit history 推导 bump=${kind}（breaking ${counts.major} / feat ${counts.minor} / fix ${counts.patch} / other ${counts.other}，共 ${total} 条）`,
+  );
+  for (const subject of breaking) console.log(`  breaking: ${subject}`);
+  for (const subject of feats) console.log(`  feat: ${subject}`);
+  if (chosen !== undefined && chosen !== kind) {
+    console.warn(
+      `[suggest] warning: 推导 ${kind} 与本次 ${chosen} 不一致（只建议不强制；准则 feat→minor / fix-only→patch / breaking→major）`,
+    );
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
     printUsage();
+    return;
+  }
+
+  // 独立推导面：只打印建议 + 证据，不收口（候设计 → 先给 main 一个可跑的决策输入）。
+  if (args.includes('--suggest-bump')) {
+    if (args.length > 1) die('--suggest-bump 单独使用（不与 --bump / 显式版本 / 其他 flag 组合）');
+    const messages = collectCommitMessages();
+    if (messages === null) die('git 不可用，无法读 commit history（L-057：收口/推导请在主 checkout 跑）');
+    printSuggestion(suggestBumpFromCommits(messages));
     return;
   }
 
@@ -248,6 +343,9 @@ async function main(): Promise<void> {
     console.log(
       `[前置] 基线 main @ ${baseline}；工作区${dirty.length === 0 ? '干净' : `不干净（${dirty.length} 项）`}`,
     );
+    // q-semver-auto-bump：推导只作建议（与本次 kind 不一致时告警），不改变收口行为。
+    const messages = collectCommitMessages();
+    if (messages !== null) printSuggestion(suggestBumpFromCommits(messages), kind);
   }
   if (!hasGit) {
     if (!dryRun) {
