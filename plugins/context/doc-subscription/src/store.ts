@@ -27,6 +27,7 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { agentSubscriptionKey, isValidAgentTarget } from './agent.js';
 import { isValidScriptName } from './config.js';
 import { healthSubscriptionKey, isValidHealthTarget } from './health.js';
 import { scriptSubscriptionKey } from './script.js';
@@ -98,6 +99,19 @@ export interface ScriptEntryState {
   last_error?: string;
 }
 
+/**
+ * 好友边（q-sub-unify-p1，设计 §6.4）：成员级事实，记在 agent 订阅条目上。
+ * 同 team create/hire 自动互记（origin:'auto'）；手动标记 origin:'manual'。
+ */
+export interface FriendEdge {
+  /** 建立时间（Unix ms） */
+  since: number;
+  /** 来源：auto = create/hire 自动；manual = 手动 */
+  origin: 'auto' | 'manual';
+  /** 好友昵称（可选，展示用） */
+  nick?: string;
+}
+
 /** 一个订阅条目 */
 export interface SubscriptionEntry {
   /** `sha256(canonicalPath).slice(0, 12)` */
@@ -116,8 +130,12 @@ export interface SubscriptionEntry {
    * rev = 最近一次成功 stdout 的 sha256（空输出记 'empty' 哨兵）；snapshot = 最近一次
    * 成功 stdout 全文（≤ maxFullBytes 才存；diff 基准 + inspect 正文）；reads /
    * last_writer 不用；执行事实记 script 块（ScriptEntryState）。
+   * 'agent' 条目（q-sub-unify-p1，additive）：状态键 = `agent:<target>`
+   * （agentSubscriptionKey），path = 订阅目标（agent_id 或联邦地址），rev = 活动签名
+   * （state:presence:last_run_ts:role）；size / reads / snapshot / last_writer 不用；
+   * 观察读宿主 agent-activity-watch 落的活动快照（agent.ts）。
    */
-  source?: 'file' | 'health' | 'script';
+  source?: 'file' | 'health' | 'script' | 'agent';
   /** 最近一次观察到的状态：sha256 hex / `deleted` / `too_large:<size>:<mtime>` / `binary:<hash>` */
   rev: string;
   /** 最近一次短通知里的 rev；`''` = 尚未通知 */
@@ -134,10 +152,20 @@ export interface SubscriptionEntry {
   seen_at: number;
   /** 上一版 `seen_rev` 对应的全文（仅文本且 <= maxFullBytes 时保留） */
   snapshot?: string;
-  /** 创建/升级来源；旧条目缺省 'manual'（安全：永不自过期）。升级梯 manual > edit > read */
-  origin: 'manual' | 'read' | 'edit';
+  /**
+   * 创建/升级来源；旧条目缺省 'manual'（安全：永不自过期）。升级梯 manual > edit > read。
+   * 'implicit'（q-sub-unify-p1，additive）：系统自动建立（好友边），永不自过期。
+   */
+  origin: 'manual' | 'read' | 'edit' | 'implicit';
   /** read 引用记录（缺省 []）；origin='read' 且归零时条目过期 */
   reads: ReadRef[];
+  /**
+   * 静默标记（q-sub-unify-p1，additive）：true = 观察但不通知；
+   * 缺省/false 不落字段（旧状态序列化字节不变）。
+   */
+  muted?: boolean;
+  /** 好友边标记（q-sub-unify-p1，additive）：仅 agent 源条目用；非法整块丢弃 */
+  friend?: FriendEdge;
   /**
    * 最近一次可归因写入（设计 §2.1）。旧状态文件无此字段 ⇒ undefined，
    * 行为退回现状基线抑制（零回归）。与 `origin`（订阅来源/过期策略）语义无关。
@@ -151,7 +179,7 @@ export interface SubscriptionEntry {
 export interface SessionSubscriptionState {
   v: 1;
   session_id: string;
-  /** key = canonicalPath（file 源）/ `health:<target>`（health 源）/ `script:<name>`（script 源） */
+  /** key = canonicalPath（file 源）/ `health:<target>` / `script:<name>` / `agent:<target>` */
   subscriptions: Record<string, SubscriptionEntry>;
   /** 单调增长的已消费清除 id ledger（缺省 []）；边缘触发释放，同 id 再现不重复释放 */
   cleared_consumed: string[];
@@ -246,6 +274,20 @@ function normalizeChangeOrigin(value: unknown): ChangeOrigin | undefined {
 }
 
 /**
+ * 好友块防御解析（q-sub-unify-p1）：缺失 / 结构非法 ⇒ undefined（整块丢弃）。
+ * 必需：since 有限数、origin 枚举；nick 非空串才收。
+ */
+function normalizeFriendEdge(value: unknown): FriendEdge | undefined {
+  if (!isRecord(value)) return undefined;
+  const since = value.since;
+  if (typeof since !== 'number' || !Number.isFinite(since)) return undefined;
+  if (value.origin !== 'auto' && value.origin !== 'manual') return undefined;
+  const edge: FriendEdge = { since, origin: value.origin };
+  if (typeof value.nick === 'string' && value.nick !== '') edge.nick = value.nick;
+  return edge;
+}
+
+/**
  * script 块防御解析（q-subscription-script）：缺失 / 结构非法 ⇒ undefined
  * （条目仍有效，执行事实从零开始）。name 必须与条目 path（订阅名）逐字相符。
  */
@@ -275,12 +317,19 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     if (!isRecord(value)) continue;
     const canonical = readString(value, 'path', '');
     if (canonical === '') continue;
-    // health / script 源（additive）：path = 订阅目标 / 订阅名；非法目标丢弃。
+    // health / script / agent 源（additive）：path = 订阅目标 / 订阅名；非法目标丢弃。
     // 旧状态无 source ⇒ 'file'，键与行为逐字节不变（零回归）。
     const source =
-      value.source === 'health' ? 'health' : value.source === 'script' ? 'script' : 'file';
+      value.source === 'health'
+        ? 'health'
+        : value.source === 'script'
+          ? 'script'
+          : value.source === 'agent'
+            ? 'agent'
+            : 'file';
     if (source === 'health' && !isValidHealthTarget(canonical)) continue;
     if (source === 'script' && !isValidScriptName(canonical)) continue;
+    if (source === 'agent' && !isValidAgentTarget(canonical)) continue;
     const rev = readString(value, 'rev', '');
     const entry: SubscriptionEntry = {
       id: readString(value, 'id', '') || subscriptionId(canonical),
@@ -297,9 +346,17 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
       notified_at: readNumber(value, 'notified_at', readNumber(value, 'delivered_at', 0)),
       seen_at: readNumber(value, 'seen_at', 0),
       // 旧条目缺省 'manual'：永不自过期（安全方向）；非法值同样回落。
-      origin: value.origin === 'read' || value.origin === 'edit' ? value.origin : 'manual',
+      // 'implicit'（q-sub-unify-p1）：系统建好友边，同样永不自过期。
+      origin:
+        value.origin === 'read' || value.origin === 'edit' || value.origin === 'implicit'
+          ? value.origin
+          : 'manual',
       reads: normalizeReads(value.reads),
     };
+    // muted / friend（q-sub-unify-p1，additive）：有值才落字段，旧状态字节不变。
+    if (value.muted === true) entry.muted = true;
+    const friend = normalizeFriendEdge(value.friend);
+    if (friend !== undefined) entry.friend = friend;
     if (typeof value.snapshot === 'string') entry.snapshot = value.snapshot;
     if (source === 'script') {
       const scriptState = normalizeScriptState(value.script, canonical);
@@ -308,13 +365,16 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     const lastWriter = normalizeChangeOrigin(value.last_writer);
     if (lastWriter !== undefined) entry.last_writer = lastWriter;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。
-    // health / script 条目键空间隔离（health:<target> / script:<name>），不与文件路径键碰撞。
+    // health / script / agent 条目键空间隔离（health:<target> / script:<name> / agent:<target>），
+    // 不与文件路径键碰撞。
     const key =
       source === 'health'
         ? healthSubscriptionKey(canonical)
         : source === 'script'
           ? scriptSubscriptionKey(canonical)
-          : canonical;
+          : source === 'agent'
+            ? agentSubscriptionKey(canonical)
+            : canonical;
     subscriptions[key] = entry;
   }
   return {
