@@ -97,6 +97,7 @@ import {
   type AdmitDeferredReason,
   type AdmitInput,
   type AdmitResult,
+  type AgentAsyncJobReconcileResult,
   type AgentClaimInput,
   type AgentClaimResult,
   type AgentClaimSkip,
@@ -936,6 +937,11 @@ export class AgentServiceImpl implements AgentService {
    * 不与 live 投递竞争，只碰未 held 条目（单消费者规则）。
    */
   private startupSweepDone = false;
+  /**
+   * q-async-job-reconcile：启动对账孤儿 running 占位卡每进程只跑一次
+   * （与 startupRecoveryDone 同款幂等闸：本地 dispatcher 与 gateway 共存时各自都会调）。
+   */
+  private asyncJobReconcileDone = false;
   /** body 级串行操作（0.32-D 打断重排）；按 bindingId 排队，避免两次打断交错。 */
   private readonly executionUnitOps = new Map<string, Promise<unknown>>();
   /**
@@ -3043,6 +3049,83 @@ export class AgentServiceImpl implements AgentService {
     this.noticeDirty.add(record.id);
     void this.dispatchInbox(record.id).catch(() => {});
     return true;
+  }
+
+  /**
+   * q-async-job-reconcile：启动对账孤儿 running 占位卡（见接口注释）。
+   *
+   * 判据为什么干净：作业注册表（basic-tools asyncJobs）是进程内存，进程死亡即清空；
+   * 占位卡随 inbox 落盘。所以**本进程启动时**盘上任何 running 占位卡都必然属于上一个
+   * 进程 —— 它的子进程已被 exit sweep 停掉（killLiveAsyncJobs），结果不可能再回来。
+   * 不需要 pid 探活 / 超时猜测：running 本身就是孤儿证明。
+   *
+   * 只改卡片视觉：updateAsyncJob 原位回写 failed（quiet 条目保持 quiet，inputHead
+   * 跳过 ⇒ 不会被 startupDispatchSweep 误点火），不起 run、不另插结果条目（结果已丢，
+   * 没有可投的正文）。left / closed 成员也扫：孤儿卡是留档视觉，与成员能否接活无关。
+   *
+   * 枚举走 registry.all() + history()（与 recover 同口径，不扫 inbox/ 目录）：
+   * history 是唯一不过滤 running 占位的只读口（list / read 都把 running 排除在外）。
+   * 逐卡失败不阻断（保持 running，下次启动再试）；每进程一次（幂等闸）。
+   */
+  async reconcileAsyncJobs(): Promise<AgentAsyncJobReconcileResult> {
+    await this.ready;
+    const empty: AgentAsyncJobReconcileResult = { reconciled: 0, failed: 0 };
+    const store = this.inbox;
+    if (store === undefined) return empty;
+    if (this.asyncJobReconcileDone) return empty;
+    this.asyncJobReconcileDone = true;
+    const result: AgentAsyncJobReconcileResult = { ...empty };
+    for (const record of this.registry.all()) {
+      let orphans: ReturnType<typeof store.history>;
+      try {
+        orphans = store
+          .history(record.id)
+          .filter((message) => message.status === 'unread' && message.async_job?.status === 'running');
+      } catch (error) {
+        result.failed += 1;
+        this.logger.warn('agent.async_job.reconcile_scan_failed', {
+          agent_id: record.id,
+          error: errorText(error),
+        });
+        continue;
+      }
+      for (const message of orphans) {
+        const meta = message.async_job;
+        if (meta === undefined) continue;
+        const logPath =
+          typeof meta.payload?.log_path === 'string' ? meta.payload.log_path : undefined;
+        // kind 无关措辞（机制层不解释 kind）：进程退出 ⇒ 作业被停、结果丢失。
+        const text =
+          `[${meta.kind} job ${meta.job_id}] failed — the host process exited before this job finished; ` +
+          `the job process was stopped at exit and its result is lost.` +
+          (logPath !== undefined ? ` Partial log: ${logPath}` : '');
+        try {
+          const updated = store.updateAsyncJob(record.id, meta.job_id, {
+            status: 'failed',
+            text,
+            // 真实退出时刻不可知（上一进程没留）：ended_at 记对账时刻，payload 标明成因。
+            ended_at: this.now(),
+            payload: { swept_by: 'exit', reconciled_at: this.now() },
+          });
+          if (!updated) continue;
+          result.reconciled += 1;
+          this.logger.info('agent.async_job.reconciled', {
+            agent_id: record.id,
+            job_id: meta.job_id,
+            kind: meta.kind,
+            session_id: meta.session_id,
+          });
+        } catch (error) {
+          result.failed += 1;
+          this.logger.warn('agent.async_job.reconcile_failed', {
+            agent_id: record.id,
+            job_id: meta.job_id,
+            error: errorText(error),
+          });
+        }
+      }
+    }
+    return result;
   }
 
   async bodies(agentId: string): Promise<ExecutionUnitStatus[]> {
