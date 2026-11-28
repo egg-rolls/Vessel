@@ -1,5 +1,6 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: parsed markdown is immutable per render; index keys are stable
 import { Fragment, memo, type ReactNode, useMemo, useRef } from 'react';
+import { t } from '../i18n';
 import { useLinkEnhancer } from './link-enhancers';
 import {
   type InlineNode,
@@ -10,6 +11,8 @@ import {
   parseMarkdownStreaming,
   type StreamingParseCache,
 } from './markdown-parse';
+import { IconButton } from './Tooltip';
+import { cn, Icon, useMessageCopy } from './ui';
 import { useTypewriterText } from './ui/useTypewriterText';
 
 /**
@@ -66,6 +69,57 @@ function StreamCaret(): ReactNode {
   return <span className="stream-caret pulse-soft" aria-hidden="true" />;
 }
 
+/**
+ * 块级复制按钮（q-message-toolbar，用户提案）：代码块 / 表格**右上角内嵌**，
+ * hover 块时浮现（absolute 在块内部 ⇒ 不溢出、不挤占排版）。
+ * - 显隐三条触发与消息工具栏同源：hover 块（命名 group，避免与外层消息 `group`
+ *   串台）/ 键盘 focus-within / 触屏常显；过渡只动 opacity，reduced-motion 由
+ *   base.css 全局抑制覆盖。
+ * - 按钮自带浅底色 + 浅投影：压在代码首行 / 表头右上角时也读得清。
+ * - 复制走既有 `useMessageCopy`（clipboard + toast），代码复制原文、表格复制
+ *   重建的 markdown（见 tableToMarkdown）。
+ */
+function BlockCopy({
+  text,
+  label,
+  hoverClass,
+}: {
+  text: string;
+  label: string;
+  /** 命名 group 的 hover 显现类（`group-hover/code:opacity-100` 等）。 */
+  hoverClass: string;
+}) {
+  const copy = useMessageCopy();
+  return (
+    <span
+      className={cn(
+        'absolute right-1 top-0.5 z-10 opacity-0 transition-opacity duration-150 focus-within:opacity-100 pointer-coarse:opacity-100',
+        hoverClass,
+      )}
+    >
+      <IconButton
+        label={label}
+        className="size-5 rounded-md bg-surface/90 shadow-elev-1 hover:bg-surface"
+        onClick={() => copy(text)}
+      >
+        <Icon name="copy" size={13} />
+      </IconButton>
+    </span>
+  );
+}
+
+/**
+ * 表格块 → markdown 文本（复制用）：按解析出的 header/rows 重建 `| … |` 行。
+ * 单元格里内容级的 `|`（解析时已从 `\|` / 行内 code 还原）重新转义回 `\|`，
+ * 粘回 markdown 仍是同一张表；粘进纯文本编辑器也是可读的管道分隔行。
+ */
+function tableToMarkdown(header: string[], rows: string[][]): string {
+  const escapeCell = (cell: string) => cell.replace(/\|/g, '\\|');
+  const line = (cells: string[]) => `| ${cells.map(escapeCell).join(' | ')} |`;
+  const separator = `| ${header.map(() => '---').join(' | ')} |`;
+  return [line(header), separator, ...rows.map(line)].join('\n');
+}
+
 /** memo：增量解析下前缀块对象引用稳定（parseMarkdownStreaming 缓存复用），
  *  逐帧 reveal 时前缀块整棵子树跳过重渲染 —— 每帧只渲染真正变化的尾块。 */
 const Block = memo(function Block({
@@ -87,7 +141,7 @@ const Block = memo(function Block({
     }
     case 'code':
       return (
-        <div className="relative mb-2.5 overflow-hidden rounded-sm bg-sunken">
+        <div className="group/code relative mb-2.5 overflow-hidden rounded-sm bg-sunken">
           {block.lang && (
             <span className="block bg-deep px-2.5 py-1 font-mono text-2xs uppercase tracking-wider text-muted">
               {block.lang}
@@ -99,6 +153,13 @@ const Block = memo(function Block({
               {caret && <StreamCaret />}
             </code>
           </pre>
+          {/* 复制按钮在块内部右上角（有语言头时落在语言头右端）：absolute 不挤占排版，
+              pre 自己滚动时按钮不跟着滚（它是 pre 的兄弟节点）。复制的是代码原文。 */}
+          <BlockCopy
+            text={block.text}
+            label={t('chat.code.copy')}
+            hoverClass="group-hover/code:opacity-100"
+          />
         </div>
       );
     case 'list': {
@@ -128,35 +189,45 @@ const Block = memo(function Block({
       );
     case 'table':
       return (
-        <div className="max-w-full overflow-x-auto">
-          <table className="border-collapse text-md">
-            <thead>
-              <tr>
-                {block.header.map((cell, index) => (
-                  <th
-                    className="bg-sunken px-2.25 py-1.25 text-left align-top font-semibold text-faint"
-                    key={index}
-                  >
-                    {renderText(cell)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {block.rows.map((row, rowIndex) => (
-                <tr className="hover:bg-hover" key={rowIndex}>
-                  {row.map((cell, cellIndex) => (
-                    <td className="px-2.25 py-1.25 text-left align-top" key={cellIndex}>
+        // 外层壳负责「右上角内嵌复制按钮」的定位（relative + 命名 group）：宽度跟表格
+        // （w-fit）但不超过列宽（max-w-full）；滚动层在里层，按钮是滚动层的兄弟节点 ⇒
+        // 横向滚动表格时按钮钉在右上角不跟着滚，也不溢出（q-message-toolbar）。
+        <div className="group/table relative w-fit max-w-full">
+          <div className="max-w-full overflow-x-auto">
+            <table className="border-collapse text-md">
+              <thead>
+                <tr>
+                  {block.header.map((cell, index) => (
+                    <th
+                      className="bg-sunken px-2.25 py-1.25 text-left align-top font-semibold text-faint"
+                      key={index}
+                    >
                       {renderText(cell)}
-                      {caret &&
-                        rowIndex === block.rows.length - 1 &&
-                        cellIndex === row.length - 1 && <StreamCaret />}
-                    </td>
+                    </th>
                   ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {block.rows.map((row, rowIndex) => (
+                  <tr className="hover:bg-hover" key={rowIndex}>
+                    {row.map((cell, cellIndex) => (
+                      <td className="px-2.25 py-1.25 text-left align-top" key={cellIndex}>
+                        {renderText(cell)}
+                        {caret &&
+                          rowIndex === block.rows.length - 1 &&
+                          cellIndex === row.length - 1 && <StreamCaret />}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <BlockCopy
+            text={tableToMarkdown(block.header, block.rows)}
+            label={t('chat.table.copy')}
+            hoverClass="group-hover/table:opacity-100"
+          />
         </div>
       );
     case 'hr':

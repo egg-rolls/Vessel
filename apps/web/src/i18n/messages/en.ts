@@ -1701,6 +1701,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.message.fold.collapse': 'Collapse',
   'chat.message.copy': 'Copy',
   'chat.message.copied': 'Copied',
+  // markdown block copy (code fence / table, embedded top-right hover button)
+  'chat.code.copy': 'Copy code',
+  'chat.table.copy': 'Copy table',
   'chat.message.edit': 'Edit',
   'chat.message.retry': 'Retry',
   'chat.message.create.editTitle': 'Edit message',

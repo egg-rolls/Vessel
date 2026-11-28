@@ -1615,6 +1615,9 @@ export const messages = {
   'chat.message.fold.collapse': '收起',
   'chat.message.copy': '复制',
   'chat.message.copied': '已复制',
+  // markdown 块级复制（代码围栏 / 表格，右上角内嵌 hover 按钮）
+  'chat.code.copy': '复制代码',
+  'chat.table.copy': '复制表格',
   'chat.message.edit': '编辑',
   'chat.message.retry': '重试',
   'chat.message.create.editTitle': '编辑消息',
