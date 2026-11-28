@@ -30,9 +30,9 @@
  */
 
 import { t } from '../../i18n';
+import { MessageBlocks } from './block-views';
+import { liftBlocks } from './lift-blocks';
 import type { PendingSend } from './pending-sends';
-import { QuoteBlock } from './QuoteBlock';
-import { liftQuoteForDisplay } from './quote-ref';
 
 export function PendingBubble({
   pending,
@@ -66,14 +66,11 @@ export function PendingBubble({
     pending.state === 'queued' || pending.state === 'deferred'
       ? Math.floor((Date.now() - pending.createdAt) / 60_000)
       : 0;
-  // 消息引用（q-message-quote）：发送文本里的信封提升成引用块，与落盘后的气泡同形。
-  const lifted = liftQuoteForDisplay(pending.text);
-  const body = lifted !== null ? lifted.body : pending.text;
+  // 块提升（块 P0）：发送文本里的信封提升成块，与落盘后的气泡同形（同一管线）。
+  const { blocks, body } = liftBlocks({ role: 'user', content: pending.text });
   return (
     <div className="msg-user msg-pending msg-enter">
-      {lifted !== null && (
-        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
-      )}
+      <MessageBlocks blocks={blocks} render={{ onJumpQuote }} />
       <div className="msg-bubble msg-pending-bubble">{body}</div>
       <div className="msg-pending-meta">
         {failed ? (
