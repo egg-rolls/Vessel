@@ -38,7 +38,7 @@ owner 端点与 gateway 分发**同一张 canonical 方法表**（ADR-091），�
 
 ## 4. 验收：在 canary node 建 agent / team（行为验证归用户）
 
-拓扑（见 federation-setup.md §1）：canary 平台 **8652**（proxy.enabled=true），canary node **8654**，node_id `7377657b-dfba-4347-809d-5e88460441e0`，dataDir `D:/Application/APP/Vessel/fleets/canary-data`。
+拓扑（见 federation-peers.md）：canary 平台 **8652**（proxy.enabled=true），canary node **8654**，node_id `7377657b-dfba-4347-809d-5e88460441e0`，dataDir `D:/Application/APP/Vessel/fleets/canary-data`。
 
 **推荐：`--node` 代理路径**（平台 token 自动解析；canary 上下文 `--user-config` + `--data-dir` 与舰队启动一致）：
 
@@ -59,7 +59,7 @@ vessel --user-config D:/Application/APP/Vessel/fleets/canary-config.yaml \
 
 等价直连（需 node token）：`vessel agent create --name canary-probe --connect http://127.0.0.1:8654 --connect-token <canary-node-token>`。远端平台代理：`--connect https://canary-platform.example.com --node <id> --connect-token <canary-platform-token>`。
 
-> 不碰生产宿主：以上命令显式 targeting canary；缺省（无旗标）才落本地 owner。生产宿主的重启/变更仍由用户维护（federation-setup.md §6）。
+> 不碰生产宿主：以上命令显式 targeting canary；缺省（无旗标）才落本地 owner。生产宿主的重启/变更仍由用户维护（federation-token-env.md）。
 
 ## 5. sessions.create（RPC-only，CREATE-0.39）
 

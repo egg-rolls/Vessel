@@ -44,7 +44,7 @@ applies_to: [N, M]
 
 ## 会话级派生值（`context_usage` / `system_context`）
 
-- `sessions.get` 可选 `context_usage: { used, max?, at?, source? }` 与 `system_context: { hash, system_prompt?, self_card?, model?, message_count?, tools_count?, estimated_tokens?, context_max?, at?, run_id? }`：从会话事件日志**尾窗**派生（`SessionEventLog.readTailMatches`，64 KiB 起按 64K→256K→1M→4M 扩窗，命中即停，miss 不回退全量扫盘），按 session + 尾水位（`大小:mtime`）缓存（`methods/sessions.ts`）；**整字段缺省 = 没有可用数据**，不是 `0`/`null`。`system_context` 取尾窗最近一条 `prompt.system_context`（装配 `src/session/system-context.ts`），是重启/回放淘汰后会话页「模型上下文」卡的唯一来源（[events.md](../architecture/events.md#事件回放)）。
+- `sessions.get` 可选 `context_usage: { used, max?, at?, source? }` 与 `system_context: { hash, system_prompt?, self_card?, model?, message_count?, tools_count?, estimated_tokens?, context_max?, at?, run_id? }`：从会话事件日志**尾窗**派生（`TimelineEventLog.readTailMatches`，64 KiB 起按 64K→256K→1M→4M 扩窗，命中即停，miss 不回退全量扫盘），按 session + 尾水位（`大小:mtime`）缓存（`methods/sessions.ts`）；**整字段缺省 = 没有可用数据**，不是 `0`/`null`。`system_context` 取尾窗最近一条 `prompt.system_context`（装配 `src/session/system-context.ts`），是重启/回放淘汰后会话页「模型上下文」卡的唯一来源（[event-subscribe.md](../architecture/event-subscribe.md)）。
 - 取数口径（`src/session/context-usage.ts`）：类型→字段映射与 `agents-registry.ingestContext` 同一套；**同一 tier 内新→旧**，不做类型优先级跨新旧跳跃。tier 1 本地估算：`context.pressure.used` / `context.changed.token_count` / `llm.request.estimated_tokens` 三者同源请求视图估算（`correctedContextTokens`，锚点校正 + provider 地板）；pressure ≥50% 预警线每 run 一次 + 闸拒发，`context.changed` 不落盘。tier 2 provider `prompt_tokens` 只作兜底。`max` 三级：命中事件 `pressure.max` > `llm.request.data.context_max` > 装配注入 `config.context.maxTokens`（仅旧日志兼容）；都没有不给 `max`。Web 取值 live 优先（`agents.tree`）、落盘兜底，两者皆无不显示环。
 
 ## 关闭与 gateway 生命周期
