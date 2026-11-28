@@ -48,7 +48,7 @@ paths: [src/gateway/web-dist.ts, src/cli/commands/gateway/gateway-command.ts, sr
 
 ## 3. 怎么读一次构建（`web.build.*`）
 
-一次构建**最多 4 行**（start + 可选 progress + 终态 + 可选内联尾部）：
+一次构建**最多 4 行**（start + 可选 progress + 终态 + 可选内联尾部；`web.build.*` 全部 warn 是既有口径；TTY 才有 clock 时间与颜色，落盘是 iso 时间、无 ANSI）：
 
 ```
 12:03:41 WRN web.build.start    reason=stale target=apps/web check=timer pid=64180 log=/tmp/vessel-web-build/1794910725789-41008/build.log
@@ -59,8 +59,6 @@ paths: [src/gateway/web-dist.ts, src/cli/commands/gateway/gateway-command.ts, sr
 12:04:28 WRN web.build.interrupted signal=stop elapsed=6.1s log=/tmp/vessel-web-build/…/build.log
 12:04:28 WRN web.build.stale_artifact cleaned=1 dir=/tmp/vessel-web-build
 ```
-
-（`web.build.*` 全部 warn 是既有口径；TTY 才有 clock 时间与颜色，落盘是 iso 时间、无 ANSI。）
 
 - `reason=missing|stale`：产物完全没有 / 落后于源码；
 - `check=startup|probe|timer`：谁叫起来的这次构建；三条入口共用同一套判据与互斥，出问题先看这个字段；
