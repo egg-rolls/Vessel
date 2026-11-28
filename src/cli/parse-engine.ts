@@ -208,7 +208,15 @@ function parseCommandArgs(
       state.positionals.push(token);
       continue;
     }
-    const { flag, inline } = canonicalFlag(token);
+    const canonical = canonicalFlag(token);
+    const head = token.split('=')[0] ?? token;
+    // 别名归一优先；本命令显式声明了字面量本身时按字面量（node token --print 先例）
+    const flag = accepted.has(canonical.flag)
+      ? canonical.flag
+      : accepted.has(head)
+        ? head
+        : canonical.flag;
+    const inline = canonical.inline;
     if (!accepted.has(flag)) {
       return { error: `Unknown argument: ${token}` };
     }
@@ -222,6 +230,7 @@ function parseCommandArgs(
                   value?: FlagValueKind;
                   missingError?: string;
                   invalidError?: (raw: string) => string;
+                  local?: boolean;
                 }
               | undefined
             >
@@ -281,7 +290,7 @@ function parseCommandArgs(
       state.flags[flag] = parsedValue;
     }
     const globalsKey = GLOBALS_FLAG_MAP[flag];
-    if (globalsKey !== undefined && typeof parsedValue === 'string') {
+    if (globalsKey !== undefined && typeof parsedValue === 'string' && override?.local !== true) {
       (globals as unknown as Record<string, unknown>)[globalsKey] = parsedValue;
     }
   }
@@ -296,7 +305,7 @@ function checkPositionals(spec: CommandSpec, positionals: readonly string[]): st
   if (form === undefined) {
     if (positionals.length === 0) return null;
     const token = positionals[0] ?? '';
-    return spec.positionalErrors?.extra?.(token) ?? `Unknown argument: ${token}`;
+    return spec.positionalErrors?.extra?.(token, positionals) ?? `Unknown argument: ${token}`;
   }
   const parts = form.split(/\s+/).filter((p) => p !== '');
   let required = 0;
@@ -310,7 +319,7 @@ function checkPositionals(spec: CommandSpec, positionals: readonly string[]): st
   }
   if (!variadic && positionals.length > parts.length) {
     const token = positionals[parts.length] ?? '';
-    return spec.positionalErrors?.extra?.(token) ?? `Unknown argument: ${token}`;
+    return spec.positionalErrors?.extra?.(token, positionals) ?? `Unknown argument: ${token}`;
   }
   return null;
 }
@@ -378,6 +387,7 @@ export async function parseBySpec(argv: readonly string[]): Promise<EngineResult
     return { ok: true, parsed: { path, flags: {}, positionals: rest, globals, help: false } };
   }
 
+  if (spec.removed !== undefined) return { ok: false, error: spec.removed };
   const state = parseCommandArgs(spec, rest, globals);
   if ('error' in state) return { ok: false, error: state.error };
   if (!state.help) {

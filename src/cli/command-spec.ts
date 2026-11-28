@@ -201,6 +201,10 @@ export const FLAG_DEFS = {
     value: { kind: 'boolean' },
     help: 'flag.noKeepNodes',
   },
+  // 弃用 flag（args 接受；help 不声明 → 各命令 hidden 覆盖；warning 在命令层）
+  '--stop-nodes': { flag: '--stop-nodes', value: { kind: 'boolean' } },
+  // node token --print：独立布尔 flag（异于入口 --print = --run 别名；引擎按命令字面量优先）
+  '--print': { flag: '--print', value: { kind: 'boolean' }, help: 'flag.nodeTokenPrint' },
   '--force': { flag: '--force', value: { kind: 'boolean' }, help: 'flag.force' },
   '--yes': { flag: '--yes', aliases: ['-y'], value: { kind: 'boolean' }, help: 'flag.yes' },
   '--check': { flag: '--check', value: { kind: 'boolean' }, help: 'flag.check' },
@@ -818,6 +822,8 @@ export interface CommandSpecBase {
           readonly invalidError?: (raw: string) => string;
           /** 本命令内隐藏（接受但不上 help/补全；config path --force 先例） */
           readonly hidden?: boolean;
+          /** 本命令内按局部 flag 处理（不写回 Globals；gateway nodes add --data-dir 先例） */
+          readonly local?: boolean;
         }
       >
     >
@@ -831,7 +837,7 @@ export interface CommandSpecBase {
   /** 位置参数错误文案 parity：missing 整句；extra 自定义整句（缺省 Unknown argument: X） */
   readonly positionalErrors?: {
     readonly missing?: string;
-    readonly extra?: (token: string) => string;
+    readonly extra?: (token: string, all: readonly string[]) => string;
   };
   /** 路由面：one-shot 进注册表 / foreground 进前台管线 / entry 在入口处理 */
   readonly surface: 'one-shot' | 'foreground' | 'entry';
@@ -839,6 +845,8 @@ export interface CommandSpecBase {
   readonly exitCodes?: readonly { readonly code: number; readonly summary: MessageKey }[];
   /** 不进总览/补全（内部命令面） */
   readonly hidden?: boolean;
+  /** 已删除命令 fail-closed（hub pair/token/data-token/node add 先例）：路径命中即报错 */
+  readonly removed?: string;
 }
 
 /** 完整 CommandSpec（含懒实现引用；投射消费的基础形状）。 */
@@ -2252,6 +2260,743 @@ export const COMMAND_SCHEMA: readonly CommandSpec[] = [
       };
     },
   }),
+  // ── 批 B1：gateway 组件族（S3；foreground surface = 可前台，路由读 daemon flag） ──
+  defineCommand({
+    path: ['gateway'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.gateway',
+    positional: '<sub>',
+    positionalErrors: {
+      missing:
+        'Missing gateway subcommand (start|stop|status|list|ps|restart|reload|nodes|install-service|uninstall-service)',
+      extra: (token) => `Unknown gateway subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown gateway subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['gateway', 'start'],
+    surface: 'foreground',
+    flags: ['--daemon', '--foreground', '--instance', '--port', '--host', '--log', '--data-dir'],
+    flagOverrides: {
+      '--port': { invalidError: (raw) => `Invalid port for --port: ${raw}` },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for gateway start: ${token}` },
+    validate: (p) =>
+      p.flags['--port'] === 0 && p.flags['--instance'] === undefined
+        ? 'gateway start --port 0 requires --instance <name>'
+        : null,
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runGatewayCommand({
+            kind: 'start',
+            daemon: f['--foreground'] !== true,
+            ...(f['--instance'] !== undefined ? { instance: f['--instance'] } : {}),
+            ...(f['--port'] !== undefined ? { port: f['--port'] } : {}),
+            ...(f['--host'] !== undefined ? { host: f['--host'] } : {}),
+            ...(f['--log'] !== undefined ? { log: f['--log'] } : {}),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'stop'],
+    surface: 'one-shot',
+    flags: [
+      '--timeout',
+      '--force',
+      '--stop-nodes',
+      '--no-keep-nodes',
+      '--keep-nodes',
+      '--instance',
+      '--port',
+      '--all',
+      '--data-dir',
+    ],
+    flagOverrides: {
+      '--port': gatewayPortOverride('stop'),
+      '--timeout': { invalidError: (raw) => `Invalid --timeout: ${raw} (expected e.g. 10s)` },
+      '--stop-nodes': { hidden: true },
+      '--no-keep-nodes': { hidden: true },
+    },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('stop'),
+    positionalErrors: { extra: (token) => `Unknown argument for gateway stop: ${token}` },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runGatewayCommand({
+            kind: 'stop',
+            ...(f['--timeout'] !== undefined ? { timeoutMs: f['--timeout'] } : {}),
+            keepNodes: f['--stop-nodes'] !== true && f['--no-keep-nodes'] !== true,
+            ...(f['--force'] === true ? { force: true } : {}),
+            ...selectorFromFlags(f),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'status'],
+    surface: 'one-shot',
+    flags: ['--json', '--rpc', '--instance', '--port', '--all', '--data-dir'],
+    flagOverrides: { '--port': gatewayPortOverride('status') },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('status'),
+    positionalErrors: { extra: (token) => `Unknown argument for gateway status: ${token}` },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runGatewayCommand({
+            kind: 'status',
+            json: f['--json'],
+            ...(f['--rpc'] === true ? { rpc: true } : {}),
+            ...selectorFromFlags(f),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for gateway list: ${token}` },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => runGatewayCommand({ kind: 'list', json: parsed.flags['--json'] }),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'ps'],
+    surface: 'one-shot',
+    flags: ['--json', '--all', '--data-dir'],
+    flagOverrides: { '--all': { help: 'flag.all.ps' } },
+    positionalErrors: { extra: (token) => `Unknown argument for gateway ps: ${token}` },
+    load: async () => {
+      const { psCommand } = await import('./commands/fleet/ps-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await psCommand({ json: f['--json'], all: f['--all'], type: 'gateway' }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'restart'],
+    surface: 'foreground',
+    flags: [
+      '--daemon',
+      '--force',
+      '--stop-nodes',
+      '--keep-nodes',
+      '--no-keep-nodes',
+      '--instance',
+      '--port',
+      '--all',
+      '--data-dir',
+    ],
+    flagOverrides: {
+      '--port': gatewayPortOverride('restart'),
+      '--stop-nodes': { hidden: true },
+      '--keep-nodes': { hidden: true },
+      '--no-keep-nodes': { hidden: true },
+    },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('restart'),
+    positionalErrors: { extra: (token) => `Unknown argument for gateway restart: ${token}` },
+    validate: (p) =>
+      p.flags['--all'] === true && p.flags['--daemon'] !== true
+        ? 'gateway restart --all requires --daemon'
+        : null,
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runGatewayCommand({
+            kind: 'restart',
+            daemon: f['--daemon'] === true ? true : undefined,
+            keepNodes: true,
+            ...(f['--force'] === true ? { force: true } : {}),
+            ...(f['--stop-nodes'] === true || f['--no-keep-nodes'] === true
+              ? { stopNodesDeprecated: true }
+              : {}),
+            ...selectorFromFlags(f),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'reload'],
+    surface: 'one-shot',
+    flags: ['--scope', '--instance', '--port', '--all', '--data-dir'],
+    flagOverrides: { '--port': gatewayPortOverride('reload') },
+    exclusive: [['--instance', '--port', '--all']],
+    exclusiveError: selectorExclusiveError('reload'),
+    positionalErrors: { extra: (token) => `Unknown argument for gateway reload: ${token}` },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const scopes = f['--scope'] as string[][] | undefined;
+          return runGatewayCommand({
+            kind: 'reload',
+            ...(scopes !== undefined ? { scopes: [...new Set(scopes.flat())] } : {}),
+            ...selectorFromFlags(f),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'install-service'],
+    surface: 'one-shot',
+    summary: 'help.cmd.gatewayInstall',
+    flags: ['--systemd', '--launchd', '--schtasks'],
+    exclusive: [['--systemd', '--launchd', '--schtasks']],
+    exclusiveError: 'gateway install-service accepts one platform flag',
+    positionalErrors: {
+      extra: (token) => `Unknown argument for gateway install-service: ${token}`,
+    },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          const target =
+            f['--systemd'] === true
+              ? 'systemd'
+              : f['--launchd'] === true
+                ? 'launchd'
+                : f['--schtasks'] === true
+                  ? 'schtasks'
+                  : undefined;
+          return runGatewayCommand({
+            kind: 'install-service',
+            ...(target !== undefined ? { target } : {}),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'uninstall-service'],
+    surface: 'one-shot',
+    summary: 'help.cmd.gatewayUninstall',
+    positionalErrors: {
+      extra: (token) => `Unknown argument for gateway uninstall-service: ${token}`,
+    },
+    load: async () => {
+      const { runGatewayCommand } = await import('./commands/gateway/gateway-command');
+      return { run: async () => runGatewayCommand({ kind: 'uninstall-service' }) };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'nodes'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.gatewayNodes',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing gateway nodes subcommand (list|add|remove)',
+      extra: (token) => `Unknown gateway nodes subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined
+        ? `Unknown gateway nodes subcommand: ${p.positionals[0]}`
+        : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['gateway', 'nodes', 'list'],
+    surface: 'one-shot',
+    flags: ['--json', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for gateway nodes list: ${token}` },
+    load: async () => {
+      const { runGatewayNodesCommand } = await import('./commands/gateway/gateway-nodes-command');
+      return {
+        run: async (parsed) =>
+          runGatewayNodesCommand({ kind: 'list', json: parsed.flags['--json'] }),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'nodes', 'add'],
+    surface: 'one-shot',
+    flags: ['--data-dir', '--config', '--no-auto-start'],
+    // --data-dir 是 node 数据根（局部），不写回全局 / 不镜像 env（现态 2395-2400）
+    flagOverrides: { '--data-dir': { local: true } },
+    required: ['--data-dir', '--config'],
+    requiredError: (flag) => `Missing ${flag} for gateway nodes add`,
+    positional: '<name>',
+    positionalErrors: {
+      missing: 'Missing node name for gateway nodes add',
+      extra: (token, all) => `gateway nodes add accepts one node name: ${all[0] ?? ''}, ${token}`,
+    },
+    load: async () => {
+      const { runGatewayNodesCommand } = await import('./commands/gateway/gateway-nodes-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runGatewayNodesCommand({
+            kind: 'add',
+            name: parsed.positionals[0] ?? '',
+            dataDir: f['--data-dir'] ?? '',
+            configPath: f['--config'] ?? '',
+            autoStart: f['--no-auto-start'] !== true,
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['gateway', 'nodes', 'remove'],
+    surface: 'one-shot',
+    flags: ['--data-dir'],
+    positional: '<name>',
+    positionalErrors: {
+      missing: 'Missing node name for gateway nodes remove',
+      extra: (token, all) =>
+        `gateway nodes remove accepts one node name: ${all[0] ?? ''}, ${token}`,
+    },
+    load: async () => {
+      const { runGatewayNodesCommand } = await import('./commands/gateway/gateway-nodes-command');
+      return {
+        run: async (parsed) =>
+          runGatewayNodesCommand({ kind: 'remove', name: parsed.positionals[0] ?? '' }),
+      };
+    },
+  }),
+  // ── 批 B2：node 组件族（S3） ──
+  defineCommand({
+    path: ['node'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.node',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing node subcommand (start|status|stop|reload|ps)',
+      extra: (token) => `Unknown node subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown node subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['node', 'start'],
+    surface: 'foreground',
+    flags: ['--daemon', '--config', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for node start: ${token}` },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runNodeCommand({
+            kind: 'start',
+            daemon: f['--daemon'] === true,
+            ...(f['--config'] !== undefined ? { configPath: f['--config'] } : {}),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'status'],
+    surface: 'one-shot',
+    flags: ['--json', '--rpc', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for node status: ${token}` },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) =>
+          runNodeCommand({
+            kind: 'status',
+            json: parsed.flags['--json'],
+            rpc: parsed.flags['--rpc'],
+          }),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'ps'],
+    surface: 'one-shot',
+    flags: ['--json', '--all', '--data-dir'],
+    flagOverrides: { '--all': { help: 'flag.all.ps' } },
+    positionalErrors: { extra: (token) => `Unknown argument for node ps: ${token}` },
+    load: async () => {
+      const { psCommand } = await import('./commands/fleet/ps-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await psCommand({ json: f['--json'], all: f['--all'], type: 'node' }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'stop'],
+    surface: 'one-shot',
+    flags: ['--force', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for node stop: ${token}` },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) =>
+          runNodeCommand({
+            kind: 'stop',
+            ...(parsed.flags['--force'] === true ? { force: true } : {}),
+          }),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'restart'],
+    surface: 'one-shot',
+    flags: ['--force', '--data-dir'],
+    positional: '[<name>]',
+    positionalErrors: { extra: () => 'node restart accepts at most one name' },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) =>
+          runNodeCommand({
+            kind: 'restart',
+            ...(parsed.flags['--force'] === true ? { force: true } : {}),
+            ...(parsed.positionals[0] !== undefined ? { name: parsed.positionals[0] } : {}),
+          }),
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'reload'],
+    surface: 'one-shot',
+    flags: ['--scope', '--data-dir'],
+    positionalErrors: { extra: (token) => `Unknown argument for node reload: ${token}` },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) => {
+          const scopes = parsed.flags['--scope'] as string[][] | undefined;
+          return runNodeCommand({
+            kind: 'reload',
+            ...(scopes !== undefined ? { scopes: [...new Set(scopes.flat())] } : {}),
+          });
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['node', 'token'],
+    surface: 'one-shot',
+    // D-15：node token 现态缺 help-spec/completion 条目（args+registry+总览有）→ 投射补齐
+    flags: ['--print', '--json', '--node'],
+    flagOverrides: { '--node': { local: true } },
+    positionalErrors: { extra: (token) => `Unknown argument for node token: ${token}` },
+    load: async () => {
+      const { runNodeCommand } = await import('./commands/node-command');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return runNodeCommand({
+            kind: 'token',
+            print: f['--print'],
+            json: f['--json'],
+            ...(f['--node'] !== undefined ? { nodeId: f['--node'] } : {}),
+          });
+        },
+      };
+    },
+  }),
+  // ── 批 B3：hub 组件族（S3；T2 补 --daemon） ──
+  defineCommand({
+    path: ['hub'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.hub',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing hub subcommand (start|directory|watch|join-code|join|node|ps)',
+      extra: (token) => `Unknown hub subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown hub subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['hub', 'start'],
+    surface: 'one-shot',
+    flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+    flagOverrides: {
+      '--port': { invalidError: (raw) => `Invalid port for --port: ${raw}` },
+      '--data-dir': { local: true },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for hub start: ${token}` },
+    validate: (p) =>
+      (p.flags['--tls-cert'] !== undefined) !== (p.flags['--tls-key'] !== undefined)
+        ? 'hub start requires both --tls-cert and --tls-key'
+        : null,
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'start',
+              ...(f['--host'] !== undefined ? { host: f['--host'] } : {}),
+              ...(f['--port'] !== undefined ? { port: f['--port'] } : {}),
+              ...(f['--data-dir'] !== undefined ? { dataDir: f['--data-dir'] } : {}),
+              ...(f['--allow-remote'] === true ? { allowRemote: true } : {}),
+              ...(f['--tls-cert'] !== undefined ? { tlsCert: f['--tls-cert'] } : {}),
+              ...(f['--tls-key'] !== undefined ? { tlsKey: f['--tls-key'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'ps'],
+    surface: 'one-shot',
+    flags: ['--json', '--all', '--data-dir'],
+    flagOverrides: { '--all': { help: 'flag.all.ps' } },
+    positionalErrors: { extra: (token) => `Unknown argument for hub ps: ${token}` },
+    load: async () => {
+      const { psCommand } = await import('./commands/fleet/ps-command');
+      const { printCommandResult } = await import('./command-support');
+      return {
+        run: async (parsed) => {
+          const f = parsed.flags;
+          return printCommandResult(
+            await psCommand({ json: f['--json'], all: f['--all'], type: 'hub' }),
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'directory'],
+    surface: 'one-shot',
+    flags: ['--hub-url', '--token-env', '--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for hub directory: ${token}` },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'directory',
+              json: f['--json'],
+              ...(f['--hub-url'] !== undefined ? { hubUrl: f['--hub-url'] } : {}),
+              ...(f['--token-env'] !== undefined ? { tokenEnv: f['--token-env'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'watch'],
+    surface: 'one-shot',
+    flags: ['--hub-url', '--token-env'],
+    positionalErrors: { extra: (token) => `Unknown argument for hub watch: ${token}` },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'watch',
+              ...(f['--hub-url'] !== undefined ? { hubUrl: f['--hub-url'] } : {}),
+              ...(f['--token-env'] !== undefined ? { tokenEnv: f['--token-env'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'join-code'],
+    surface: 'one-shot',
+    flags: ['--data-dir', '--ttl', '--json'],
+    flagOverrides: {
+      '--data-dir': { local: true },
+      '--ttl': { invalidError: (raw) => `Invalid --ttl: ${raw} (60-3600 seconds)` },
+    },
+    positionalErrors: { extra: (token) => `Unknown argument for hub join-code: ${token}` },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'join-code',
+              json: f['--json'],
+              ...(f['--data-dir'] !== undefined ? { dataDir: f['--data-dir'] } : {}),
+              ...(f['--ttl'] !== undefined ? { ttl: f['--ttl'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'join'],
+    surface: 'one-shot',
+    flags: ['--code', '--code-env', '--public-url', '--ca', '--data-dir', '--json'],
+    flagOverrides: { '--data-dir': { local: true }, '--ca': { local: true } },
+    exclusive: [['--code', '--code-env']],
+    exclusiveError: 'hub join accepts only one of --code and --code-env',
+    positional: '[<hub-url>]',
+    positionalErrors: { extra: (token) => `Unknown argument for hub join: ${token}` },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'join',
+              json: f['--json'],
+              ...(parsed.positionals[0] !== undefined ? { hubUrl: parsed.positionals[0] } : {}),
+              ...(f['--code'] !== undefined ? { code: f['--code'] } : {}),
+              ...(f['--code-env'] !== undefined ? { codeEnv: f['--code-env'] } : {}),
+              ...(f['--public-url'] !== undefined ? { publicUrl: f['--public-url'] } : {}),
+              ...(f['--ca'] !== undefined ? { caFile: f['--ca'] } : {}),
+              ...(f['--data-dir'] !== undefined ? { dataDir: f['--data-dir'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'node'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.group.hubNode',
+    positional: '<sub>',
+    positionalErrors: {
+      missing: 'Missing hub node subcommand (list|remove)',
+      extra: (token) => `Unknown hub node subcommand: ${token}`,
+    },
+    validate: (p) =>
+      p.positionals[0] !== undefined ? `Unknown hub node subcommand: ${p.positionals[0]}` : null,
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['hub', 'node', 'list'],
+    surface: 'one-shot',
+    flags: ['--hub-url', '--json'],
+    positionalErrors: { extra: (token) => `Unknown argument for hub node list: ${token}` },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'node-list',
+              json: f['--json'],
+              ...(f['--hub-url'] !== undefined ? { hubUrl: f['--hub-url'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  defineCommand({
+    path: ['hub', 'node', 'remove'],
+    surface: 'one-shot',
+    flags: ['--hub-url'],
+    positional: '<pairing_id>',
+    positionalErrors: {
+      missing: 'hub node remove requires <pairing_id>',
+      extra: (token) => `Unknown argument for hub node remove: ${token}`,
+    },
+    load: async () => {
+      const { runHubCommand } = await import('./commands/hub-command');
+      return {
+        run: async (parsed, ctx) => {
+          const f = parsed.flags;
+          return runHubCommand(
+            {
+              kind: 'node-remove',
+              pairingId: parsed.positionals[0] ?? '',
+              ...(f['--hub-url'] !== undefined ? { hubUrl: f['--hub-url'] } : {}),
+            },
+            { ...(ctx.config !== undefined ? { config: ctx.config } : {}) },
+          );
+        },
+      };
+    },
+  }),
+  // H5 删除的 legacy 命令：fail-closed + 替代指路（现态 parseHubArgs/parseHubNodeArgs）
+  defineCommand({
+    path: ['hub', 'pair'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.cmd.hubJoin',
+    removed:
+      'vessel hub pair was removed; use vessel hub join-code on the hub, then vessel hub join on this node',
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['hub', 'token'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.cmd.hubJoin',
+    removed: 'vessel hub token was removed; use vessel hub join',
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['hub', 'data-token'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.cmd.hubJoin',
+    removed: 'vessel hub data-token was removed; use vessel hub join',
+    load: async () => ({ run: async () => 2 }),
+  }),
+  defineCommand({
+    path: ['hub', 'node', 'add'],
+    surface: 'one-shot',
+    hidden: true,
+    summary: 'help.cmd.hubJoin',
+    removed: 'vessel hub node add was removed; use vessel hub join-code then vessel hub join',
+    load: async () => ({ run: async () => 2 }),
+  }),
 ];
 
 /** model 族连接校验（现 parseModelArgs 5052-5060：--connect 或 VESSEL_CONNECT env）。 */
@@ -2275,4 +3020,42 @@ function modelTargeting(g: Globals): {
   caFile: string | null;
 } {
   return { connectUrl: g.connectArg, connectToken: g.connectTokenArg, caFile: g.caArg };
+}
+
+// ── gateway / node / hub 组件族辅助（S3） ──
+
+/** 选择器 flags → GatewaySelector（现 parseGatewaySelectorArg 口径）。 */
+function selectorFromFlags(f: { '--instance'?: string; '--port'?: number; '--all'?: boolean }): {
+  instance?: string;
+  port?: number;
+  all?: boolean;
+} {
+  return {
+    ...(f['--instance'] !== undefined ? { instance: f['--instance'] } : {}),
+    ...(f['--port'] !== undefined ? { port: f['--port'] } : {}),
+    ...(f['--all'] === true ? { all: true } : {}),
+  };
+}
+
+/** gateway stop/status/restart/reload --port：拒绝 0 + 每命令文案。 */
+function gatewayPortOverride(command: string): {
+  value: FlagValueKind;
+  invalidError: (raw: string) => string;
+} {
+  return {
+    value: {
+      kind: 'number',
+      placeholder: '<N>',
+      parse: (raw) => {
+        const p = parsePort(raw);
+        return p === null || p === 0 ? null : p;
+      },
+    },
+    invalidError: (raw) => `Invalid --port for gateway ${command}: ${raw} (1-65535)`,
+  };
+}
+
+/** 选择器互斥文案（现 gatewaySelectorError）。 */
+function selectorExclusiveError(command: string): string {
+  return `gateway ${command} accepts only one of --instance, --port, --all`;
 }

@@ -272,12 +272,13 @@ export function projectGlobalFlags(): string[] {
   return flags;
 }
 
-/** 动态值 flag 清单（现 DYNAMIC_VALUE_FLAGS 派生：无静态候选 = dynamic/number + 别名）。 */
+/** 动态值 flag 清单（现 DYNAMIC_VALUE_FLAGS 派生：无静态候选 = dynamic/number/optional-string + 别名）。 */
 export function projectDynamicValueFlags(): string[] {
   const flags: string[] = [];
   for (const def of Object.values(FLAG_DEFS) as FlagSpec[]) {
     if (def.hidden === true) continue;
-    if (def.value.kind !== 'dynamic' && def.value.kind !== 'number') continue;
+    const kind = def.value.kind;
+    if (kind !== 'dynamic' && kind !== 'number' && kind !== 'optional-string') continue;
     flags.push(def.flag, ...(def.aliases ?? []));
   }
   return flags;

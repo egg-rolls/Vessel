@@ -311,6 +311,7 @@ export const en: Record<MessageKey, string> = {
   'flag.caFile': 'CA bundle path for the peer TLS connection',
   'flag.purpose': 'Token purpose (platform|hub|node|proxy)',
   'flag.allowNonInteractive': 'Allow non-interactive mode (refuses interactive prompts by default)',
+  'flag.nodeTokenPrint': 'Print the node token value (node token)',
   'flag.help': 'show usage for this command',
 
   // ── common ──
