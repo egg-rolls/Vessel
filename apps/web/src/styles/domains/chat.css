@@ -1654,8 +1654,15 @@ button.tool-image-thumb:focus-visible {
   position: relative;
 }
 
+/* placeholder 绝对定位：不占行内布局。原来 inline 的 ::before 排在行首，
+   光标 offset 0 的英文首字符会被浏览器插到它「后面」（视觉反置）；绝对定位后
+   字符永远落在真实文本起点。宿主自身 padding:0（内衬在 .composer-field），
+   left/top 0 即文本起笔处；也不计入 scrollHeight，自动增高不受影响。 */
 .rich-composer[data-empty="true"]::before {
   content: attr(data-placeholder);
+  position: absolute;
+  left: 0;
+  top: 0;
   color: var(--faint);
   pointer-events: none;
 }
