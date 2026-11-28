@@ -2,13 +2,14 @@
 title: 消息块协议（信封规范 / type 注册表 / vessel-block fence）
 kind: current
 triggers: [block, envelope, quote, session-ref, vessel-block, fence, lift, registry, 块, 信封, 引用, 会话引用, 提升, 注册表, 固定标记, legacy]
-paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx]
+paths: [apps/web/src/domains/chat/block-registry.ts, apps/web/src/domains/chat/lift-blocks.ts, apps/web/src/domains/chat/block-views.tsx, apps/web/src/domains/chat/quote-ref.ts, apps/web/src/domains/chat/session-ref.ts, apps/web/src/domains/chat/vessel-block.ts, apps/web/src/domains/chat/file-token.ts, apps/web/src/domains/chat/RefCard.tsx, packages/core/src/runtime/tool-attachment.ts, packages/core/src/runtime/tool-calling-loop.ts]
 ---
 
 # 消息块协议
 
 > 块 P0（渲染统一）+ P1（信封规范收敛）+ q-block-cardshell-unify（用户正文
-> token lift + CardShell 统一视觉，§3.2）的现态契约。设计依据：外层仓
+> token lift + CardShell 统一视觉，§3.2）+ P2（AI 泛化发送 attachToolBlocks，
+> §4）的现态契约。设计依据：外层仓
 > `docs/dev/reports/architecture-block-bootstrap-design.md` §2（main 裁示见其 §9）与
 > `probe-block-protocol-report.md`。两条产品核心不变量（[message-invariants](message-invariants.md)）
 > 是本协议的硬约束：**可见性对等**（块必须有确定性的模型侧文本投影）与
@@ -67,6 +68,7 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
    | quote | `[引用消息 <id>]` / `[引用消息]` + `> snippet` | quote-ref.ts#parseQuoteEnvelope |
    | session-ref | `[引用会话]` / `[Referenced sessions]` 双词 + `- 「title」 · k: v …` 行 | session-ref.ts#parseSessionRefEnvelope |
    | tool image | `[tool image]` 注记 + 结构化 refs | transcript-items.ts#toolImageRefsOf |
+   | tool file | `[tool file]` 注记 + 结构化 refs（P2） | 无专用解析器：file lift 按 refs 出 chip，注记为正文 |
    | refs 尾注 | `[refs] N attachments: …` | refs-notice-hook（服务端注入，Web 按 name 识别） |
    | runtime notice | `[runtime] <summary>` + `  · ` details 行 | env-notice.ts#runtimeEnvCard |
    | file token | `vessel-ref:` scheme markdown 链接 | 用户正文：file lift（file-token.ts → RefCard）；助手正文：link-enhancers / 插件 FileRefLinkCard |
@@ -124,11 +126,19 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
 
 | type | 路径 | 状态 |
 |---|---|---|
-| quote | 模仿信封（双向同形已通） | 现态 |
-| image | media view → attachToolImages WeakMap 回执 → loop 追加带 refs 的 user 消息 | 现态；泛化为 `attachToolBlocks` 是 P2（本批不做） |
-| file | `[name](<vessel-ref:path>)` markdown 链接 | 现态 |
-| table/code | markdown 原生；结构化场景 AI 产出 vessel-block fence | fence 试点见 §5 |
+| quote | 模仿信封（双向同形已通）；工具经 `attachToolBlocks` surface 时 loop 注入信封原文 | 现态（P2 泛化） |
+| image | media view → attachToolImages WeakMap 回执 → loop 追加带 refs 的 user 消息 | 现态；P2 已泛化为 `attachToolBlocks` 特例（image 消息逐字节旧形状） |
+| file | `[name](<vessel-ref:path>)` markdown 链接；工具经 `attachToolBlocks` surface 时 loop 注入 `[tool file]` 注记 + refs | 现态（P2 泛化） |
+| table/code | markdown 原生；结构化场景 AI 产出 vessel-block fence；工具经 `attachToolBlocks` surface 时 loop 每块注入单闭合 fence | 现态（P2 泛化；fence spec 见 §5） |
 | notice | 宿主 hook 注入，**不开放给业务块** | 现态 |
+
+P2 注入形状（`tool-calling-loop.ts#toolBlockMessages`）：本批工具结果全部写回后
+**按 type 分条**经既有 `appendInjectedMessages` 追加 user 消息（身份盖章 / 事件 /
+落盘全复用；末尾追加 ⇒ 前缀守卫天然满足）。分条是硬要求：image lift 按
+「`[tool image] ` 前缀 + image refs」整条成卡（吞正文），fence 试点要求整条正文恰为
+单闭合 fence —— 混合内容塞一条会被卡吞掉。回执入口严格形状校验
+（`tool-attachment.ts`，table/quote/code schema 与前端 vessel-block.ts 同口径），
+坏条目静默丢；handler 签名不变（工具零感知）。
 
 不做 `send_block` 专用工具：media 回执模式已证明「工具结果附带结构化内容 → loop
 追加注入消息」是最小侵入路径；新造工具会多出第二套注入语义，且与「owner 回复
@@ -139,6 +149,12 @@ wire 层（收敛）  Message.content 内统一信封规范（文本） + Messag
 refs 走结构化参数不进正文。插入 UX 走 RichComposer 原子 scheme（新 type = 新
 scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送闸门（refs 形状校验 /
 路径边界 / 条数上限 32）全不动。ComposerBlockBar 泛化本批不做。
+
+**A2A（agent send，P2 additive）**：工具面暴露 `refs` 参数（与用户 send 同一
+`normalizeRefs` 形状归一），owner 路经 `service.dispatch`、成员路经
+`TeamService.send` 主 dispatch + Team 日志 mention 条目携带引用。边界：refs 是
+node-local 路径，地址（2/3 段）/ human / 裸名跨节点升级路显式拒绝（federation wire
+无 refs 字段，不扩 wire）；`message_id` 重投与 refs 互斥（既有消息自带 refs）。
 
 ## 5. vessel-block fence spec（新 type 统一格式，文档先行）
 
@@ -166,7 +182,7 @@ scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送�
 - **整条正文恰为一个闭合 vessel-block fence**（前序信封剥掉后，trim 比较）才
   lift；正文中段 fence 保持 markdown 原生 code 渲染（原生够用裁定的直接推论）。
   这与 lift 契约「一条消息每个宿主 type 至多提升一块」一致。
-- **试点 type = `table`**，schema（严格，坏 payload 原文兜底）：
+- **试点 type = `table`**（P2 扩 `code`，见下），schema（严格，坏 payload 原文兜底）：
 
   ```jsonc
   {
@@ -178,6 +194,20 @@ scheme 贡献或宿主原生动作），不需要第二套富编辑器。发送�
   ```
 
   单元格只收字符串（数字/嵌套/缺列一律拒收 → 原文渲染）；行可为空数组（空表合法）。
+- **P2 扩 type = `code`**（AI 工具 attachToolBlocks surface 的代码块），schema：
+
+  ```jsonc
+  {
+    "type": "code",      // 必填，精确匹配
+    "language": "ts",    // 可选，非空字符串（投影为 fence info string）
+    "code": "…"          // 必填，非空字符串（可含任意字符）
+  }
+  ```
+
+  投影 = markdown 原生 fenced code（复用 Markdown 组件高亮/复制，不造独立卡）；
+  围栏自适应加长（比正文内最长反引号串多 1，≥3）防内嵌 ``` 提前闭合。
+  core 入口校验（tool-attachment.ts）与前端 schema 同口径（两份校验是 bundle
+  隔离的刻意代价，改一处必须同步另一处）。
 - **渲染复用 Markdown 原生 table**：payload → markdown 表格文本 → 既有 Markdown
   组件（组件复用第一原则，不造新卡）。caption 渲为表格前强调行。
 - 注册进 block-registry（`type:'vessel-block'`，order 60，surface card 档但组件
@@ -207,6 +237,7 @@ vessel-block fence 同语义）。
   归宿主（refs/blob/attachments/边界闸/投递对账），UX 面可插件（块的渲染组件与
   composer 插入经 contributes 贡献）；插件 type 带 `x:` 前缀防撞名，信任/加载/
   注销全走既有插件机制，不新造第二套。
-- **本批不做（P1 红线）**：wire/服务端结构化字段（Message.blocks，P3）；refs
-  扩展；notice 并入块 wire；AI attachToolBlocks（P2）；ComposerBlockBar；历史
-  回填改写；为 table/code 造独立卡。
+- **红线（P1 立，P2 后仍有效）**：wire/服务端结构化字段（Message.blocks，P3）；refs
+  扩展；notice 并入块 wire；ComposerBlockBar；历史回填改写；为 table/code 造独立卡；
+  新造 send_block 工具（P2 裁定：泛化既有 attachToolImages 回执为 attachToolBlocks，
+  不造第二套注入语义）。AI attachToolBlocks 已于 P2 落地（§4）。

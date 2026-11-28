@@ -29,7 +29,7 @@
  */
 import { tableToMarkdown } from '../../text';
 
-/** 试点唯一 type：table。新 type 在此扩 union + 校验分支（blocks.md §5.1）。 */
+/** 试点 type：table。新 type 在此扩 union + 校验分支（blocks.md §5.1）。 */
 export interface VesselBlockTablePayload {
   type: 'table';
   /** 可选表题（非空字符串）；渲为表格前强调行。 */
@@ -39,6 +39,22 @@ export interface VesselBlockTablePayload {
   /** 数据行：每行字符串数组且长度 == columns.length；可为空数组（空表合法）。 */
   rows: string[][];
 }
+
+/**
+ * 块 P2 新增 type：code（AI 工具 attachToolBlocks surface 的代码块）。
+ * 投影 = markdown 原生 fenced code（复用 Markdown 组件高亮/复制，不造独立卡，
+ * blocks.md「table/code 原生够用」裁定）；fence 只是结构化载体。
+ */
+export interface VesselBlockCodePayload {
+  type: 'code';
+  /** 可选语言标签（非空字符串）；投影为 fence info string。 */
+  language?: string;
+  /** 代码正文（非空字符串；可含任意字符，投影时围栏自适应加长防内嵌 ```）。 */
+  code: string;
+}
+
+/** 已注册 type 的联合（parse/投影的统一口径）。 */
+export type VesselBlockPayload = VesselBlockTablePayload | VesselBlockCodePayload;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -64,11 +80,25 @@ function validateTablePayload(value: unknown): VesselBlockTablePayload | null {
   };
 }
 
+/** code schema（块 P2）：与 core tool-attachment.ts 入口校验同口径。 */
+function validateCodePayload(value: unknown): VesselBlockCodePayload | null {
+  if (!isRecord(value) || value.type !== 'code') return null;
+  const { code, language } = value;
+  if (typeof code !== 'string' || code.length === 0) return null;
+  if (language !== undefined && (typeof language !== 'string' || language.length === 0))
+    return null;
+  return {
+    type: 'code',
+    ...(language !== undefined ? { language } : {}),
+    code,
+  };
+}
+
 /**
  * 整条正文 → vessel-block payload；不是「单个闭合 vessel-block fence + 合法
  * schema」返回 null（原文渲染兜底）。只认 ``` 围栏（spec 口径；~~~ 不认）。
  */
-export function parseVesselBlockFence(content: string): VesselBlockTablePayload | null {
+export function parseVesselBlockFence(content: string): VesselBlockPayload | null {
   const lines = content.trim().split('\n');
   // 开栏 + ≥1 行 payload + 收栏。
   if (lines.length < 3) return null;
@@ -85,14 +115,25 @@ export function parseVesselBlockFence(content: string): VesselBlockTablePayload 
   } catch {
     return null;
   }
+  if (isRecord(parsed) && parsed.type === 'code') return validateCodePayload(parsed);
   return validateTablePayload(parsed);
 }
 
 /**
- * 渲染投影：payload → markdown 文本（喂既有 Markdown 组件，原生 table 渲染：
- * 横向滚动 + 复制按钮全复用）。表格序列化与复制按钮共用 text.ts#tableToMarkdown。
+ * 渲染投影：payload → markdown 文本（喂既有 Markdown 组件，原生 table / code
+ * 渲染：横向滚动 + 复制按钮全复用）。表格序列化与复制按钮共用 text.ts#tableToMarkdown。
+ * code 投影围栏自适应加长（比正文内最长反引号串多 1，≥3）——正文含 ``` 也不会
+ * 提前闭合（CommonMark 围栏规则），不吞字。
  */
-export function vesselBlockMarkdown(payload: VesselBlockTablePayload): string {
+export function vesselBlockMarkdown(payload: VesselBlockPayload): string {
+  if (payload.type === 'code') {
+    let longestRun = 0;
+    for (const match of payload.code.match(/`+/g) ?? []) {
+      if (match.length > longestRun) longestRun = match.length;
+    }
+    const fence = '`'.repeat(Math.max(3, longestRun + 1));
+    return `${fence}${payload.language ?? ''}\n${payload.code}\n${fence}`;
+  }
   const table = tableToMarkdown(payload.columns, payload.rows);
   return payload.caption !== undefined ? `**${payload.caption}**\n\n${table}` : table;
 }

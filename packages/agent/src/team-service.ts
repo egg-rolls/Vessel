@@ -679,6 +679,8 @@ export class DefaultTeamService implements AgentTeamService {
     const delivery: AgentInboxDelivery = input.delivery ?? DEFAULT_INBOX_DELIVERY;
     const wakes = delivery === 'wake';
     const messageId = input.message_id;
+    // 块 P2 additive：附件引用与 dispatch / post 共用同一份形状归一（只形状，不权限判定）。
+    const refs = normalizeRefs(input.refs);
 
     let content: string;
     if (messageId !== undefined) {
@@ -719,6 +721,16 @@ export class DefaultTeamService implements AgentTeamService {
         status: 'rejected',
         code: 'invalid_input',
         reason: 'unsupported_delivery',
+        logged: false,
+      };
+    }
+    // 块 P2：refs 是 node-local 路径 —— 地址 / human 路（含跨节点）携带不了，
+    // 显式拒绝而不是静默丢附件（federation wire 无 refs 字段，不扩 wire）。
+    if (refs.length > 0 && (segments === 2 || segments === 3 || input.to === HUMAN_PRINCIPAL)) {
+      return {
+        status: 'error',
+        code: 'invalid_input',
+        reason: 'refs are only supported for local member targets',
         logged: false,
       };
     }
@@ -802,6 +814,17 @@ export class DefaultTeamService implements AgentTeamService {
     // 有 Team 的调用者：name 只在同 Team roster 内解析；未命中不得把原始 name
     // 交给 tenant 全局 dispatch（否则会绕过 roster 解析到别的 Team）。
     if (caller.team_id !== undefined && target === undefined) {
+      // 块 P2：裸名升级路可能跨节点（federation 携带不了 node-local refs）——
+      // 带 refs 时要求显式本机成员 id，不静默丢附件。
+      if (refs.length > 0) {
+        return {
+          status: 'error',
+          code: 'invalid_input',
+          reason: 'refs require a resolved local member id (bare-name escalation may cross nodes)',
+          logged: false,
+          conversation_id: conversationId,
+        };
+      }
       // 1 段裸名的查找阶梯：本 Team（上面已查）→ 本机其它 Team → 可访问节点。
       const escalated = await this.resolveBareAgent(caller, input.to, content, conversationId);
       if (escalated !== undefined) return escalated;
@@ -834,6 +857,8 @@ export class DefaultTeamService implements AgentTeamService {
         ts: this.now(),
         kind: 'mention',
         conversation_id: conversationId,
+        // 块 P2 additive：引用随日志（时间线 chip 与 post 同口径）；无引用不写键。
+        ...(refs.length > 0 ? { refs } : {}),
       };
       try {
         await this.store.appendLog(entry);
@@ -859,6 +884,8 @@ export class DefaultTeamService implements AgentTeamService {
         // wire 边界：dispatch 只认 `notify` 布尔，wake 模式在这里转回去。
         ...(wakes ? { notify: true } : {}),
         ...(messageId !== undefined ? { message_id: messageId } : {}),
+        // 块 P2 additive：引用随投递（wake 落 inbox / input 进 Message.refs，dispatch 既有两路）。
+        ...(refs.length > 0 ? { refs } : {}),
         // 内部（非 wire）：调用者 session / run 供 conversation 继承与同 run 边去重；
         // batch_key 让一次 messages 数组的 wake 投递共享边计数。
         origin_session_id: input.origin_session_id ?? input.from_session_id,
