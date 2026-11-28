@@ -21,7 +21,6 @@ import {
   resolveDisplayValues,
 } from '../../../state/display-settings';
 import {
-  COMMON_CATEGORY_ID,
   mergeSettings,
   pluginSettingsToDefs,
   SETTINGS_CATEGORIES,
@@ -52,6 +51,8 @@ const TAB_STORAGE_KEY = 'vessel.settings.tab';
 const TREE_STORAGE_KEY = 'vessel.settings.tree.collapsed';
 const SEARCH_DEBOUNCE_MS = 150;
 const FOCUS_HIGHLIGHT_MS = 2000;
+/** 默认首屏分类（q-settings-remove-common：「常用」聚合视图退役，首屏 = 首个分类）。 */
+const DEFAULT_CATEGORY_ID = SETTINGS_CATEGORIES[0]?.id ?? 'visual';
 
 type ScopeTab = 'user' | 'project' | 'local';
 
@@ -117,7 +118,10 @@ export function SettingsDialog({
   const [tab, setTab] = useState<ScopeTab>(readStoredTab);
   const [query, setQuery] = useState(initialQuery ?? '');
   const [debouncedQuery, setDebouncedQuery] = useState(initialQuery ?? '');
-  const [activeCategory, setActiveCategory] = useState(initialCategory ?? COMMON_CATEGORY_ID);
+  // 旧深链可能仍带已退役的 common 分类 → 回落默认首分类。
+  const [activeCategory, setActiveCategory] = useState(
+    initialCategory && initialCategory !== 'common' ? initialCategory : DEFAULT_CATEGORY_ID,
+  );
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(readCollapsedIds);
   const [highlightId, setHighlightId] = useState<string | undefined>();
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -217,7 +221,6 @@ export function SettingsDialog({
     [scopeDefs, parsed, haystacks, isModified],
   );
 
-  const commonHits = useMemo(() => hits.filter((def) => def.common === true), [hits]);
   const sections = useMemo(
     () =>
       SETTINGS_CATEGORIES.filter((category) => category.id !== 'extensions')
@@ -243,13 +246,6 @@ export function SettingsDialog({
 
   const treeNodes = useMemo<CategoryNode[]>(() => {
     const nodes: CategoryNode[] = [];
-    if (commonHits.length > 0 || !searching) {
-      nodes.push({
-        id: COMMON_CATEGORY_ID,
-        label: t('settings.category.common'),
-        count: searching ? commonHits.length : undefined,
-      });
-    }
     for (const section of sections) {
       nodes.push({
         id: section.category.id,
@@ -269,7 +265,7 @@ export function SettingsDialog({
       });
     }
     return nodes;
-  }, [commonHits, sections, pluginSections, searching]);
+  }, [sections, pluginSections, searching]);
 
   const connected = hasToken && connectionState === 'open';
   const configAvailable = hasToken && features.includes('config');
@@ -344,6 +340,8 @@ export function SettingsDialog({
     if (!focusKey) return;
     const def = defs.find((entry) => entry.id === focusKey);
     if (!def) return;
+    // 首屏改为单分类后，聚焦项所在分类须先激活，行才渲染（插件项在 ext:<id> 节）。
+    setActiveCategory(def.pluginId !== undefined ? `ext:${def.pluginId}` : def.category);
     const scope = def.scope as ScopeTab;
     setTab((current) => {
       if (current === scope) return current;
@@ -452,7 +450,7 @@ export function SettingsDialog({
         <LoadingState label={t('settings.dialog.loading')} />
       );
     }
-    if (hits.length === 0 && commonHits.length === 0) {
+    if (hits.length === 0) {
       return (
         <div className="flex flex-col items-start gap-2 p-4">
           <p className="text-sm text-muted">{t('settings.dialog.noMatches')}</p>
@@ -467,25 +465,8 @@ export function SettingsDialog({
         {!connected && hasToken && (
           <StaleNotice message={t('settings.dialog.configUnavailable')} onRetry={reloadConfig} />
         )}
-        {(activeCategory === COMMON_CATEGORY_ID || searching) && commonHits.length > 0 && (
-          <div
-            ref={(node) => {
-              sectionRefs.current[COMMON_CATEGORY_ID] = node;
-            }}
-          >
-            <h3 className="sticky top-0 bg-raised py-1 text-sm font-medium text-muted">
-              {t('settings.category.common')}
-            </h3>
-            {commonHits.map(renderRow)}
-          </div>
-        )}
         {sections
-          .filter(
-            (section) =>
-              searching ||
-              activeCategory === COMMON_CATEGORY_ID ||
-              section.category.id === activeCategory,
-          )
+          .filter((section) => searching || section.category.id === activeCategory)
           .map((section) => (
             <div
               key={section.category.id}
@@ -502,10 +483,7 @@ export function SettingsDialog({
         {pluginSections
           .filter(
             (section) =>
-              searching ||
-              activeCategory === COMMON_CATEGORY_ID ||
-              activeCategory === 'extensions' ||
-              section.id === activeCategory,
+              searching || activeCategory === 'extensions' || section.id === activeCategory,
           )
           .map((section) => (
             <div
