@@ -6,6 +6,7 @@
  */
 
 import { allowedOriginError } from '../../packages/config/src/index';
+import { isSettableConfigKey, type SettableConfigKey } from '../config/ui-settings';
 import { parseFederationAddress } from '../federation/federation-address';
 import type { DevCommandArgs } from './commands/dev-command';
 import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
@@ -158,17 +159,9 @@ export type ConfigCommandArgs =
   | { kind: 'explain'; key: string; json: boolean }
   | {
       kind: 'set';
-      key:
-        | 'ui.language'
-        | 'ui.showReasoning'
-        | 'ui.statusBars'
-        | 'ui.verbosity'
-        | 'ui.showInternalEvents'
-        | 'ui.errorLevel'
-        | 'ui.askUser'
-        | 'ui.expandCards'
-        | 'observability.showProcessErrors'
-        | 'agent.cwd';
+      // q-env-config-set：与 ui-settings CONFIG_SET_TARGETS 单一事实源同口径
+      // （含 envInjection 三层键）；逐键值校验在 configSetCommand。
+      key: SettableConfigKey;
       value: string;
       json: boolean;
     };
@@ -1412,28 +1405,17 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return {
         ok: false,
         error:
-          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|ui.askUser|ui.expandCards|observability.showProcessErrors|agent.cwd> <value> [--json]',
+          'Usage: vessel config set <key> <value> [--json] (supported keys: ui.*, observability.*, agent.*, emptyResponse.*, autoPrune.*, kanban.boardPath, vision.imageTokenBudgetRatio, envInjection.*)',
       };
     }
     const [key = '', value = ''] = positional;
-    if (
-      key !== 'ui.language' &&
-      key !== 'ui.showReasoning' &&
-      key !== 'ui.statusBars' &&
-      key !== 'ui.verbosity' &&
-      key !== 'ui.showInternalEvents' &&
-      key !== 'ui.errorLevel' &&
-      key !== 'ui.askUser' &&
-      key !== 'ui.expandCards' &&
-      key !== 'observability.showProcessErrors' &&
-      key !== 'agent.cwd'
-    ) {
+    // q-env-config-set：白名单单一事实源 = ui-settings CONFIG_SET_TARGETS
+    // （含 envInjection 三层键 / emptyResponse / autoPrune / depthColor 等）；
+    // 逐键值校验在 configSetCommand（与 serve config.set 同口径）。
+    if (!isSettableConfigKey(key)) {
       return {
         ok: false,
-        error:
-          `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ` +
-          'ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, ' +
-          'ui.expandCards, observability.showProcessErrors, agent.cwd)',
+        error: `Unsupported config key: ${key} (supported keys: see 'vessel config set --help')`,
       };
     }
     if (key === 'ui.language' && value !== 'zh-CN' && value !== 'en') {
