@@ -1,6 +1,9 @@
 /**
  * 投影卡（0.54）的**纯逻辑**：badge 词表 / 默认视角 / readback 请求与抽帧 / 汇总数字口径。
  *
+ * spec = `docs/specs/projection-card-spec.md`（0.54 投影卡规格；下文 § 编号均指该文档，
+ * 早期 design 稿已退场，以 specs 定稿为准）。
+ *
  * 为什么单独一个 `.ts`（无 React、无 DOM）：判定口径是纯函数，便于复用与评审核对
  * （原 fixture 对拍脚本已按宪法删除）。渲染层只负责把结果摆进 DOM。
  *
@@ -256,7 +259,7 @@ export function readbackOriginalOf(
  * （「原文已不可恢复」）：不弹错误框、不显示 stack、不假装「加载中」转到天荒地老。
  *
  * 服务端本轮不产出 `gone`（判它要扫事件日志），所以这条降级路径是 `readback` 唯一的
- * 「读不回来」出口 —— spec §1.7、§6.5 都要求它是**明确的界面变化**，不是静默空白。
+ * 「读不回来」出口 —— spec §1.7、§6 第 5 条都要求它是**明确的界面变化**，不是静默空白。
  */
 export type ProjectionReadbackOutcome =
   | { kind: 'text'; text: string }

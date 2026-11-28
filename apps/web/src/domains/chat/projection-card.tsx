@@ -1,6 +1,8 @@
 /**
  * 投影卡的两个零件（0.54）：**badge**（层级 1，常驻可见）与**双层切换**（层级 2）。
  *
+ * spec = `docs/specs/projection-card-spec.md`（0.54 投影卡规格；早期 design 稿已退场）。
+ *
  * 它们**不认识「工具」**，只认识 `ProjectionView`（spec §4.3）：工具卡只是第一个宿主。
  * 纯逻辑（词表 / 默认视角 / 读回抽帧 / 汇总口径）全在 `projection.ts` 里，这里只摆 DOM。
  *

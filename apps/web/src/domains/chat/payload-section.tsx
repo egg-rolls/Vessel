@@ -8,6 +8,8 @@ import { PAYLOAD_CHUNK_BYTES, PREVIEW_LINES, previewPayload, valueText } from '.
 /**
  * 一段原始文本的完整能力：折叠预览（20 行 / 8 KiB）+ 展开分块加载 + 复制 + debug 行列字节。
  *
+ * spec = `docs/specs/projection-card-spec.md`（0.54 投影卡规格；早期 design 稿已退场）。
+ *
  * 0.54 从 `ToolCard.tsx` 里搬出来单独成文件（**行为一字未改**）：投影卡的两个视角面板
  * 要复用它（spec §3.3「两个面板都是 PayloadSection，零新渲染逻辑」），而 `ToolCard` 又要
  * import 投影卡组件 —— 留在原文件会绕成循环 import。搬出来是唯一不复制那份渲染逻辑的走法。
