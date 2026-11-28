@@ -355,6 +355,8 @@ export const zhCN = {
   'gateway.stopTimeout': '等待 gateway（pid {pid}）退出超时（{timeout}）。',
   'gateway.stopKeptNodes': 'handoff：保留 {count} 个 node 进程继续运行',
   'gateway.stopKeptHub': 'handoff：保留 hub 进程继续运行',
+  'gateway.stopNodesDrainWait':
+    'stop --stop-nodes 正在 drain（停止方 pid {pid}）；候它停完再启动/接管，避免接管即将被停的 node/hub',
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.startedNode': '节点：{name}（端口 {port}）',
