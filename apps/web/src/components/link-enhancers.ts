@@ -54,15 +54,20 @@ export function hrefScheme(href: string): string {
   return match?.[1]?.toLowerCase() ?? '';
 }
 
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 /** 查 href 命中的增强器（订阅注册变化）；无 ⇒ undefined（落通用白名单档）。 */
 export function useLinkEnhancer(href: string): LinkEnhancerEntry | undefined {
-  useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    () => version,
-  );
+  useSyncExternalStore(subscribe, () => version);
   const scheme = hrefScheme(href);
   return scheme === '' ? undefined : enhancers.get(scheme);
+}
+
+/** 已注册增强器 scheme 集（订阅注册变化）：InlineText 分段 scheme 集用。 */
+export function useLinkEnhancerSchemes(): readonly string[] {
+  useSyncExternalStore(subscribe, () => version);
+  return [...enhancers.keys()];
 }

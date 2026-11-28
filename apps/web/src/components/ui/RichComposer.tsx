@@ -108,7 +108,7 @@ export interface RichComposerProps {
 const FALLBACK_MAX_PX = 200;
 
 /** 解析出的片段：纯文本或原子 token。 */
-type Segment =
+export type Segment =
   | { type: 'text'; text: string }
   | { type: 'atomic'; token: string; scheme: string; name: string; target: string };
 
@@ -122,10 +122,12 @@ export function buildAtomicToken(name: string, scheme: string, target: string): 
   return `[${label}](<${scheme}:${target}>)`;
 }
 
-/** 按已注册 scheme 把文本切成片段；未注册 scheme 的 token 原样留作文本。 */
-export function parseSegments(value: string, schemes: readonly AtomicScheme[]): Segment[] {
-  if (schemes.length === 0 || value.length === 0) return [{ type: 'text', text: value }];
-  const known = new Set(schemes.map((entry) => entry.scheme));
+/**
+ * 分段核心（composer 与气泡内联渲染 InlineText 共用，零第二解析器）：
+ * 按已知 scheme 集切片段；未注册 scheme 的 token 原样留作文本。
+ */
+export function segmentByKnownSchemes(value: string, known: ReadonlySet<string>): Segment[] {
+  if (known.size === 0 || value.length === 0) return [{ type: 'text', text: value }];
   const segments: Segment[] = [];
   let last = 0;
   TOKEN_RE.lastIndex = 0;
@@ -141,6 +143,11 @@ export function parseSegments(value: string, schemes: readonly AtomicScheme[]): 
   }
   if (last < value.length) segments.push({ type: 'text', text: value.slice(last) });
   return segments;
+}
+
+/** 按已注册 scheme 把文本切成片段；未注册 scheme 的 token 原样留作文本。 */
+export function parseSegments(value: string, schemes: readonly AtomicScheme[]): Segment[] {
+  return segmentByKnownSchemes(value, new Set(schemes.map((entry) => entry.scheme)));
 }
 
 /** 从 token 反解 {scheme,name,target}；形状不对 = null。 */
