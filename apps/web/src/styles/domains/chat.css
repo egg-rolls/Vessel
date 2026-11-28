@@ -1712,11 +1712,11 @@ button.tool-image-thumb:focus-visible {
 /* 输入框与工具栏都不自带底色 / 内衬：这一层只留排版，外观全交给
    `.composer-field`（同一块 `--surface-sunken` 凹槽）。 */
 .composer-input {
-  /* 纵向由 `AutoGrowTextarea` 写死 height（单行 24px）；这里 `flex: none` 让它别在
+  /* 纵向由 `RichComposer` 写死 height（单行 24px）；这里 `flex: none` 让它别在
      列向容器里被 flex 拉高 / 压扁，横向仍由容器的 align-items: stretch 撑满。 */
   flex: none;
   min-height: 24px;
-  /* 上限只认令牌（tokens.css `--composer-input-max-h`）：`AutoGrowTextarea` 的自增高也按
+  /* 上限只认令牌（tokens.css `--composer-input-max-h`）：`RichComposer` 的自增高也按
      同一令牌夹高度，这里再写一个 160px 的字面值只会和令牌打架（同特异性下后加载的
      chat-dock.css 与行内 max-height 都会赢过它）。 */
   max-height: var(--composer-input-max-h);

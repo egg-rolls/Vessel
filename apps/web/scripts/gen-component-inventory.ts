@@ -26,7 +26,7 @@ interface ModuleInfo {
   reexport: boolean;
   symbols: string[];
   consumers: string[];
-  /** ui 目录内部的消费方（如 AutoGrowTextarea 只被 RichComposer 用）。 */
+  /** ui 目录内部的消费方（如 Icon 被 MessageActions 引用）。 */
   uiConsumers: string[];
   previews: string[];
 }
