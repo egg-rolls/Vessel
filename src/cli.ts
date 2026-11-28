@@ -128,6 +128,7 @@ import {
 } from './gateway/gateway-banner';
 import { createGatewayConfigSet } from './gateway/gateway-config-control';
 import {
+  changedConfigKeys,
   createGatewayReloadRunner,
   type GatewayReconfigureTarget,
   type GatewayReloadApplier,
@@ -1587,14 +1588,20 @@ async function runWithConfig(result: BootstrapResult) {
         const scopes = ['config', 'log', 'permission', 'tools', 'mcp'].filter(
           (scope) => scope === 'config' || registered.has(scope),
         );
+        // q-config-edit-bypass：捕获重载前的活配置，供「空差异但内容真变了」判定。
+        const before = liveConfig;
         const outcome = await reloadRunner.reloadWithSummaries(scopes);
         // 每个 scope 的差异行汇总为一条 notice 的 details（最多 10 行由总线裁剪）。
         const lines = Object.entries(outcome.summaries)
           .filter(([, summary]) => summary.length > 0)
           .flatMap(([, summary]) => summary);
-        return lines.length > 0
-          ? lines
-          : [`config: reloaded ${outcome.reloaded.join(', ') || 'nothing'}`];
+        if (lines.length > 0) return lines;
+        // 所有 applier 都报空差异，但配置内容其实变了（ui.* / envInjection 非 cadence
+        // 字段等没有专属差异行的键）：如实报 hot-applied + 变化的顶层键，不发无内容的
+        // reloaded 让读者误以为「没生效 / 被旁路」（canary O7 直写验的 cosmetic 误读根因）。
+        const changed = changedConfigKeys(before, liveConfig);
+        if (changed.length > 0) return [`config: hot-applied (changed: ${changed.join(', ')})`];
+        return [`config: reloaded ${outcome.reloaded.join(', ') || 'nothing'}`];
       },
       notify: (notice) => {
         noticeBus.publish(notice);
