@@ -34,18 +34,23 @@ export type Route =
   | { domain: 'agents'; nodeKey?: string; teamId?: string; state?: string; presence?: string }
   | { domain: 'capabilities' }
   /**
+   * 设计实验室整页（q-design-lab-restore 恢复）：token + 组件预览 + 组件清单。
+   * 页面壳懒加载 DesignLabContent（不进首屏 chunk）；设置弹窗视觉分区仍保留内嵌副本。
+   */
+  | { domain: 'designLab' }
+  /**
    * 设置弹窗（VSCode 式，vscode-settings-design §3.8）：路由 = 可分享状态。
    * ShellOverlays 消费本路由打开 SettingsDialog；关闭 replace 回 chat。
    * focusKey = 设置项 id 深链定位；query = 搜索词；category = 分类定位。
-   * S6：visual / designLab 整页路由删除，parseRoute 别名直接解析成本路由。
+   * S6：visual 整页路由删除，parseRoute 别名直接解析成本路由。
    */
   | { domain: 'settings'; focusKey?: string; query?: string; category?: string };
 
 /**
- * 导航 id 域：Route 域 + legacy visual / designLab（S6 整页删除后不再是路由，
+ * 导航 id 域：Route 域 + legacy visual（S6 整页删除后不再是路由，
  * 保留 id 供 DOMAINS 图标 / 命令面板文案复用；primaryRoute 落 settings 别名）。
  */
-export type Domain = Route['domain'] | 'visual' | 'designLab';
+export type Domain = Route['domain'] | 'visual';
 
 export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 
@@ -201,8 +206,8 @@ export function parseRoute(hash: string): Route {
       // S2：旧整页别名 → 设置弹窗视觉分类（旧链接永不 404）。
       return { domain: 'settings', category: 'visual' };
     case 'designLab':
-      // S2：设计实验室 = 视觉分区 view 项（自动展开由 focusKey 驱动）。
-      return { domain: 'settings', focusKey: 'local.designLab', category: 'visual' };
+      // q-design-lab-restore：恢复整页路由（用户裁定：独立页面可达，不再埋弹窗）。
+      return { domain: 'designLab' };
     case 'settings': {
       // 0.45 IA：旧 settings 子页作为别名跳到新的顶层页面。
       const tab = segments[1] ?? query.get('tab');
@@ -298,6 +303,8 @@ export function formatRoute(route: Route): string {
     }
     case 'capabilities':
       return '#/capabilities';
+    case 'designLab':
+      return '#/designLab';
     case 'settings': {
       const query = new URLSearchParams();
       if (route.focusKey) query.set('focus', route.focusKey);

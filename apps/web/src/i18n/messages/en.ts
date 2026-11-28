@@ -133,6 +133,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'breadcrumb.observe.evals': 'Evals',
   'breadcrumb.settings': 'Settings',
   'breadcrumb.capabilities': 'Capabilities',
+  'breadcrumb.designLab': 'Design Lab',
 
   // Settings
   'settings.title': 'Settings',
@@ -2284,6 +2285,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': 'Design Lab',
+  'designLab.subtitle':
+    'Tokens and reusable components are discovered at runtime: add a token or a *.preview.tsx and it appears here; the inventory section audits shared-component reuse.',
   'designLab.tokens.autoNote':
     'The list is enumerated from the custom properties that actually exist on :root and grouped by prefix, so a new token needs no change here.',
   'designLab.tokens.colors': 'Colors',
@@ -2328,6 +2331,56 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.groups.nav': 'Navigation and status',
   'designLab.groups.overlays': 'Dialogs and overlays',
   'designLab.groups.ui': 'Primitives',
+  // Component inventory (q-design-lab-restore): components/ui reuse audit (build-time snapshot)
+  'designLab.inventory.title': 'Component Inventory',
+  'designLab.inventory.subtitle':
+    'Reuse first: check components/ui before building new UI. One consumer = likely one-off (share it or retire it); zero consumers = retirement candidate.',
+  'designLab.inventory.snapshotNote':
+    'Build-time snapshot ({commit}); consumer counts exclude previews. Regenerate: bun apps/web/scripts/gen-component-inventory.ts.',
+  'designLab.inventory.colComponent': 'Component',
+  'designLab.inventory.colPurpose': 'Purpose',
+  'designLab.inventory.colReuse': 'Reuse',
+  'designLab.inventory.colPreview': 'Preview',
+  'designLab.inventory.kind.component': 'component',
+  'designLab.inventory.kind.hook': 'hook',
+  'designLab.inventory.kind.util': 'util',
+  'designLab.inventory.reexport': 're-exports plugin-ui',
+  'designLab.inventory.flagZero': 'retire candidate',
+  'designLab.inventory.flagSingle': 'likely one-off',
+  'designLab.inventory.flagShared': 'shared',
+  'designLab.inventory.previewCovered': '{count} sample(s)',
+  'designLab.inventory.previewMissing': 'no preview',
+  'designLab.inventory.total': '{count} total',
+  'designLab.inventory.shared': '{count} shared',
+  'designLab.inventory.single': '{count} single-consumer',
+  'designLab.inventory.zero': '{count} zero-consumer',
+  'designLab.inventory.noPreview': '{count} missing preview',
+  'designLab.inventory.purpose.AutoGrowTextarea':
+    'Auto-growing textarea (superseded by RichComposer)',
+  'designLab.inventory.purpose.Badge': 'Status / label badge (semantic tones)',
+  'designLab.inventory.purpose.Button': 'Unified button (variant / size)',
+  'designLab.inventory.purpose.CardShell': 'Card shell (border / surface / radius)',
+  'designLab.inventory.purpose.CountBadge': 'Count badge (nav / list corners)',
+  'designLab.inventory.purpose.DataTable': 'Semantic data table (sorting / responsive columns)',
+  'designLab.inventory.purpose.EntityHeader': 'Entity page header (icon / title / scope / actions)',
+  'designLab.inventory.purpose.Field': 'Form fields (Input / Select / Textarea)',
+  'designLab.inventory.purpose.FilterPopover': 'Filter popover (table column filters)',
+  'designLab.inventory.purpose.Icon': 'Unified icon entry (name → SVG)',
+  'designLab.inventory.purpose.KeyValueList': 'Key-value list (detail views)',
+  'designLab.inventory.purpose.MessageActions': 'Message action bar (copy, etc.)',
+  'designLab.inventory.purpose.MessageFold': 'Message fold / expand',
+  'designLab.inventory.purpose.RichComposer':
+    'Rich composer (mentions / attachments / atomic blocks)',
+  'designLab.inventory.purpose.SearchInput': 'Search input',
+  'designLab.inventory.purpose.Section': 'Section container (title / description / actions)',
+  'designLab.inventory.purpose.SidebarShell': 'Sidebar shell (desktop sidebar / mobile drawer)',
+  'designLab.inventory.purpose.Stat': 'Stat value card',
+  'designLab.inventory.purpose.card-surface': 'Card surface class constants',
+  'designLab.inventory.purpose.clipboard': 'Clipboard write helper',
+  'designLab.inventory.purpose.cn': 'Class merge (clsx + tailwind-merge)',
+  'designLab.inventory.purpose.ghost-control': 'Ghost control class constants',
+  'designLab.inventory.purpose.useEnteringItemKeys': 'List entrance-animation key hook',
+  'designLab.inventory.purpose.useTypewriterText': 'Typewriter text hook',
   'designLab.preview.actionMenu.archive': 'Archive (unavailable)',
   'designLab.preview.actionMenu.delete': 'Delete',
   'designLab.preview.actionMenu.desc':
@@ -2383,6 +2436,30 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'designLab.preview.dataTable.desc':
     'A 1px gap between rows lets the page background through; the table keeps a small outer radius.',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.cardShell.desc':
+    'Unified surface for static content cards: header (status/title) → body → footer (actions). No hover lift; clickable list cards use card-surface.',
+  'designLab.preview.cardShell.sampleAction': 'View details',
+  'designLab.preview.cardShell.sampleBody':
+    'Async job cards / tool image cards share this one class string and the same slots, so surface styles never drift apart.',
+  'designLab.preview.cardShell.sampleStatus': 'Done',
+  'designLab.preview.cardShell.sampleTitle': 'Sample job card',
+  'designLab.preview.cardShell.title': 'CardShell',
+  'designLab.preview.filterPopover.desc':
+    'Header filter: trigger + dropdown panel with arrow-key navigation; a search box appears when options exceed the threshold (default 8).',
+  'designLab.preview.filterPopover.sampleLabel': 'Status',
+  'designLab.preview.filterPopover.sampleSearch': 'Search options',
+  'designLab.preview.filterPopover.title': 'FilterPopover',
+  'designLab.preview.messageFold.desc':
+    'Above the threshold (--msg-fold-max-h) it collapses by default with a bottom fade and a toggle button; the DOM always holds the full text (copy gets everything), and streaming never folds.',
+  'designLab.preview.messageFold.sample':
+    'This is a long message used to demonstrate folding. It exceeds the threshold height, so it collapses by default with a bottom fade and an "expand" button.\n\nFolding only changes display: max-height + overflow + mask; the DOM always holds the full text. The copy button gets the original, and manual selection sees the same text.\n\nDuring streaming nothing is clipped and no button appears — otherwise the body would fold/unfold with every new chunk. Overflow is judged by scrollHeight only: while clipped it still reports the full content height.\n\nThe threshold comes from a CSS variable (single source), with a fallback matching tokens.css. Without ResizeObserver it measures once at mount.\n\nUser bubbles on the chat page and team-page bubbles share this one component and the same classes — never copy the threshold or width rules.\n\nRule of thumb: fold only inside tinted bubbles, never plain body text. Assistant prose and cards do not mount this component.\n\nOne more paragraph so the height clearly exceeds the threshold: every design-lab sample is read-only static data, no RPC, viewable while disconnected.\n\nLast paragraph: after expanding, the button never suddenly disappears, and the fold never oscillates between expanded and collapsed.',
+  'designLab.preview.messageFold.title': 'MessageFold',
+  'designLab.preview.sidebarShell.desc':
+    'Sidebar container shell: header (title + actions) / controls row / scrollable children; optional drawer mode at ≤1023px (this sample is a plain column).',
+  'designLab.preview.sidebarShell.sampleRow': 'Sample row {index}',
+  'designLab.preview.sidebarShell.sampleSearch': 'Search sessions',
+  'designLab.preview.sidebarShell.sampleTitle': 'Sessions',
+  'designLab.preview.sidebarShell.title': 'SidebarShell',
   'designLab.preview.entityHeader.desc':
     'Both size steps side by side: page = 22px serif (the one h1 per screen), panel = 16px sans (a panel heading). Size only changes type, never color; ancestors always stay smaller and dimmer.',
   'designLab.preview.entityHeader.sampleAction': 'Back',

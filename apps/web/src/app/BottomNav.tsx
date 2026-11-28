@@ -34,6 +34,7 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
     route.domain === 'channels' ||
     route.domain === 'observe' ||
     route.domain === 'plugins' ||
+    route.domain === 'designLab' ||
     route.domain === 'settings';
   const connLabel = !hasToken
     ? t('nav.conn.idle')
@@ -138,7 +139,17 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
             >
               <DomainIcon domain="capabilities" /> {domainLabel('capabilities')}
             </button>
-            {/* S2：visual/designLab 入口收进设置弹窗视觉分区（#/visual #/designLab 别名仍可达）。 */}
+            {/* q-design-lab-restore：设计实验室恢复整页，More 入口还原（S2 前原位置）。 */}
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
+                navigate(primaryRoute('designLab'));
+              }}
+            >
+              <DomainIcon domain="designLab" /> {domainLabel('designLab')}
+            </button>
             <button
               type="button"
               className="more-item"

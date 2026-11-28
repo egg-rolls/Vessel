@@ -133,6 +133,7 @@ export const messages = {
   'breadcrumb.observe.evals': '评测',
   'breadcrumb.settings': '设置',
   'breadcrumb.capabilities': '能力清单',
+  'breadcrumb.designLab': '设计实验室',
 
   // Settings
   'settings.title': '设置',
@@ -2162,6 +2163,8 @@ export const messages = {
 
   // Design Lab：token / 组件 / 弹窗的自动发现展览馆（本页不手写清单）
   'designLab.title': '设计实验室',
+  'designLab.subtitle':
+    'token 与可复用组件都在运行时自动发现：新增 token 或 *.preview.tsx 就会出现在这里；组件清单区审计共享组件的复用度。',
   'designLab.tokens.autoNote':
     '清单由 :root 上实际存在的自定义属性自动枚举（按前缀分组）：新增一个 token 不需要改本页代码。',
   'designLab.tokens.colors': '颜色',
@@ -2206,6 +2209,54 @@ export const messages = {
   'designLab.groups.nav': '导航与状态',
   'designLab.groups.overlays': '弹窗与浮层',
   'designLab.groups.ui': '基础组件',
+  // 组件清单（q-design-lab-restore）：components/ui 复用度审计（构建期快照）
+  'designLab.inventory.title': '组件清单',
+  'designLab.inventory.subtitle':
+    '复用第一原则：新 UI 先查 components/ui 共享组件。单消费方 = 疑似一次性（应复用共享或退役候选）；零消费方 = 退役候选。',
+  'designLab.inventory.snapshotNote':
+    '数据为构建期快照（{commit}）：消费方计数不含样例；再生成运行 bun apps/web/scripts/gen-component-inventory.ts。',
+  'designLab.inventory.colComponent': '组件',
+  'designLab.inventory.colPurpose': '用途',
+  'designLab.inventory.colReuse': '复用度',
+  'designLab.inventory.colPreview': '预览',
+  'designLab.inventory.kind.component': '组件',
+  'designLab.inventory.kind.hook': 'Hook',
+  'designLab.inventory.kind.util': '工具',
+  'designLab.inventory.reexport': '转口 plugin-ui',
+  'designLab.inventory.flagZero': '退役候选',
+  'designLab.inventory.flagSingle': '疑似一次性',
+  'designLab.inventory.flagShared': '共享中',
+  'designLab.inventory.previewCovered': '{count} 个样例',
+  'designLab.inventory.previewMissing': '缺预览',
+  'designLab.inventory.total': '共 {count} 个',
+  'designLab.inventory.shared': '共享中 {count}',
+  'designLab.inventory.single': '单消费方 {count}',
+  'designLab.inventory.zero': '零消费方 {count}',
+  'designLab.inventory.noPreview': '缺预览 {count}',
+  'designLab.inventory.purpose.AutoGrowTextarea': '自动增高文本域（已被 RichComposer 取代）',
+  'designLab.inventory.purpose.Badge': '状态 / 标签徽标（tone 语义色）',
+  'designLab.inventory.purpose.Button': '统一按钮（variant / size）',
+  'designLab.inventory.purpose.CardShell': '卡片外壳（统一边框 / 背景 / 圆角）',
+  'designLab.inventory.purpose.CountBadge': '计数徽标（导航 / 列表角标）',
+  'designLab.inventory.purpose.DataTable': '语义数据表（排序 / 断点隐藏列）',
+  'designLab.inventory.purpose.EntityHeader': '实体页头（图标 / 标题 / 范围 / 动作）',
+  'designLab.inventory.purpose.Field': '表单字段（Input / Select / Textarea）',
+  'designLab.inventory.purpose.FilterPopover': '过滤浮层（表格列筛选）',
+  'designLab.inventory.purpose.Icon': '统一图标入口（名称 → SVG）',
+  'designLab.inventory.purpose.KeyValueList': '键值列表（详情展示）',
+  'designLab.inventory.purpose.MessageActions': '消息动作条（复制等）',
+  'designLab.inventory.purpose.MessageFold': '消息折叠 / 展开',
+  'designLab.inventory.purpose.RichComposer': '富输入器（提及 / 附件 / 原子块）',
+  'designLab.inventory.purpose.SearchInput': '搜索输入框',
+  'designLab.inventory.purpose.Section': '分区容器（标题 / 说明 / 动作）',
+  'designLab.inventory.purpose.SidebarShell': '侧栏壳（桌面侧栏 / 移动抽屉）',
+  'designLab.inventory.purpose.Stat': '统计数值卡',
+  'designLab.inventory.purpose.card-surface': '卡片表面样式常量',
+  'designLab.inventory.purpose.clipboard': '剪贴板写入工具',
+  'designLab.inventory.purpose.cn': '类名合并（clsx + tailwind-merge）',
+  'designLab.inventory.purpose.ghost-control': '幽灵控件样式常量',
+  'designLab.inventory.purpose.useEnteringItemKeys': '列表入场动画键 hook',
+  'designLab.inventory.purpose.useTypewriterText': '打字机文本 hook',
   'designLab.preview.actionMenu.archive': '归档（不可用）',
   'designLab.preview.actionMenu.delete': '删除',
   'designLab.preview.actionMenu.desc':
@@ -2257,6 +2308,30 @@ export const messages = {
   'designLab.preview.dataTable.desc':
     '行间 1px 间隙透出页面底色，整体小圆角；表头与末行的外角跟随圆角。',
   'designLab.preview.dataTable.title': 'DataTable',
+  'designLab.preview.cardShell.desc':
+    '静态内容卡的统一表面：header（状态/标题）→ 卡体 → footer（操作）。无 hover 抬起；可点列表卡走 card-surface。',
+  'designLab.preview.cardShell.sampleAction': '查看详情',
+  'designLab.preview.cardShell.sampleBody':
+    '异步作业卡 / 工具图片卡共用这一条 class 串与同一组槽位，避免各造一套表面样式漂移。',
+  'designLab.preview.cardShell.sampleStatus': '已完成',
+  'designLab.preview.cardShell.sampleTitle': '样例作业卡',
+  'designLab.preview.cardShell.title': 'CardShell',
+  'designLab.preview.filterPopover.desc':
+    '表头筛选：触发器 + 下拉面板，方向键导航；选项超过阈值（默认 8）时出搜索框。',
+  'designLab.preview.filterPopover.sampleLabel': '状态',
+  'designLab.preview.filterPopover.sampleSearch': '搜索选项',
+  'designLab.preview.filterPopover.title': 'FilterPopover',
+  'designLab.preview.messageFold.desc':
+    '超过阈值（--msg-fold-max-h）默认收起 + 底部渐隐 + 开合按钮；DOM 始终是全文（复制拿全文），流式中不折。',
+  'designLab.preview.messageFold.sample':
+    '这是一段用于演示折叠的长消息。它超过阈值高度，因此默认收起，底部渐隐，并出现「展开全文」按钮。\n\n折叠只改显示：max-height + overflow + mask，DOM 里始终是全文。复制按钮拿的是原文，鼠标手动选中也是同一份文本。\n\n流式输出期间不裁切、不出按钮——否则正文每长一段就折/展一次。溢出判定只看 scrollHeight：裁切状态下它仍是内容全高。\n\n阈值从 CSS 变量读（唯一来源），读不到时用与 tokens.css 同值的兜底。没有 ResizeObserver 时只按挂载时那一帧判定。\n\n会话页用户气泡与团队页气泡共用这一个组件与同一套 class——不要各自复制一份阈值或宽度口径。\n\n判定口径：有底色气泡包裹才折，纯正文不折。助手正文与卡片都不挂这个组件。\n\n再补一段让高度足够超过阈值：设计实验室的样例都是只读静态数据，不发任何 RPC，断连时也能看。\n\n最后一段：展开后按钮不会突然消失，也不会在展开/收起之间反复折。',
+  'designLab.preview.messageFold.title': 'MessageFold',
+  'designLab.preview.sidebarShell.desc':
+    '侧栏容器外壳：header（标题+动作）/ controls 行 / 可滚动 children；≤1023px 可选抽屉模式（本样例为普通列）。',
+  'designLab.preview.sidebarShell.sampleRow': '样例行 {index}',
+  'designLab.preview.sidebarShell.sampleSearch': '搜索会话',
+  'designLab.preview.sidebarShell.sampleTitle': '会话',
+  'designLab.preview.sidebarShell.title': 'SidebarShell',
   'designLab.preview.entityHeader.desc':
     '两个尺寸档并排：page = 22px 衬线（一屏唯一的 h1），panel = 16px 无衬线（面板标题）。改尺寸只碰字号与字族、不碰颜色；祖先永远更小更暗。',
   'designLab.preview.entityHeader.sampleAction': '返回',
