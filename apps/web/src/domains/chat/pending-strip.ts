@@ -67,8 +67,9 @@ export interface PendingStripEntry {
    */
   from_name?: string;
   /**
-   * 异步作业占位元数据（q-async-bash-viz additive，kind 无关）：有它 = 异步作业卡，条带用
-   * 专属渲染（AsyncJobCard 按 kind 分派）而非通用排队卡。缺省 = 普通消息。折叠 / 排序不看它。
+   * 异步作业占位元数据（q-async-bash-viz additive，kind 无关）：running 占位走专属沉底卡
+   * （AsyncJobCard 按 kind 分派）；done/failed 已返回 = 同步消息，走通用排队卡路径
+   * （q-bash-inbox-integrate）。缺省 = 普通消息。折叠 / 排序不看它。
    */
   async_job?: {
     job_id: string;

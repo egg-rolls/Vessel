@@ -156,8 +156,8 @@ export interface AgentInboxEntry {
   text?: string;
   /**
    * 异步作业占位回调元数据（q-async-bash-viz additive，kind 无关）：有它 = 这是一条异步作业卡。
-   * running 占位（不可消费 / 沉底）；done/failed 转可消费。渲染层按 kind 分派专属卡
-   * （AsyncJobCard）：bash→科技蓝命令卡 + log tail；ask→未来问题卡。缺省 = 普通消息。
+   * running 占位（不可消费 / 沉底，专属 AsyncJobCard）；done/failed 转可消费，回归通用
+   * 同步卡路径（计数 / 认领复用，q-bash-inbox-integrate）。缺省 = 普通消息。
    */
   async_job?: {
     job_id: string;
