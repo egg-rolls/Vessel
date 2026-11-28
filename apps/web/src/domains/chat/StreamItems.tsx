@@ -34,6 +34,8 @@ import {
 } from './env-notice';
 import { humanizeRunError } from './error-text';
 import { MessageRefs } from './MessageRefs';
+import { QuoteBlock } from './QuoteBlock';
+import { liftQuoteForDisplay } from './quote-ref';
 import { ReasoningBlock } from './ReasoningBlock';
 import { StreamCard } from './StreamCard';
 import { ToolCard } from './ToolCard';
@@ -129,6 +131,7 @@ export function AssistantText({
   streaming = false,
   actions,
   entering = false,
+  onJumpQuote,
 }: {
   text: string;
   /** 仍在流式收字：节流 + 未闭合块的保守降级（见 components/Markdown.tsx）。 */
@@ -140,11 +143,17 @@ export function AssistantText({
   actions?: ReactNode;
   /** 本帧才追加进来的项：入场只播一次（判定见 `TranscriptWindow.tsx` 的 `useEnteringItems`）。 */
   entering?: boolean;
+  /** 引用块点击跳转原消息（q-message-quote）；缺省引用块纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   // 首帧定格一次「这段正文怎么出现」（惰性初值只跑挂载那一次）：流式出现的走块级
   // `.motion-stream`，整段出现的走段级 `.msg-enter`。两者不同时生效，也不随 streaming
   // 翻转改判 —— 否则 run 结束时才补上的 `.msg-enter` 会迟到地播一次。
   const [reveal] = useState(() => (streaming ? 'stream' : entering ? 'enter' : 'none'));
+  // 消息引用（q-message-quote）：AI 回复开头的信封提升成轻量引用块（双向同形）。
+  // 流式期信封未收全时解析返回 null，正文原样渲染；收全后自然提升。
+  const lifted = liftQuoteForDisplay(text);
+  const body = lifted !== null ? lifted.body : text;
   return (
     <div
       className={cn(
@@ -160,7 +169,10 @@ export function AssistantText({
         reveal === 'stream' && streaming && 'motion-stream',
       )}
     >
-      <Markdown className="msg-text" text={text} streaming={streaming} />
+      {lifted !== null && (
+        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
+      )}
+      <Markdown className="msg-text" text={body} streaming={streaming} />
       {actions}
     </div>
   );
@@ -192,6 +204,7 @@ export function UserBubble({
   ts,
   entering = false,
   refs,
+  onJumpQuote,
 }: {
   text: string;
   ts?: number;
@@ -199,8 +212,13 @@ export function UserBubble({
   entering?: boolean;
   /** 附件引用（只有路径）：气泡上方一行 chip，与落盘后的历史气泡同一组件。 */
   refs?: readonly MessageRef[];
+  /** 引用块点击跳转原消息（q-message-quote）；缺省引用块纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   const clock = formatClock(ts);
+  // 消息引用（q-message-quote）：信封提升成气泡上方的轻量引用块，与历史气泡同形。
+  const lifted = liftQuoteForDisplay(text);
+  const body = lifted !== null ? lifted.body : text;
   return (
     <div
       className={cn(
@@ -208,11 +226,14 @@ export function UserBubble({
         entering && 'msg-enter',
       )}
     >
+      {lifted !== null && (
+        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
+      )}
       <MessageRefs refs={refs} />
       <div className="msg-bubble">
         {/* 长气泡折叠与会话页历史气泡、团队页气泡同一套（见 MessageFold）。
             只有这种**有底色气泡**（`.msg-bubble`）才折；无底正文（助手）不折。 */}
-        <MessageFold>{text}</MessageFold>
+        <MessageFold>{body}</MessageFold>
       </div>
       {/* 与落盘后的用户气泡同一套：时间在 hover 元信息位，不在气泡里。 */}
       <MessageActions

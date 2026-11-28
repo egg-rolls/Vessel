@@ -31,17 +31,22 @@
 
 import { t } from '../../i18n';
 import type { PendingSend } from './pending-sends';
+import { QuoteBlock } from './QuoteBlock';
+import { liftQuoteForDisplay } from './quote-ref';
 
 export function PendingBubble({
   pending,
   onRetry,
   onDismiss,
+  onJumpQuote,
 }: {
   pending: PendingSend;
   /** 重试：**复用同一条 pending**（同一个 id），不是新开一条。 */
   onRetry?: (pending: PendingSend) => void;
   /** 删除：这条从屏上消失（服务端没收到任何东西，不会留孤儿）。 */
   onDismiss?: (pending: PendingSend) => void;
+  /** 引用块点击跳转原消息（q-message-quote）；缺省引用块纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   const failed = pending.state === 'failed';
   // 组装冲突解决（0.56）：两侧各有对方没有的东西，合并保留两者。
@@ -61,9 +66,15 @@ export function PendingBubble({
     pending.state === 'queued' || pending.state === 'deferred'
       ? Math.floor((Date.now() - pending.createdAt) / 60_000)
       : 0;
+  // 消息引用（q-message-quote）：发送文本里的信封提升成引用块，与落盘后的气泡同形。
+  const lifted = liftQuoteForDisplay(pending.text);
+  const body = lifted !== null ? lifted.body : pending.text;
   return (
     <div className="msg-user msg-pending msg-enter">
-      <div className="msg-bubble msg-pending-bubble">{pending.text}</div>
+      {lifted !== null && (
+        <QuoteBlock messageId={lifted.messageId} snippet={lifted.snippet} onJump={onJumpQuote} />
+      )}
+      <div className="msg-bubble msg-pending-bubble">{body}</div>
       <div className="msg-pending-meta">
         {failed ? (
           <>

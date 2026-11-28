@@ -45,6 +45,24 @@ export interface ComposerSessionRef {
   readonly node?: string;
 }
 
+/**
+ * 消息引用（q-message-quote：hover 工具栏「引用」→ 输入框顶部预览条）。
+ *
+ * 与会话引用同族：`runs.start` 没有结构化消息引用字段（refs 是文件附件通道），
+ * 发送时序列化为轻量引用块前置进正文（`domains/chat/quote-ref.ts`），接收 agent
+ * 直接读到「引用了哪条消息（message_id）+ 原文摘要」。单槽只持一条引用：
+ * 引用是「回复哪一句」的指向，多条指向会稀释语义（多引用是可选扩展，不在 v1）。
+ * `messageId` 缺省 = 被引消息没有稳定身份（旧数据）：引用块仍可渲染，只是不能跳转。
+ */
+export interface ComposerQuote {
+  /** 被引消息的稳定身份（`Message.message_id`）；旧数据缺失时不可跳转。 */
+  readonly messageId?: string;
+  /** 原文轻量摘要（≤120 字，空白折叠；截断带 …）。不是全文。 */
+  readonly snippet: string;
+  /** 被引消息角色：预览条 / 引用块的来源标识。 */
+  readonly source: 'user' | 'assistant';
+}
+
 export interface ComposerDraft {
   readonly text: string;
   readonly chips: readonly ComposerChip[];
@@ -58,6 +76,11 @@ export interface ComposerDraft {
    * 不增加信息，只渲染一个 chip。顺序即发送顺序。
    */
   readonly sessionRefs: readonly ComposerSessionRef[];
+  /**
+   * 待发送的消息引用（q-message-quote）。单条；发送时序列化为引用块前置进正文，
+   * 与草稿同生命周期（发送成功清空 / 刷新恢复）。
+   */
+  readonly quote?: ComposerQuote;
 }
 
 export const EMPTY_CHIPS: readonly ComposerChip[] = Object.freeze([]);
@@ -106,6 +129,8 @@ interface PersistedSlot {
   refs?: MessageRef[];
   /** 待发送会话引用（基础链展示值）；没有时不写该键。v2 内的 additive 字段，旧副本缺失按空。 */
   sessionRefs?: ComposerSessionRef[];
+  /** 待发送消息引用（q-message-quote）；没有时不写该键。v2 内的 additive 字段。 */
+  quote?: ComposerQuote;
 }
 
 /** 落盘形状：数组顺序 = 由旧到新（淘汰直接切头部）。 */
@@ -176,6 +201,7 @@ function collectSlots(): PersistedSlot[] {
       ...(draft.sessionRefs.length > 0
         ? { sessionRefs: draft.sessionRefs.map((ref) => ({ ...ref })) }
         : {}),
+      ...(draft.quote !== undefined ? { quote: { ...draft.quote } } : {}),
     });
   }
   slots.sort((a, b) => (recency.get(a.key) ?? 0) - (recency.get(b.key) ?? 0));
@@ -240,6 +266,26 @@ function parseSessionRefs(value: unknown): ComposerSessionRef[] {
   return refs;
 }
 
+/**
+ * 宽松解析消息引用（q-message-quote）：`snippet` 必须是非空字符串，`source` 只认
+ * user / assistant；`messageId` 可选（旧数据没有稳定身份）。形状不对整条丢弃。
+ * snippet 上限是落盘防御（写侧摘要 ≤120 字，见 domains/chat/quote-ref.ts）。
+ */
+function parseQuote(value: unknown): ComposerQuote | undefined {
+  if (!isRecord(value)) return undefined;
+  const { snippet, source } = value;
+  if (typeof snippet !== 'string' || snippet.length === 0 || snippet.length > 160) return undefined;
+  if (source !== 'user' && source !== 'assistant') return undefined;
+  const quote: { snippet: string; source: 'user' | 'assistant'; messageId?: string } = {
+    snippet,
+    source,
+  };
+  if (typeof value.messageId === 'string' && value.messageId.length > 0) {
+    quote.messageId = value.messageId;
+  }
+  return quote;
+}
+
 function parseChips(value: unknown): ComposerChip[] {
   if (!Array.isArray(value)) return [];
   const chips: ComposerChip[] = [];
@@ -274,6 +320,7 @@ function parseDrafts(raw: string | null): Record<string, ComposerDraft> | null {
       chips: parseChips(slot.chips),
       refs: parseRefs(slot.refs),
       sessionRefs: parseSessionRefs(slot.sessionRefs),
+      quote: parseQuote(slot.quote),
     };
     if (isEmpty(draft)) continue;
     drafts[key] = draft;
@@ -379,6 +426,11 @@ interface ComposerDraftState {
   addSessionRef: (key: string, ref: ComposerSessionRef) => boolean;
   /** 删一条会话引用（下标即 sessionRefs 里的位置）。 */
   removeSessionRef: (key: string, index: number) => void;
+  /**
+   * 写待发送的消息引用（q-message-quote；整条替换，`undefined` = 取消引用）。
+   * 单槽一条：引用是「回复哪一句」的指向，新引用直接顶替旧的。
+   */
+  setQuote: (key: string, quote: ComposerQuote | undefined) => void;
   /** 发送成功后清空该 key（正文、chips 与引用一起）。 */
   clear: (key: string) => void;
 }
@@ -388,7 +440,8 @@ function isEmpty(draft: ComposerDraft): boolean {
     draft.text.length === 0 &&
     draft.chips.length === 0 &&
     draft.refs.length === 0 &&
-    draft.sessionRefs.length === 0
+    draft.sessionRefs.length === 0 &&
+    draft.quote === undefined
   );
 }
 
@@ -419,6 +472,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: current.refs,
       sessionRefs: current.sessionRefs,
+      quote: current.quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -434,6 +488,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips,
       refs: current.refs,
       sessionRefs: current.sessionRefs,
+      quote: current.quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -450,6 +505,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: capped,
       sessionRefs: current.sessionRefs,
+      quote: current.quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -466,6 +522,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: [...current.refs, ref],
       sessionRefs: current.sessionRefs,
+      quote: current.quote,
     });
     set({ drafts });
     markTouched(key);
@@ -484,6 +541,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs,
       sessionRefs: current.sessionRefs,
+      quote: current.quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -500,6 +558,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: current.refs,
       sessionRefs: capped,
+      quote: current.quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -517,6 +576,7 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: current.refs,
       sessionRefs: [...current.sessionRefs, ref],
+      quote: current.quote,
     });
     set({ drafts });
     markTouched(key);
@@ -535,6 +595,34 @@ export const useComposerDraftStore = create<ComposerDraftState>()((set, get) => 
       chips: current.chips,
       refs: current.refs,
       sessionRefs,
+      quote: current.quote,
+    });
+    set({ drafts });
+    if (drafts[key] === undefined) forget(key);
+    else markTouched(key);
+    schedulePersist();
+  },
+
+  setQuote: (key, quote) => {
+    ensureHydrated();
+    const current = get().drafts[key] ?? EMPTY_DRAFT;
+    // 同值写入不写 state（与 setText 同一口径）：重复点同一条消息的「引用」不触发重渲染。
+    if (
+      current.quote === quote ||
+      (current.quote !== undefined &&
+        quote !== undefined &&
+        current.quote.messageId === quote.messageId &&
+        current.quote.snippet === quote.snippet &&
+        current.quote.source === quote.source)
+    ) {
+      return;
+    }
+    const drafts = withDraft(get().drafts, key, {
+      text: current.text,
+      chips: current.chips,
+      refs: current.refs,
+      sessionRefs: current.sessionRefs,
+      quote,
     });
     set({ drafts });
     if (drafts[key] === undefined) forget(key);
@@ -590,6 +678,12 @@ export function useComposerSessionRefs(key: string): readonly ComposerSessionRef
 /** 会话引用条数上限（与 `addSessionRef` / 落盘解析共用一份）。 */
 export const MAX_COMPOSER_SESSION_REFS = MAX_DRAFT_SESSION_REFS;
 
+/** 读 key 的待发送消息引用；未命中回退 undefined（原始值，引用天然稳定）。 */
+export function useComposerQuote(key: string): ComposerQuote | undefined {
+  ensureHydrated();
+  return useComposerDraftStore((state) => state.drafts[key]?.quote);
+}
+
 /**
  * 把草稿态（`chat:new`）的正文继承给目标会话槽。
  *
@@ -619,6 +713,11 @@ export function adoptNewChatDraft(sessionId: string): void {
     (drafts[targetKey]?.sessionRefs ?? EMPTY_SESSION_REFS).length === 0
   ) {
     setSessionRefs(targetKey, sessionRefs);
+  }
+  // 消息引用同理：草稿态点的「引用」跟正文一起搬（目标槽已有时不覆盖）。
+  const quote = source?.quote;
+  if (quote !== undefined && drafts[targetKey]?.quote === undefined) {
+    useComposerDraftStore.getState().setQuote(targetKey, quote);
   }
   clear(NEW_CHAT_DRAFT_KEY);
 }

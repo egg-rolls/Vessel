@@ -4,6 +4,7 @@ import { Tooltip } from '../../components/Tooltip';
 import { Button, parseSegments, RichComposer, type RichComposerHandle } from '../../components/ui';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
+import type { ComposerQuote } from '../../stores/composerDraftStore';
 import { useComposerExtensions } from '../plugins/composer-extensions';
 import type { AttachBrowseClient } from './AttachDialog';
 import { ChatDock } from './ChatDock';
@@ -18,6 +19,7 @@ import {
   refsToAttachmentsFiltered,
 } from './ComposerChrome';
 import { MemberModelSwitch, type MemberModelSwitchProps } from './MemberModelSwitch';
+import { ComposerQuoteBar } from './QuoteBlock';
 import {
   parseSessionRefPayload,
   SESSION_REF_MIME,
@@ -62,6 +64,9 @@ export function Composer({
   onAddSessionRef,
   currentScope,
   sessionId,
+  quote,
+  onRemoveQuote,
+  onJumpQuote,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -117,6 +122,15 @@ export function Composer({
   currentScope?: SessionRefScope;
   /** 当前会话 id（P3 思考强度菜单 sessionScoped write）；缺省（草稿态）按全局默认。 */
   sessionId?: string;
+  /**
+   * 待发送的消息引用（q-message-quote：hover 工具栏「引用」产生；草稿槽持有）。
+   * 缺省时不渲染引用预览条。
+   */
+  quote?: ComposerQuote;
+  /** 取消引用（预览条 ×）；只清引用，不动正文。 */
+  onRemoveQuote?: () => void;
+  /** 引用预览条点击跳转原消息；缺省条身纯展示。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   const inputRef = useRef<RichComposerHandle | null>(null);
   const mountedRef = useRef(true);
@@ -294,6 +308,11 @@ export function Composer({
             </span>
           </span>
         </div>
+        {/* 引用预览条（q-message-quote）：在引用 chip 行之上 —— 先「回复哪一句」，
+            再「带了什么」。× 取消只清引用；条身可点跳转原消息。 */}
+        {quote !== undefined && onRemoveQuote !== undefined && (
+          <ComposerQuoteBar quote={quote} onRemove={onRemoveQuote} onJump={onJumpQuote} />
+        )}
         <ComposerRefsArea
           className="composer-refs-row"
           items={refItems}

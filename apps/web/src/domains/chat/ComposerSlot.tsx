@@ -2,6 +2,7 @@ import { MessageBar, type MessageBarItem } from '../../components/MessageBar';
 import type { PendingFetchState } from '../../gateway/interaction-hydration';
 import type { AskUserAnswer, MessageRef, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
+import type { ComposerQuote } from '../../stores/composerDraftStore';
 import type { AttachBrowseClient } from './AttachDialog';
 import { Composer } from './Composer';
 import type { ComposerContextUsage } from './ComposerChrome';
@@ -74,6 +75,9 @@ export function ComposerSlot({
   onRemoveSessionRef,
   onAddSessionRef,
   currentScope,
+  quote,
+  onRemoveQuote,
+  onJumpQuote,
 }: {
   pendingItem: PendingQueueItem | null;
   pendingItems: readonly PendingQueueItem[];
@@ -118,6 +122,12 @@ export function ComposerSlot({
   onAddSessionRef?: (chip: SessionRefChip) => boolean;
   /** 渐进披露基准（当前会话节点 / 团队）；透传给 Composer。 */
   currentScope?: SessionRefScope;
+  /** 待发送的消息引用（q-message-quote）；透传给 Composer 预览条。 */
+  quote?: ComposerQuote;
+  /** 取消引用（预览条 ×）；透传给 Composer。 */
+  onRemoveQuote?: () => void;
+  /** 引用预览条点击跳转原消息；透传给 Composer。 */
+  onJumpQuote?: (messageId: string) => void;
 }) {
   // 提示条在**三种槽位之上**：权限卡 / ask 卡 / 输入框。拉不到 pending 时正是这三种
   // 都可能「什么都没有」的时刻，提示必须跟着槽位一起在。
@@ -178,6 +188,9 @@ export function ComposerSlot({
         onAddSessionRef={onAddSessionRef}
         currentScope={currentScope}
         sessionId={sessionId}
+        quote={quote}
+        onRemoveQuote={onRemoveQuote}
+        onJumpQuote={onJumpQuote}
       />
     );
 

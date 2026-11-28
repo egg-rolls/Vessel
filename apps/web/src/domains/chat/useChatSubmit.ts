@@ -7,11 +7,13 @@ import type { TeamControl } from '../../gateway/team-control';
 import type { MessageRef } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
+  type ComposerQuote,
   chatDraftKey,
   MAX_COMPOSER_REFS,
   MAX_COMPOSER_SESSION_REFS,
   useComposerDraftStore,
   useComposerDraftText,
+  useComposerQuote,
   useComposerRefs,
   useComposerSessionRefs,
 } from '../../stores/composerDraftStore';
@@ -20,6 +22,7 @@ import { ATTACH_PATH_MAX } from './attach-paths';
 import { errorMessage } from './errors';
 import { type StartInNewAgentResult, startInNewAgent } from './new-session';
 import { pendingSends } from './pending-sends';
+import { composeQuoteText, type QuotableMessage, quoteOfMessage } from './quote-ref';
 import { refsErrorText } from './refs-error';
 import { composeSessionRefText, type SessionRefChip } from './session-ref';
 
@@ -42,6 +45,16 @@ function sameSessionRefs(
     const other = right[index];
     return other !== undefined && other.sessionId === ref.sessionId;
   });
+}
+
+/** 两条消息引用是否同一指向（id + 摘要 + 来源；发送期间被顶替的那条不该被顺手清掉）。 */
+function sameQuote(left: ComposerQuote | undefined, right: ComposerQuote | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return (
+    left.messageId === right.messageId &&
+    left.snippet === right.snippet &&
+    left.source === right.source
+  );
 }
 
 export interface UseChatSubmitOptions {
@@ -88,8 +101,11 @@ export function useChatSubmit({
   const refs = useComposerRefs(draftKey);
   /** 待发送的会话引用（拖拽会话卡产生；与草稿同槽、同生命周期）。 */
   const sessionRefs = useComposerSessionRefs(draftKey);
+  /** 待发送的消息引用（q-message-quote；与草稿同槽、同生命周期）。 */
+  const quote = useComposerQuote(draftKey);
   const setRefs = useComposerDraftStore((state) => state.setRefs);
   const setSessionRefs = useComposerDraftStore((state) => state.setSessionRefs);
+  const setQuote = useComposerDraftStore((state) => state.setQuote);
   const writeDraft = useComposerDraftStore((state) => state.setText);
   // 读和写共用 `chatDraftKey`：key 只由「当前会话」决定，不再看 `window.location.hash`。
   // 早先写入按实时 hash 定位（为了 edit / 重发回填），于是 `navigate()` 与 `hashchange`
@@ -123,6 +139,8 @@ export function useChatSubmit({
    * `sessionRefsOverride` 是待发送的会话引用：序列化为可读引用块前置进正文
    * （`composeSessionRefText`）；重试路径不传 —— 失败气泡的正文已含引用块，
    * 原样重发即可，不会叠第二层。
+   * `quoteOverride` 同理（q-message-quote）：消息引用信封前置进正文；重试路径
+   * 不传（正文已含信封）。
    * 返回是否成功发起，供调用方决定是否给出「已重新发起」之类反馈。
    */
   const submitText = async (
@@ -131,6 +149,7 @@ export function useChatSubmit({
     refsOverride?: readonly MessageRef[],
     pendingId?: string,
     sessionRefsOverride?: readonly SessionRefChip[],
+    quoteOverride?: ComposerQuote,
   ): Promise<boolean> => {
     const trimmed = raw.trim();
     if (!trimmed || submitting || !connected) return false;
@@ -140,7 +159,13 @@ export function useChatSubmit({
     // 会话引用同样快照；发送文本 = 可读引用块 + 正文（接收 agent 直接读全量基础链）。
     // 引用块不是用户草稿的一部分：下方草稿清空守卫仍比较 trimmed（原文）。
     const submittedSessionRefs = sessionRefsOverride ?? [];
-    const text = composeSessionRefText(trimmed, submittedSessionRefs);
+    // 消息引用（q-message-quote）：信封在最外层（先「回复哪一句」，再会话引用块）。
+    // AI 侧读到的结构化引用块 = 信封（id + ≤120 字摘要），轻量、不重复全文。
+    const submittedQuote = quoteOverride;
+    const text = composeQuoteText(
+      composeSessionRefText(trimmed, submittedSessionRefs),
+      submittedQuote,
+    );
     // 源槽在 await 之前取：发送期间用户可能已经切走会话。
     // key 与读取同源（`chatDraftKey`）：普通发送 = 当前会话；edit / 重试的正文是
     // `setInputForSession(nextSessionId, …)` 回填到目标会话槽的，清空的也是那一槽。
@@ -226,6 +251,11 @@ export function useChatSubmit({
         const current = useComposerDraftStore.getState().drafts[sourceKey]?.sessionRefs ?? [];
         if (sameSessionRefs(current, submittedSessionRefs)) setSessionRefs(sourceKey, []);
       }
+      // 消息引用同一口径：发送期间被顶替 / 取消的那条不被这次发送顺手抹掉。
+      if (submittedQuote !== undefined) {
+        const current = useComposerDraftStore.getState().drafts[sourceKey]?.quote;
+        if (sameQuote(current, submittedQuote)) setQuote(sourceKey, undefined);
+      }
       if (!targetSessionId) navigate({ domain: 'chat', sessionId: nextSessionId });
       // 排队态不在客户端记账：条带读 `agents.inbox`（按 session_id 过滤），这里只给反馈。
       if (run.status === 'queued') toast.info(t('chat.toast.queued'));
@@ -259,7 +289,7 @@ export function useChatSubmit({
   };
 
   const handleSend = async () => {
-    await submitText(input, undefined, refs, undefined, sessionRefs);
+    await submitText(input, undefined, refs, undefined, sessionRefs, quote);
   };
 
   /**
@@ -323,6 +353,25 @@ export function useChatSubmit({
     },
     [selectedId],
   );
+
+  /**
+   * 引用一条消息（q-message-quote：hover 工具栏「引用」的落点）。
+   * 只写草稿槽（预览条随之出现），不发送；空正文的消息没有可引用的内容，静默跳过。
+   * 单槽一条：新引用直接顶替旧的（store 同一口径）。
+   */
+  const quoteMessage = useCallback(
+    (message: QuotableMessage) => {
+      const next = quoteOfMessage(message);
+      if (next === undefined) return;
+      useComposerDraftStore.getState().setQuote(chatDraftKey(selectedId), next);
+    },
+    [selectedId],
+  );
+
+  /** 取消引用（预览条 ×）：只清引用，不动正文。 */
+  const removeQuote = useCallback(() => {
+    useComposerDraftStore.getState().setQuote(chatDraftKey(selectedId), undefined);
+  }, [selectedId]);
 
   /** 重试：把用户内容提交到指定 session（默认当前会话）。 */
   const handleRetry = async (text: string, sessionId?: string) => {
@@ -394,6 +443,11 @@ export function useChatSubmit({
     /** 加 / 删一条会话引用（加的时候去重 + 条数上限）。 */
     addSessionRef,
     removeSessionRef,
+    /** 待发送的消息引用（q-message-quote；按会话键存，与草稿同族）。 */
+    quote,
+    /** 引用一条消息 / 取消引用（hover 工具栏与预览条 × 的落点）。 */
+    quoteMessage,
+    removeQuote,
     /** 发送受理序号（每次受理自增）：交给 `useStickyBottom({ sendTick })` 做发送即贴底。 */
     sendTick,
     cancelling,
