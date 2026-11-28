@@ -10,7 +10,7 @@
  *
  * 语义（D11）：stop 段复用各组件共享接缝（stopGateway，默认优雅不限时 + 进度，
  * --force 传播）；**stop 未全成 → 不 start**（防双跑/端口冲突），如实报告 + 提示
- * --force 升级。start 段复用既有 daemon start 接缝（startDaemonCommand / node daemon），
+ * --force 升级。start 段收敛到 startFleetCommand 共享接缝（T3；targets 停前快照），
  * 不新造 start 面（start/ps 命令面归 q-cli-ps）。确认一次覆盖 stop+start（S3 规则）。
  *
  * 舰队边界（§3）：清点/操作严格限本舰队 dataDir；跨舰队恒走显式 --user-config/--data-dir。
@@ -53,10 +53,10 @@ import {
   type GatewayCommandDeps,
   probeHttpHealth,
   resolveGatewayTargets,
-  startDaemonCommand,
   stopGateway,
 } from '../gateway/gateway-command';
 import { nodeRestartCommand } from '../node-command';
+import { startFleetCommand } from './start-command';
 
 /** 冻结签名；接线方 = src/cli/registry.ts。 */
 export interface RestartFleetOptions extends GatewayCommandDeps {
@@ -245,25 +245,16 @@ async function restartInstances(input: {
     }
   }
 
-  // ── start 段：复用既有 daemon start 接缝（不新造 start 面）。──
-  let failed = false;
-  if (previous.length === 0) {
-    // 本无运行实例：按缺省实例启动（与 gateway start 缺省同口径）。
-    const code = await startDaemonCommand({ ...deps });
-    if (code !== 0) failed = true;
-  } else {
-    for (const target of previous) {
-      print(ui.info(t('restart.starting', { instance: target.instance })));
-      const code = await startDaemonCommand({
-        ...deps,
-        instance: target.instance,
-        ...(target.port !== undefined ? { port: target.port } : {}),
-        ...(target.host !== undefined ? { host: target.host } : {}),
-      });
-      if (code !== 0) failed = true;
-    }
+  // ── start 段：收敛到 startFleetCommand 共享接缝（T3；targets = 停前快照原样恢复）。──
+  for (const target of previous) {
+    print(ui.info(t('restart.starting', { instance: target.instance })));
   }
-  if (failed) {
+  const startCode = await startFleetCommand({
+    ...deps,
+    // 本无运行实例：按缺省实例启动（与 gateway start 缺省同口径）。
+    ...(previous.length > 0 ? { targets: previous } : { selector: { all: true } }),
+  });
+  if (startCode !== 0) {
     printErr(ui.err(t('restart.failed')));
     return 1;
   }
@@ -653,19 +644,13 @@ async function restartOrchestrateCommand(input: RestartOrchestrateInput): Promis
     print: (line) => print(ui.warn(line)),
   });
 
-  // ── start：复用既有 daemon start 接缝（原实例/端口恢复）。──
-  let failed = false;
+  // ── start：收敛到 startFleetCommand 共享接缝（T3；原实例/端口恢复）。
+  // R-5③ 预检（上）与 R-3 健康确认（下）保留在编排路径（D-7）。──
   for (const target of handoff.targets) {
     print(ui.info(`self-restart orchestrator: starting ${target.instance}`));
-    const code = await startDaemonCommand({
-      ...deps,
-      instance: target.instance,
-      ...(target.port !== undefined ? { port: target.port } : {}),
-      ...(target.host !== undefined ? { host: target.host } : {}),
-    });
-    if (code !== 0) failed = true;
   }
-  if (failed) {
+  const startCode = await startFleetCommand({ ...deps, targets: handoff.targets });
+  if (startCode !== 0) {
     await clearSelfRestartHandoff(handoffDir);
     printErr(ui.err('self-restart orchestrator: start failed (see instance logs)'));
     return 1;

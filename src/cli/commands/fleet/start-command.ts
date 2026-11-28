@@ -154,14 +154,15 @@ export async function startFleetCommand(options: StartFleetOptions = {}): Promis
       ...(execPath !== undefined ? { execPath } : {}),
       ...(timeoutMs !== undefined ? { waitMs: timeoutMs } : {}),
     });
-    // 健康确认拍：重读状态（单读入口同口径）；already_running 竞态归一 skipped。
-    const after = await collect(dataDir, collectOptions);
-    const afterEntry = after.entries.find((candidate) => candidate.instance === target.instance);
-    if (afterEntry?.state === 'running') {
-      if (code === 0) started += 1;
-      else skipped += 1;
+    // 健康确认拍：接缝内部等待已覆盖 readiness（code 0 = 就绪，信任接缝——
+    // 与收敛前 restart 同口径）；非 0 时重读状态，already_running 竞态归一 skipped。
+    if (code === 0) {
+      started += 1;
     } else {
-      failed += 1;
+      const after = await collect(dataDir, collectOptions);
+      const afterEntry = after.entries.find((candidate) => candidate.instance === target.instance);
+      if (afterEntry?.state === 'running') skipped += 1;
+      else failed += 1;
     }
   }
   print(ui.info(t('start.done', { started, skipped, failed })));
