@@ -16,8 +16,8 @@ import {
   type Document,
   isMap,
   isScalar,
-  parse as parseYaml,
   parseDocument,
+  parse as parseYaml,
   stringify as stringifyYaml,
   type YAMLMap,
 } from 'yaml';
@@ -125,8 +125,10 @@ async function renderPreservingComments(
   if (doc.errors.length > 0) return null;
   if (doc.contents === null || doc.contents === undefined) {
     // 空文档（可能只有注释）：建空 map 再对账，文档级注释保留。
-    doc.contents = doc.createNode({});
-    reconcileMap(doc, doc.contents as YAMLMap, root, {});
+    // createNode 返回 Created 型（range 可缺），contents 需 Parsed 型，此处断言桥接。
+    const empty = doc.createNode({}) as YAMLMap.Parsed;
+    doc.contents = empty;
+    reconcileMap(doc, empty, root, {});
     return doc.toString({ lineWidth: 0 });
   }
   if (!isMap(doc.contents)) return null;
