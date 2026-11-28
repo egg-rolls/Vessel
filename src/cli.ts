@@ -1303,6 +1303,9 @@ async function runWithConfig(result: BootstrapResult) {
               loader: gatewayBundle.pluginLoader,
               excludePlugins: MCP_FACTORY_PLUGINS,
               fresh: true,
+              // q-subscription-script：采纳的新实例 liveConfig 读 cli 活配置（与
+              // bootstrap getLiveConfig 同源）；成员持旧 hook 引用也经它读活配置。
+              getLiveConfig: () => liveConfig,
             });
           },
           managed: {

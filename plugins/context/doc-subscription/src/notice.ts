@@ -35,6 +35,16 @@ export const SUBSCRIPTION_NOTICE_SCOPE = 'files';
 export const HEALTH_NOTICE_SCOPE = 'health';
 
 /**
+ * 环境信息的 scope 词：订阅脚本检测结果（q-subscription-script，additive）。
+ *
+ * 与 `files` / `health` 同一形状（首行 `scope: 摘要` + `  · ` 明细行），Web 环境卡认得它，
+ * 卡头标签是「订阅脚本」。词表对拍范围同 files：agent `ENV_INFO_SCOPES` /
+ * config `DEFAULT_ENV_CADENCE` / Web 词表（R-10 派生）+ i18n `chat.env.scope.script`。
+ * 通用兜底词（案 B 注册制）：任意用户脚本共享本词；内置专词 doc-lag / code-heaviness P1 加。
+ */
+export const SCRIPT_NOTICE_SCOPE = 'script';
+
+/**
  * 明细行标记：两个空格 + `·`。
  *
  * 必须与 `packages/agent/src/env-info-scope.ts` 的 `ENV_INFO_DETAIL_MARK` 逐字相同，也要与
@@ -192,4 +202,67 @@ export function formatHealthNotice(nodes: readonly string[], total: number): str
   }
   details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}${HEALTH_INSPECT_HINT}`);
   return [`${HEALTH_NOTICE_SCOPE}: ${total} subscribed nodes changed`, ...details].join('\n');
+}
+
+/** script 明细里的调用提示（英文：面向模型，与其它运行时上下文同口径）。 */
+const SCRIPT_INSPECT_HINT =
+  'Call subscribe with action "inspect" and the name to view the full output.';
+
+/** 一个脚本变化的通知素材（hook 组装；线格式交给 formatScriptNotice） */
+export interface ScriptNoticeEntry {
+  /** 订阅名（单脚本摘要用） */
+  name: string;
+  /** 元数据行（`<script name="…" exit="…" bytes="…" change="…" />`） */
+  metaLine: string;
+  /** 内容行（diff / full 的 stdout 行，不带明细前缀；缺省 = 纯元数据） */
+  contentLines?: readonly string[];
+  /** 内容行字节预算（config.maxTotalBytesPerRun） */
+  maxBytes: number;
+}
+
+/**
+ * 一批脚本变化 → 一条 script 通知正文（首行 `script: …`，之后每行 `  · …`）。
+ * 线格式与 files / health 同形（Web 同一张环境卡，scope 决定卡头标签）；
+ * 多订阅同 run 都有变化 ⇒ 一条消息多明细行（同 scope 折叠），不每订阅一张卡。
+ *
+ * 行预算同口径：元数据 ≤8 + 溢出概括 + inspect 提示 + 首行 ≤ 11 行；内容行只跟
+ * **第一个**带内容的条目（files line-level 先例），行/字节预算经 fitDiffContentLines。
+ */
+export function formatScriptNotice(entries: readonly ScriptNoticeEntry[], total: number): string {
+  const kept = entries.slice(0, SUBSCRIPTION_NOTICE_DETAILS_MAX);
+  const dropped = total - kept.length;
+  const details = kept.map((entry) => `${SUBSCRIPTION_NOTICE_DETAIL_MARK}${entry.metaLine}`);
+  if (dropped > 0) {
+    details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}… and ${dropped} more`);
+  }
+  let contentLines: string[] = [];
+  let insertAt = -1;
+  for (let i = 0; i < kept.length; i += 1) {
+    const entry = kept[i];
+    if (
+      entry === undefined ||
+      entry.contentLines === undefined ||
+      entry.contentLines.length === 0
+    ) {
+      continue;
+    }
+    const reserved = 1 + kept.length + (dropped > 0 ? 1 : 0) + 1;
+    contentLines = fitDiffContentLines(
+      entry.contentLines,
+      SUBSCRIPTION_NOTICE_MAX_LINES - reserved,
+      entry.maxBytes,
+    );
+    insertAt = i + 1;
+    break;
+  }
+  details.push(`${SUBSCRIPTION_NOTICE_DETAIL_MARK}${SCRIPT_INSPECT_HINT}`);
+  if (insertAt >= 0 && contentLines.length > 0) {
+    details.splice(insertAt, 0, ...contentLines);
+  }
+  const first = kept[0];
+  const summary =
+    total === 1 && first !== undefined
+      ? `${first.name} reported changes`
+      : `${total} subscribed scripts reported`;
+  return [`${SCRIPT_NOTICE_SCOPE}: ${summary}`, ...details].join('\n');
 }

@@ -27,7 +27,9 @@
 import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { isValidScriptName } from './config.js';
 import { healthSubscriptionKey, isValidHealthTarget } from './health.js';
+import { scriptSubscriptionKey } from './script.js';
 
 /**
  * 一条 read 引用（line-level 订阅）。不存 tool_call_id（AfterTool 拿不到）：
@@ -77,6 +79,25 @@ export interface MemberPointer {
   ts: number;
 }
 
+/**
+ * script 条目的执行事实块（q-subscription-script，additive，设计 §2.2）。
+ * 只持久化执行事实；schedule / output / 命令本体每次 kickoff 从 live 配置重读
+ * （「订阅是用户事实、命令是配置信任」的分层，不落快照防陈旧）。
+ * pending（已完成未投递结果）P0 仅内存（ScriptRunner 队列），持久化留 P1。
+ */
+export interface ScriptEntryState {
+  /** 订阅名（allowlist 键） */
+  name: string;
+  /** 最近一次发起时间（Unix ms；0 = 从未发起） */
+  last_started_at: number;
+  /** 最近一次退出码；null = spawn 失败 / 超时 kill / 信号终止 */
+  last_exit: number | null;
+  /** 最近一次执行时长（ms） */
+  last_duration_ms: number;
+  /** 最近一次失败原因（诊断用；正常退出缺省） */
+  last_error?: string;
+}
+
 /** 一个订阅条目 */
 export interface SubscriptionEntry {
   /** `sha256(canonicalPath).slice(0, 12)` */
@@ -86,12 +107,17 @@ export interface SubscriptionEntry {
   /** 用户原始输入（相对路径 / `~` 形式，仅用于展示） */
   input: string;
   /**
-   * 订阅源类型（q-health-subscription，additive）：缺省 'file'（旧状态零回归）。
+   * 订阅源类型（q-health-subscription / q-subscription-script，additive）：
+   * 缺省 'file'（旧状态零回归）。
    * 'health' 条目：状态键 = `health:<target>`（healthSubscriptionKey），rev = 健康签名
    * （healthSignature：`down` / `up:<version>:<started_at>:<node_id>`），
    * size / reads / snapshot / last_writer 不用；观察读宿主落的快照文件（health.ts）。
+   * 'script' 条目：状态键 = `script:<name>`（scriptSubscriptionKey），path = 订阅名，
+   * rev = 最近一次成功 stdout 的 sha256（空输出记 'empty' 哨兵）；snapshot = 最近一次
+   * 成功 stdout 全文（≤ maxFullBytes 才存；diff 基准 + inspect 正文）；reads /
+   * last_writer 不用；执行事实记 script 块（ScriptEntryState）。
    */
-  source?: 'file' | 'health';
+  source?: 'file' | 'health' | 'script';
   /** 最近一次观察到的状态：sha256 hex / `deleted` / `too_large:<size>:<mtime>` / `binary:<hash>` */
   rev: string;
   /** 最近一次短通知里的 rev；`''` = 尚未通知 */
@@ -117,13 +143,15 @@ export interface SubscriptionEntry {
    * 行为退回现状基线抑制（零回归）。与 `origin`（订阅来源/过期策略）语义无关。
    */
   last_writer?: ChangeOrigin;
+  /** script 源执行事实（q-subscription-script）；其它源不用 */
+  script?: ScriptEntryState;
 }
 
 /** 一个 session 的订阅状态 */
 export interface SessionSubscriptionState {
   v: 1;
   session_id: string;
-  /** key = canonicalPath（file 源）/ `health:<target>`（health 源，q-health-subscription） */
+  /** key = canonicalPath（file 源）/ `health:<target>`（health 源）/ `script:<name>`（script 源） */
   subscriptions: Record<string, SubscriptionEntry>;
   /** 单调增长的已消费清除 id ledger（缺省 []）；边缘触发释放，同 id 再现不重复释放 */
   cleared_consumed: string[];
@@ -217,6 +245,26 @@ function normalizeChangeOrigin(value: unknown): ChangeOrigin | undefined {
   return origin;
 }
 
+/**
+ * script 块防御解析（q-subscription-script）：缺失 / 结构非法 ⇒ undefined
+ * （条目仍有效，执行事实从零开始）。name 必须与条目 path（订阅名）逐字相符。
+ */
+function normalizeScriptState(value: unknown, name: string): ScriptEntryState | undefined {
+  if (!isRecord(value)) return undefined;
+  if (readString(value, 'name', '') !== name) return undefined;
+  const exitRaw = value.last_exit;
+  const block: ScriptEntryState = {
+    name,
+    last_started_at: readNumber(value, 'last_started_at', 0),
+    last_exit: typeof exitRaw === 'number' && Number.isFinite(exitRaw) ? exitRaw : null,
+    last_duration_ms: readNumber(value, 'last_duration_ms', 0),
+  };
+  if (typeof value.last_error === 'string' && value.last_error !== '') {
+    block.last_error = value.last_error;
+  }
+  return block;
+}
+
 /** 把磁盘上的 JSON 规整成状态；任何结构问题都降级为空状态 */
 function normalizeState(sessionId: string, parsed: unknown): SessionSubscriptionState {
   if (!isRecord(parsed) || parsed.v !== 1 || !isRecord(parsed.subscriptions)) {
@@ -227,17 +275,19 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
     if (!isRecord(value)) continue;
     const canonical = readString(value, 'path', '');
     if (canonical === '') continue;
-    // health 源（q-health-subscription，additive）：path = 订阅目标；非法目标丢弃。
+    // health / script 源（additive）：path = 订阅目标 / 订阅名；非法目标丢弃。
     // 旧状态无 source ⇒ 'file'，键与行为逐字节不变（零回归）。
-    const source = value.source === 'health' ? 'health' : 'file';
+    const source =
+      value.source === 'health' ? 'health' : value.source === 'script' ? 'script' : 'file';
     if (source === 'health' && !isValidHealthTarget(canonical)) continue;
+    if (source === 'script' && !isValidScriptName(canonical)) continue;
     const rev = readString(value, 'rev', '');
     const entry: SubscriptionEntry = {
       id: readString(value, 'id', '') || subscriptionId(canonical),
       path: canonical,
       input: readString(value, 'input', canonical),
-      // 只在 health 时落字段：file 条目序列化形状与旧版逐字节一致（零回归）。
-      ...(source === 'health' ? { source: 'health' as const } : {}),
+      // 只在非 file 时落字段：file 条目序列化形状与旧版逐字节一致（零回归）。
+      ...(source !== 'file' ? { source } : {}),
       rev,
       // 旧状态（只有 rev / delivered_at）按“已通知”迁移，避免升级后重复通知。
       notified_rev: readString(value, 'notified_rev', rev),
@@ -251,11 +301,21 @@ function normalizeState(sessionId: string, parsed: unknown): SessionSubscription
       reads: normalizeReads(value.reads),
     };
     if (typeof value.snapshot === 'string') entry.snapshot = value.snapshot;
+    if (source === 'script') {
+      const scriptState = normalizeScriptState(value.script, canonical);
+      if (scriptState !== undefined) entry.script = scriptState;
+    }
     const lastWriter = normalizeChangeOrigin(value.last_writer);
     if (lastWriter !== undefined) entry.last_writer = lastWriter;
     // 以 canonical path 为唯一键，避免手改/旧文件里的键与 path 漂移造成重复条目。
-    // health 条目键空间隔离（health:<target>），不与文件路径键碰撞。
-    subscriptions[source === 'health' ? healthSubscriptionKey(canonical) : canonical] = entry;
+    // health / script 条目键空间隔离（health:<target> / script:<name>），不与文件路径键碰撞。
+    const key =
+      source === 'health'
+        ? healthSubscriptionKey(canonical)
+        : source === 'script'
+          ? scriptSubscriptionKey(canonical)
+          : canonical;
+    subscriptions[key] = entry;
   }
   return {
     v: 1,

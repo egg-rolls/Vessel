@@ -387,7 +387,7 @@ function snakeCase(id: string): string {
  * 纯数据生成：全局 default 行 + 每 scope delivery 行（pinned trim/model 只 run/off）+
  * 每 scope channel 行（全词表）。scope 名复用 chat.env.scope.*；选项/后果文案 settings.env.*。
  * R-10 单源：词表与 default/fallback 直接派生 config `DEFAULT_ENV_CADENCE`
- * （17 词含 health=run），不再有字面量副本，漂移结构上不可能。
+ * （18 词含 script=run），不再有字面量副本，漂移结构上不可能。
  */
 const ENV_NOTICE_SCOPES: readonly string[] = Object.keys(DEFAULT_ENV_CADENCE);
 

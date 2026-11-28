@@ -33,8 +33,8 @@ import type { Stats } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import { evaluatePath, type PathBoundary, splitLines } from '@vessel-agent/basic-tools';
 import type { Hook, HookContext, HookResult } from '@vessel-agent/core';
-import type { DocSubscriptionConfig } from './config.js';
-import { unifiedDiff } from './diff.js';
+import type { DocSubscriptionConfig, ScriptSchedule, ScriptSpec } from './config.js';
+import { splitDisplayLines, unifiedDiff } from './diff.js';
 import {
   type HealthSnapshot,
   healthSignature,
@@ -44,13 +44,17 @@ import {
 import { consumeClearedToolResults } from './lifecycle.js';
 import {
   formatHealthNotice,
+  formatScriptNotice,
   formatSubscriptionNotice,
+  type ScriptNoticeEntry,
   SUBSCRIPTION_NOTICE_DETAILS_MAX,
   SUBSCRIPTION_NOTICE_MESSAGE_NAME,
   type SubscriptionNoticeContent,
 } from './notice.js';
+import { ScriptRunner, scriptFlightKey, scriptSubscriptionKey } from './script.js';
 import type {
   ReadRef,
+  ScriptEntryState,
   SessionSubscriptionState,
   SubscriptionEntry,
   SubscriptionStore,
@@ -70,6 +74,14 @@ export interface BeforeLlmHookDeps {
   boundary: PathBoundary;
   store: SubscriptionStore;
   config: DocSubscriptionConfig;
+  /**
+   * live 配置 getter（q-subscription-script，hot-gate 同族修复）：装配层注入，
+   * 每次 run 求值 ⇒ cadence / channel / scripts 热改即时生效；成员 runtime 复制
+   * 父 hook 引用后读的也是活配置（非 install 快照）。缺省 ⇒ 回落 config 快照。
+   */
+  liveConfig?: () => DocSubscriptionConfig;
+  /** script 源执行器（q-subscription-script）；缺省 ⇒ 本 hook 自建一份 */
+  runner?: ScriptRunner;
 }
 
 /** 一次观察结果 */
@@ -318,6 +330,154 @@ function healthNoticeLine(entry: SubscriptionEntry, snapshot: HealthSnapshot): s
   return `<node ${attrs.join(' ')} />`;
 }
 
+/** script 源单条目处理结果 */
+interface ScriptProcessOutcome {
+  /** 更新后的条目（无变化时原引用） */
+  entry: SubscriptionEntry;
+  /** 需要投递的通知素材（空抑制 / diff 空 / 非零 exit 时缺省） */
+  notice?: ScriptNoticeEntry;
+  /** 是否有状态变化需要落盘 */
+  dirty: boolean;
+}
+
+/**
+ * script 源单条目处理（q-subscription-script，设计 §2.3/§2.4）：
+ * drain 已完成结果（只读，绝不等待子进程）→ 空抑制 / diff 去重 / 首次全量 →
+ * 按 schedule 发起下一次 kickoff（fire-and-forget，单飞由 runner 保证）。
+ *
+ * - 非零 exit / 超时 / spawn 失败：P0 静默记录 last_exit（不出卡；连续失败限频错误卡 P1）。
+ * - 空 stdout：静默推进 rev='empty'（问题消失不出卡；再次出现按首次全量重投）。
+ * - diff 模式：与上一版成功 stdout（entry.snapshot）做 unifiedDiff；空 diff 只刷新观察值。
+ * - full 模式 / 首次（无 snapshot）：全量投递（裁点 2：存量问题立刻可见）。
+ * - snapshot 只在 ≤ maxFullBytes 时存（diff 基准 + inspect 正文，与 file 源同口径）。
+ */
+function processScriptEntry(
+  entry: SubscriptionEntry,
+  spec: ScriptSpec | undefined,
+  runner: ScriptRunner,
+  sessionId: string,
+  config: DocSubscriptionConfig,
+  now: number,
+  kickoffDue: boolean,
+): ScriptProcessOutcome {
+  const key = scriptFlightKey(sessionId, entry.path);
+  let next = entry;
+  let dirty = false;
+  let notice: ScriptNoticeEntry | undefined;
+
+  for (const result of runner.drain(key)) {
+    const scriptState: ScriptEntryState = {
+      name: entry.path,
+      last_started_at: result.startedAt,
+      last_exit: result.exit,
+      last_duration_ms: result.durationMs,
+      ...(result.error !== undefined ? { last_error: result.error } : {}),
+    };
+    next = { ...next, script: scriptState };
+    dirty = true;
+    // 非零 exit / 超时 / spawn 失败：只记执行事实，不动游标 / snapshot（P0 静默）。
+    if (result.exit !== 0 || result.timedOut) continue;
+
+    const text = result.stdout;
+    const bytes = Buffer.byteLength(text, 'utf-8');
+    if (text.trim() === '') {
+      // 空抑制：无输出不出卡；清 snapshot（问题消失），游标推进 'empty' 哨兵。
+      const emptied: SubscriptionEntry = {
+        ...next,
+        rev: 'empty',
+        notified_rev: 'empty',
+        size: 0,
+        mtime_ms: result.completedAt,
+        notified_at: now,
+      };
+      delete emptied.snapshot;
+      next = emptied;
+      continue;
+    }
+
+    const rev = sha256Hex(Buffer.from(text, 'utf-8'));
+    const outputMode = spec?.output ?? 'diff';
+    let change: 'full' | 'diff' = 'full';
+    let contentLines: string[] = splitDisplayLines(text);
+    if (outputMode === 'diff' && next.snapshot !== undefined) {
+      const diff = unifiedDiff(next.snapshot, text, {
+        maxBytes: config.maxDiffBytes,
+        maxLines: config.maxDiffLines,
+      });
+      if (diff.text === '') {
+        // diff 空：只刷新观察值（内容等同已通知版），notified_rev 幂等推进。
+        next = { ...next, rev, notified_rev: rev, size: bytes, mtime_ms: result.completedAt };
+        continue;
+      }
+      if (!diff.truncated) {
+        change = 'diff';
+        contentLines = diff.text.split('\n');
+      }
+      // diff 超限 ⇒ 全文兜底（通知层行/字节预算再裁 + inspect 提示）。
+    }
+    const updated: SubscriptionEntry = {
+      ...next,
+      rev,
+      notified_rev: rev,
+      size: bytes,
+      mtime_ms: result.completedAt,
+      notified_at: now,
+    };
+    if (bytes <= config.maxFullBytes) updated.snapshot = text;
+    else delete updated.snapshot;
+    next = updated;
+    notice = {
+      name: entry.path,
+      metaLine: `<script name="${escapeXmlAttr(entry.path)}" exit="0" bytes="${bytes}" change="${change}"${result.truncated ? ' truncated="true"' : ''} />`,
+      contentLines,
+      maxBytes: config.maxTotalBytesPerRun,
+    };
+  }
+
+  // kickoff（fire-and-forget）：spec 来自 live allowlist；被移出配置 ⇒ 停跑（条目保留）。
+  if (spec !== undefined && kickoffDue) {
+    const started = runner.kickoff(key, spec, spec.cwd ?? config.cwd);
+    if (started) {
+      next = {
+        ...next,
+        script: {
+          name: entry.path,
+          last_exit: next.script?.last_exit ?? null,
+          last_duration_ms: next.script?.last_duration_ms ?? 0,
+          ...(next.script?.last_error !== undefined ? { last_error: next.script.last_error } : {}),
+          last_started_at: Date.now(),
+        },
+      };
+      dirty = true;
+    }
+  }
+  return { entry: next, ...(notice !== undefined ? { notice } : {}), dirty };
+}
+
+/**
+ * script 源 kickoff 时机（设计 §2.3 + 裁点 4 惰性 interval）：
+ * - 轴 A envGranularity.script='off' ⇒ 整段静默（调用方已 gate）；
+ * - schedule='run'（缺省）：每 run 首请求；
+ * - schedule='request'：每请求（单飞约束实际频率）；
+ * - interval：惰性 —— 检查点上 now - last_started_at >= N 才发起（idle 不跑）。
+ * 轴 A='request' 时 interval 每请求检查；轴 A='run' 时只在 run 边界检查。
+ */
+function scriptKickoffDue(
+  schedule: ScriptSchedule,
+  entry: SubscriptionEntry,
+  scriptCadence: string,
+  firstRequestOfRun: boolean,
+  now: number,
+): boolean {
+  if (typeof schedule === 'object') {
+    if (scriptCadence !== 'request' && !firstRequestOfRun) return false;
+    const last = entry.script?.last_started_at ?? 0;
+    return now - last >= schedule.intervalSeconds * 1000;
+  }
+  if (schedule === 'request') return true;
+  return firstRequestOfRun;
+}
+
 /**
  * 创建 BeforeLlm hook。
  * 每个插件实例持有自己的 run 去重集合（每 run 只检查一次）。
@@ -327,6 +487,10 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
   // health 源独立 run gate（q-health-subscription）：files / health 节奏可独立配置，
   // 互不拖累（files='off' 时 health 仍观察；反之亦然）。
   const processedHealthRuns = new Set<string>();
+  // script 源独立 run gate（q-subscription-script）：schedule='run' 的 kickoff 时机。
+  const processedScriptRuns = new Set<string>();
+  // 执行器：装配层注入（dispose 可达）；裸宿主缺省自建。
+  const runner = deps.runner ?? new ScriptRunner();
 
   return {
     name: 'doc-subscription',
@@ -337,14 +501,27 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
     priority: 150,
     run: async (ctx: HookContext): Promise<HookResult | undefined> => {
       const runId = ctx.run_id;
+      // live 配置（hot-gate 同族修复）：每次 run 求值，cadence / channel / scripts 热改
+      // 即时生效；成员持父 hook 引用也读活配置。getter 缺省 / 抛错 ⇒ 回落 install 快照。
+      let config = deps.config;
+      if (deps.liveConfig !== undefined) {
+        try {
+          config = deps.liveConfig();
+        } catch {
+          config = deps.config;
+        }
+      }
+      const effectiveDeps: BeforeLlmHookDeps = { ...deps, config };
       // files 检测节奏（env_injection 框架轴 A）：装配层经 envGranularity.files 注入，
       // 缺省 'run' = 原 processedRuns gate（每 run 首请求观察一次，零回归）；
       // 'request' 跳过该 gate，每请求观察（去重轴 notified_rev 不动，不会重复发卡）。
-      const filesCadence = deps.config.envGranularity?.files ?? 'run';
+      const filesCadence = config.envGranularity?.files ?? 'run';
       // health 检测节奏（同框架）：缺省 'run'；与 files 独立 gate。
-      const healthCadence = deps.config.envGranularity?.health ?? 'run';
-      // off（P2 轴 A）：两源都 off 才整段跳过（不观察、不产卡、不注入）。
-      if (filesCadence === 'off' && healthCadence === 'off') return;
+      const healthCadence = config.envGranularity?.health ?? 'run';
+      // script 检测节奏（同框架）：缺省 'run'；off ⇒ 整段静默（不 kickoff / drain / 出卡）。
+      const scriptCadence = config.envGranularity?.script ?? 'run';
+      // off（P2 轴 A）：三源都 off 才整段跳过（不观察、不产卡、不注入）。
+      if (filesCadence === 'off' && healthCadence === 'off' && scriptCadence === 'off') return;
       const runGate = (cadence: string, processed: Set<string>): boolean => {
         if (cadence === 'off') return false;
         if (cadence === 'request') return true;
@@ -355,7 +532,19 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       };
       const filesDue = runGate(filesCadence, processedRuns);
       const healthDue = runGate(healthCadence, processedHealthRuns);
-      if (!filesDue && !healthDue) return;
+      // script 段：drain 每请求（结果完成即投递，ambient）；kickoff 时机另按 schedule gate。
+      // 便宜路径：run 边界必查；mid-run 只在 runner 有工作（drain）或 allowlist 声明了
+      // request/interval 调度（需每请求检查）时才 load —— 无脚本订阅时零额外开销。
+      const scriptActive = scriptCadence !== 'off';
+      const scriptRunDue = scriptActive && runGate('run', processedScriptRuns);
+      const scriptNeedsRequestCheck = config.scripts.some(
+        (spec) =>
+          spec.schedule === 'request' ||
+          (scriptCadence === 'request' && typeof spec.schedule === 'object'),
+      );
+      const scriptHasWork =
+        scriptActive && (scriptRunDue || runner.hasWork() || scriptNeedsRequestCheck);
+      if (!filesDue && !healthDue && !scriptHasWork) return;
 
       const sessionId = ctx.session_id ?? 'default';
 
@@ -385,7 +574,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // 时不消费，与旧 gate 语义一致）。
       if (filesDue) {
         try {
-          dirty = await consumeClearedToolResults(state, sessionId, deps.config);
+          dirty = await consumeClearedToolResults(state, sessionId, config);
         } catch {
           // best-effort：生命周期失败不打断观察 / 通知。
         }
@@ -402,6 +591,12 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
       // health 源（q-health-subscription）：独立清单 / 计数，与 files 通知分发两条消息。
       const healthLines: string[] = [];
       let healthChangedCount = 0;
+      // script 源（q-subscription-script）：独立清单 / 计数（同 scope 折叠一条消息）。
+      const scriptNotices: ScriptNoticeEntry[] = [];
+      let scriptChangedCount = 0;
+      // 本请求是否 run 首请求（script schedule='run' / interval 的 kickoff 时机）：
+      // runGate 已在上方消费并标记，scriptRunDue 即首请求判据。
+      const scriptFirstOfRun = scriptRunDue;
 
       for (const entry of entries) {
         // health 分支：读快照 → 签名比对 → 游标推进；无自改抑制 / reads 机器。
@@ -409,7 +604,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           if (!healthDue) continue;
           let healthObservation: Awaited<ReturnType<typeof observeHealthEntry>>;
           try {
-            healthObservation = await observeHealthEntry(entry, deps);
+            healthObservation = await observeHealthEntry(entry, effectiveDeps);
           } catch {
             healthObservation = undefined;
           }
@@ -430,10 +625,34 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           dirty = true;
           continue;
         }
+        // script 分支（q-subscription-script）：drain 已完成结果 + 按 schedule kickoff。
+        // spec 每次从 live allowlist 重读（热改命令 / 停跑即时生效；订阅本身是用户事实）。
+        if (entry.source === 'script') {
+          if (!scriptActive) continue;
+          const spec = config.scripts.find((candidate) => candidate.name === entry.path);
+          const kickoffDue =
+            spec !== undefined &&
+            scriptKickoffDue(spec.schedule, entry, scriptCadence, scriptFirstOfRun, now);
+          let outcome: ScriptProcessOutcome;
+          try {
+            outcome = processScriptEntry(entry, spec, runner, sessionId, config, now, kickoffDue);
+          } catch {
+            continue; // best-effort：脚本机器失败不打断 files / health 观察
+          }
+          if (outcome.dirty) {
+            state.subscriptions[scriptSubscriptionKey(entry.path)] = outcome.entry;
+            dirty = true;
+          }
+          if (outcome.notice !== undefined) {
+            scriptChangedCount += 1;
+            if (scriptNotices.length < MAX_NOTICE_ENTRIES) scriptNotices.push(outcome.notice);
+          }
+          continue;
+        }
         if (!filesDue) continue;
         let observation: Observation | undefined;
         try {
-          observation = await observeEntry(entry, deps);
+          observation = await observeEntry(entry, effectiveDeps);
         } catch {
           observation = undefined;
         }
@@ -476,7 +695,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         // 有 reads 的条目走 line-level 分析；无 reads ⇒ 既有整文件路径逐字节不变。
         let lineLevel: Extract<ReadsAnalysis, { kind: 'line' }> | undefined;
         if (entry.reads.length > 0) {
-          const analysis = analyzeReads(entry.reads, observation.text, deps.config);
+          const analysis = analyzeReads(entry.reads, observation.text, config);
           if (analysis.kind === 'unchanged') {
             // 全部 ref 未变：只刷新观察值（及重定位后的 start/end），notified_rev 不动，
             // 下 run 幂等重查。无变化不写盘。
@@ -512,7 +731,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
               content = {
                 afterIndex: lines.length - 1,
                 diffLines: lineLevel.diffLines,
-                maxBytes: deps.config.maxTotalBytesPerRun,
+                maxBytes: config.maxTotalBytesPerRun,
               };
             }
           } else {
@@ -550,7 +769,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
         // P2 轴 C：ui-only ⇒ 只落 UI 卡事实（message.injected，Web 既有投影渲染 EnvCard），
         // 不写 ctx.messages（模型不收）。notified_rev 游标已推进（上方 save）⇒ 不重复发卡。
         // 缺省 emitFact（旧 core / 裸宿主）⇒ 回退 ctx.messages 注入（model+ui 现状，additive）。
-        if (deps.config.envChannels?.files === 'ui-only' && ctx.emitFact !== undefined) {
+        if (config.envChannels?.files === 'ui-only' && ctx.emitFact !== undefined) {
           ctx.emitFact({
             type: 'message.injected',
             run_id: runId,
@@ -575,7 +794,7 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
           content: formatHealthNotice(healthLines, healthChangedCount),
           timestamp: now,
         };
-        if (deps.config.envChannels?.health === 'ui-only' && ctx.emitFact !== undefined) {
+        if (config.envChannels?.health === 'ui-only' && ctx.emitFact !== undefined) {
           ctx.emitFact({
             type: 'message.injected',
             run_id: runId,
@@ -583,6 +802,31 @@ export function createBeforeLlmHook(deps: BeforeLlmHookDeps): Hook {
               run_id: runId,
               session_id: ctx.session_id,
               message: { ...message, message_id: `${runId}:health-notice:${String(now)}` },
+            },
+            ts: now,
+          });
+        } else {
+          ctx.messages = [...(ctx.messages ?? []), message];
+        }
+      }
+
+      // script 通知（q-subscription-script）：同一 vessel:notice 通道，scope 词 'script'
+      // 决定卡头标签；多订阅同 run 都有变化 ⇒ 一条消息多明细行（同 scope 折叠）。
+      if (scriptChangedCount > 0) {
+        const message = {
+          role: 'user' as const,
+          name: SUBSCRIPTION_NOTICE_MESSAGE_NAME,
+          content: formatScriptNotice(scriptNotices, scriptChangedCount),
+          timestamp: now,
+        };
+        if (config.envChannels?.script === 'ui-only' && ctx.emitFact !== undefined) {
+          ctx.emitFact({
+            type: 'message.injected',
+            run_id: runId,
+            data: {
+              run_id: runId,
+              session_id: ctx.session_id,
+              message: { ...message, message_id: `${runId}:script-notice:${String(now)}` },
             },
             ts: now,
           });

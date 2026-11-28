@@ -31,6 +31,9 @@
  * - `files`：文件变更（doc-subscription 的订阅文件被改动，只报元数据、不报正文）；
  * - `health`：node 健康变更（doc-subscription 的 health 源订阅：可达性翻转 / 版本 /
  *   重启 started_at；q-health-subscription，只报元数据，快照在 inspect）；
+ * - `script`：订阅脚本检测结果（doc-subscription 的 script 源订阅：用户配置 allowlist
+ *   的检测命令异步跑，stdout 差异/清单投递；q-subscription-script，空输出不出卡，
+ *   全文在 inspect）；
  * - `context`：系统提示词 / Self Card 本身变了（可展开看完整快照）；
  * - `trim`：工具结果被换成占位符（上下文上限；只报条数与 call id，不含工具输出正文）
  *   —— 0.52 起由 core 的 `context/cleared-tool-result.ts` 发同一形状的 `trim: …` 尾消息；
@@ -61,6 +64,7 @@ export const ENV_INFO_SCOPES = [
   'conflict',
   'files',
   'health',
+  'script',
   'context',
   'trim',
   'pii',

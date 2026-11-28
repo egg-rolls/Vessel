@@ -82,6 +82,8 @@ export async function listTools(): Promise<ToolsListing> {
     resolveAgentCwd(config),
     resolveDataDir(config),
     config.envInjection,
+    // 一次性只读 listing：live getter 即本次加载的配置（hook 不会 run，口径同源）。
+    () => config,
   );
   const host = new MemoryPluginHost();
   for (const name of pluginNames) {

@@ -22,12 +22,13 @@ import type { Plugin, PluginHost } from '@vessel-agent/core';
 import { createAutoSubscribeHook } from './auto-sub.js';
 import { type DocSubscriptionConfig, parseDocSubscriptionConfig } from './config.js';
 import { createBeforeLlmHook } from './hook.js';
+import { ScriptRunner } from './script.js';
 import { SubscriptionStore } from './store.js';
 import { createSubscribeTool } from './tool.js';
 
 export { AUTO_SUBSCRIBE_HOOK, createAutoSubscribeHook } from './auto-sub.js';
-export type { DocSubscriptionConfig } from './config.js';
-export { parseDocSubscriptionConfig } from './config.js';
+export type { DocSubscriptionConfig, ScriptSchedule, ScriptSpec } from './config.js';
+export { isValidScriptName, parseDocSubscriptionConfig, parseScriptSpecs } from './config.js';
 export { type UnifiedDiffOptions, type UnifiedDiffResult, unifiedDiff } from './diff.js';
 export {
   describeHealthRev,
@@ -44,8 +45,11 @@ export { consumeClearedToolResults } from './lifecycle.js';
 export {
   fitDiffContentLines,
   formatHealthNotice,
+  formatScriptNotice,
   formatSubscriptionNotice,
   HEALTH_NOTICE_SCOPE,
+  SCRIPT_NOTICE_SCOPE,
+  type ScriptNoticeEntry,
   SUBSCRIPTION_NOTICE_DETAIL_MARK,
   SUBSCRIPTION_NOTICE_DETAILS_MAX,
   SUBSCRIPTION_NOTICE_DIFF_TRUNCATED,
@@ -55,9 +59,16 @@ export {
   type SubscriptionNoticeContent,
 } from './notice.js';
 export {
+  type ScriptResult,
+  ScriptRunner,
+  scriptFlightKey,
+  scriptSubscriptionKey,
+} from './script.js';
+export {
   type ChangeOrigin,
   emptyState,
   type ReadRef,
+  type ScriptEntryState,
   type SessionSubscriptionState,
   type SubscriptionEntry,
   SubscriptionStore,
@@ -85,18 +96,33 @@ export const DOC_SUBSCRIPTION_PLUGIN_NAME = 'doc-subscription';
  * `enabled: false` 时 install 不注册任何工具 / hook。
  */
 export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOptions = {}): Plugin {
+  // 本实例的执行器（dispose 可达；install 前 / enabled:false 时缺省）。
+  let installedRunner: ScriptRunner | undefined;
   return {
     name: DOC_SUBSCRIPTION_PLUGIN_NAME,
     version: '0.27.0',
     description:
-      'Per-session file & node-health subscriptions: `subscribe` tool (source file|health) + ' +
+      'Per-session file & node-health & script subscriptions: `subscribe` tool (source file|health|script) + ' +
       'edit/write auto-subscribe (subscribe:false opt-out) + read line-range auto-subscribe + ' +
-      'BeforeLlm change notices with line-level diffs and cleared-tool-result lifecycle',
+      'BeforeLlm change notices with line-level diffs and cleared-tool-result lifecycle; ' +
+      'script source runs user-config allowlisted detection commands async (fire-and-forget)',
     install(host: PluginHost, installOptions?: { config?: Record<string, unknown> }): void {
-      const config: DocSubscriptionConfig = parseDocSubscriptionConfig(
-        installOptions?.config ?? options.config,
-      );
+      const rawConfig = installOptions?.config ?? options.config;
+      const config: DocSubscriptionConfig = parseDocSubscriptionConfig(rawConfig);
       if (!config.enabled) return;
+
+      // live 配置 getter（q-subscription-script，hot-gate 同族修复）：装配层在 install
+      // config 里注入 `liveConfig: () => 活合并配置记录`（buildPluginConfigMap 同源）。
+      // 每次 hook run / 工具调用重新解析 ⇒ cadence / channel / scripts 热改即时生效；
+      // 成员 runtime 复制父 hook 引用后读的也是活配置（非 install 快照）。
+      const rawLive =
+        typeof rawConfig === 'object' && rawConfig !== null
+          ? (rawConfig as Record<string, unknown>).liveConfig
+          : undefined;
+      const liveConfig =
+        typeof rawLive === 'function'
+          ? (): DocSubscriptionConfig => parseDocSubscriptionConfig((rawLive as () => unknown)())
+          : undefined;
 
       const boundary = buildPathBoundary({
         allowedRoots: config.allowedRoots,
@@ -104,10 +130,19 @@ export function createDocSubscriptionPlugin(options: DocSubscriptionPluginOption
         cwd: config.cwd,
       });
       const store = new SubscriptionStore(config.stateDir);
+      // script 执行器：每实例一份（成员共享 hook 引用 ⇒ 单飞按 session+name 键控）。
+      const runner = new ScriptRunner();
 
-      host.registerTool(createSubscribeTool({ boundary, store, config }));
-      host.registerHook(createBeforeLlmHook({ boundary, store, config }));
+      host.registerTool(createSubscribeTool({ boundary, store, config, liveConfig, runner }));
+      host.registerHook(createBeforeLlmHook({ boundary, store, config, liveConfig, runner }));
       host.registerHook(createAutoSubscribeHook({ boundary, store, config }));
+      installedRunner = runner;
+    },
+    dispose(): void {
+      // kill 在飞脚本 + 清 timer / 队列（不永久禁用：成员持旧 hook 引用经 live getter
+      // 继续工作，见 script.ts 模块注释）。
+      installedRunner?.dispose();
+      installedRunner = undefined;
     },
   };
 }
