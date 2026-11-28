@@ -41,6 +41,7 @@ import { resumeContinuations } from '../node/node-continuation';
 import { createNodeResumer } from '../node/node-resume';
 import { markStartup } from '../observability/startup-timing';
 import { callbackRoute } from '../tools-engine/wiring';
+import { type AgentActivityWatch, createAgentActivityWatch } from './agent-activity-watch';
 import { registerBashJobDelivery } from './bash-job-delivery';
 import { resolveDefaultTeamAnchor, resolveDefaultTeamWorkspace } from './bootstrap-connect';
 import type { BootstrapResult } from './bootstrap-types';
@@ -85,6 +86,7 @@ export interface AgentWiringAssembly {
   noticeBus: RuntimeNoticeBus | undefined;
   peerNotices: PeerNoticeRouter | undefined;
   nodeHealthWatch: NodeHealthWatch | undefined;
+  agentActivityWatch: AgentActivityWatch | undefined;
   federationApply: ((next: FederationRuntimeOptions) => void) | undefined;
   feishuTeamId: string | undefined;
   feishuAgentService: AgentService | undefined;
@@ -363,6 +365,16 @@ export async function assembleAgentWiring(ctx: AgentAssemblyContext): Promise<Ag
   const feishuAgentService = wiring.service;
   // 0.53 notice-rotate：回填通知的重解析口（router 早在上面就建好了，flush 时才读）。
   const noticeAgentService = wiring.service;
+  // q-sub-unify-p1 M4a：agent 活动订阅 watcher（doc-subscription agent 源的宿主侧）。
+  // 双流事件驱动（lead 裁定 R1）：service.subscribe（agent.* 白名单）+ runtimeEvents
+  //（run.* 终态父流，与 TeamService/peer-notices 同源）。需求驱动：扫到 agent 订阅才写快照。
+  const agentActivityWatch = createAgentActivityWatch({
+    getConfig: () => liveConfigRef.current,
+    service: wiring.service,
+    parentEvents: runtimeEvents,
+    logger,
+  });
+  agentActivityWatch.start();
   registerBashJobDelivery({ service: wiring.service, logger });
   logger.debug('agent.bash_job.delivery_ready', {});
   finalPluginHost.registerTool(wiring.tool);
@@ -390,6 +402,7 @@ export async function assembleAgentWiring(ctx: AgentAssemblyContext): Promise<Ag
     noticeBus,
     peerNotices,
     nodeHealthWatch,
+    agentActivityWatch,
     federationApply,
     feishuTeamId,
     feishuAgentService,
