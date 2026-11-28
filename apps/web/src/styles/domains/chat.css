@@ -1313,6 +1313,14 @@ button.tool-image-thumb:focus-visible {
   content: none;
 }
 
+/* 异步作业卡（inbox/AsyncJobCard → StreamCard）：状态点已画在 title 槽（running 脉冲 /
+   done 绿 / failed 红，复用 toneOf 口径），家族身份圆点不叠 —— 与排队卡「圆点重复」同一先例。
+   卡面留在 notice-block 中性档（--surface-sunken），状态色只留在点上，与 agent 条同形同高。 */
+.notice-block.stream-card-job > summary::before,
+.notice-block.stream-card-job > .event-block-summary::before {
+  content: none;
+}
+
 /* 排队中（还没真正发出去的那条）：琥珀带。`--amber-*` 现在承两义 —— 「未发送/排队中」
    与导航的「正在连接」（`app/nav-status.ts` 的 `amber` 档），两者都是「还没到位」的同一个
    语义家族；token 与「不是通用 warn」的理由见 tokens.css。已取消那档不带这个修饰类，留在
