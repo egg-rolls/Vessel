@@ -498,10 +498,22 @@ export function createAgentTool(
         },
         members: {
           type: 'array',
+          // items 必须显式声明（q-agent-close-tool-bug）：纯 type:'array' 无 items 时，
+          // dashscope/qwen 的 schema 约束生成会抑制数组元素 —— journal 实证 members 恒
+          // 到达为 []（llm.response 原始输出只留空白骨架），close/hire/create 批量全灭。
+          // 异构条目（close 字符串 / create-hire 对象）用 type 数组：engine 机械校验
+          // （firstSchemaViolation）对非字符串 type 跳过，逐条拒绝语义留在 service 不变。
+          items: {
+            type: ['string', 'object'],
+            description:
+              'close: a member id or session id string; ' +
+              'create/hire: an object {name?, model?, system_prompt?, visibility?, title?, startup_prompt?}',
+          },
           description:
             'create/hire: [{name?, model?, system_prompt?, visibility?, title?, startup_prompt?}] ' +
             '(model = explicit pin, omit to follow the node default model); ' +
-            'close: [member id or session id]',
+            'close: [member id or session id]. ' +
+            'Always emit the explicit entries; never an empty array',
         },
         to: {
           type: 'string',
@@ -550,6 +562,21 @@ export function createAgentTool(
         },
         messages: {
           type: 'array',
+          // items 显式声明（q-agent-close-tool-bug 同病同修）：无 items 的数组在
+          // dashscope/qwen 约束生成下元素被抑制恒空。properties 只校形状不标 required：
+          // 缺字段的业务拒绝仍逐条在 dispatch / TeamService，结构错误整体拒绝与
+          // RPC requireObjectEntries 同口径。
+          items: {
+            type: 'object',
+            properties: {
+              to: { type: 'string' },
+              content: { type: 'string' },
+              interrupt: { type: 'boolean' },
+              notify: { type: 'boolean' },
+              message_id: { type: 'string' },
+              refs: { type: 'array' },
+            },
+          },
           description: 'send: [{to, content, interrupt?, notify?, message_id?, refs?}]',
         },
         limit: {
