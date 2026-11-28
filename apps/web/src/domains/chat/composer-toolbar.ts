@@ -226,7 +226,12 @@ export function useComposerToolbarMenuActions(sessionId?: string): ComposerToolb
           // 与 auto 豁免同在宿主归一层；工具栏 / Select 只认通用 prefix 字段。
           prefix: t('chat.thinking.label'),
           ...(readState?.current !== undefined ? { current: readState.current } : {}),
-          ...(readState?.hint !== undefined ? { hint: readState.hint } : {}),
+          // hint 通用解析（q-ti-hint）：契约允许 i18n key 或短文案——先按插件
+          // catalog 解析（plugin[locale]→plugin.en→宿主 t），未命中回落原文。
+          // 宿主零插件专属代码：任何插件的 hint key 都走这一条。
+          ...(readState?.hint !== undefined
+            ? { hint: pluginT(i18nByPlugin, item.pluginId, readState.hint, locale, readState.hint) }
+            : {}),
           onSelect: (value: string) => {
             // 乐观更新按钮文案；write 成功后重拉 read（失败回落由下一轮 read 收敛）。
             setStates((prev) => ({ ...prev, [key]: { ...prev[key], current: value } }));
