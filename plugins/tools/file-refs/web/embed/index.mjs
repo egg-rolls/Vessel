@@ -5,29 +5,29 @@ function B(a, e) {
   return `[${a.replace(/[[\]\n]/g, "").trim() || e}](<vessel-ref:${e}>)`;
 }
 async function U(a, e, i, d, t, r) {
-  const o = (l) => {
+  const l = (s) => {
     if (!e.addRef({
-      kind: l.kind,
-      path: l.path,
-      name: l.name,
-      ...l.mime !== void 0 ? { mime: l.mime } : {},
-      bytes: l.bytes,
-      sha256: l.sha256
+      kind: s.kind,
+      path: s.path,
+      name: s.name,
+      ...s.mime !== void 0 ? { mime: s.mime } : {},
+      bytes: s.bytes,
+      ...s.kind !== "image" ? { sha256: s.sha256 } : {}
     })) {
       d?.remove(), t("error", r("drop.limit"));
       return;
     }
-    const v = B(l.name, l.path);
+    const v = B(s.name, s.path);
     d !== null ? d.settle(v) : e.insertAtomic(v, i.offset ?? void 0);
   }, [c] = await e.stage([a]);
   if (c !== void 0 && c.ok) {
-    o(c);
+    l(c);
     return;
   }
-  const s = c !== void 0 && !c.ok ? c.error : "empty result", f = {
+  const o = c !== void 0 && !c.ok ? c.error : "empty result", f = {
     status: "error",
     name: a.name,
-    error: s,
+    error: o,
     retry: () => {
       d?.update({ status: "uploading", name: a.name }), U(a, e, i, d, t, r).catch(() => {
       });
@@ -36,16 +36,16 @@ async function U(a, e, i, d, t, r) {
   d !== null && d.update(f), t("error", r("drop.failed", { name: a.name }));
 }
 const ee = (a, e, i) => {
-  const d = (r, o) => {
-    let s = r === "drop.limit" ? "Reference limit reached (32)" : "Could not upload {name}";
-    if (o !== void 0)
-      for (const [f, l] of Object.entries(o))
-        s = s.replaceAll(`{${f}}`, String(l));
-    return s;
-  }, t = (r, o) => {
+  const d = (r, l) => {
+    let o = r === "drop.limit" ? "Reference limit reached (32)" : "Could not upload {name}";
+    if (l !== void 0)
+      for (const [f, s] of Object.entries(l))
+        o = o.replaceAll(`{${f}}`, String(s));
+    return o;
+  }, t = (r, l) => {
   };
   for (const r of a) {
-    const o = e.insertTransient(
+    const l = e.insertTransient(
       "vessel-ref",
       {
         status: "uploading",
@@ -53,7 +53,7 @@ const ee = (a, e, i) => {
       },
       i.offset ?? void 0
     );
-    U(r, e, i, o, t, d).catch(() => {
+    U(r, e, i, l, t, d).catch(() => {
     });
   }
 }, L = {
@@ -96,8 +96,8 @@ function j(a) {
   return (i, d) => {
     let t = e[i] ?? L[i] ?? i;
     if (d !== void 0)
-      for (const [r, o] of Object.entries(d))
-        t = t.replaceAll(`{${r}}`, String(o));
+      for (const [r, l] of Object.entries(d))
+        t = t.replaceAll(`{${r}}`, String(l));
     return t;
   };
 }
@@ -194,16 +194,16 @@ async function W(a) {
   try {
     const e = new Image();
     e.decoding = "async";
-    const i = new Promise((l, g) => {
-      e.onload = () => l(), e.onerror = () => g(new Error("image decode failed"));
+    const i = new Promise((s, g) => {
+      e.onload = () => s(), e.onerror = () => g(new Error("image decode failed"));
     });
     e.src = a, await i;
     const d = e.naturalWidth, t = e.naturalHeight;
     if (d === 0 || t === 0) return;
-    const r = Math.min(S / d, S / t, 1), o = Math.max(1, Math.round(d * r)), c = Math.max(1, Math.round(t * r)), s = document.createElement("canvas");
-    s.width = o, s.height = c;
-    const f = s.getContext("2d");
-    return f === null ? void 0 : (f.drawImage(e, 0, 0, o, c), s.toDataURL("image/webp", 0.8));
+    const r = Math.min(S / d, S / t, 1), l = Math.max(1, Math.round(d * r)), c = Math.max(1, Math.round(t * r)), o = document.createElement("canvas");
+    o.width = l, o.height = c;
+    const f = o.getContext("2d");
+    return f === null ? void 0 : (f.drawImage(e, 0, 0, l, c), o.toDataURL("image/webp", 0.8));
   } catch {
     return;
   }
@@ -213,7 +213,7 @@ function J(a) {
   return M(() => a.theme.subscribe(i), [a]), e.lang;
 }
 function ne({ name: a, target: e, data: i, onRemove: d, port: t, host: r }) {
-  const o = J(r), c = H(() => j(o), [o]), s = i, f = e === "", [l, g] = w(null), [v, C] = w(void 0);
+  const l = J(r), c = H(() => j(l), [l]), o = i, f = e === "", [s, g] = w(null), [v, C] = w(void 0);
   M(() => {
     if (f) return;
     let m = !0;
@@ -227,7 +227,7 @@ function ne({ name: a, target: e, data: i, onRemove: d, port: t, host: r }) {
       m = !1;
     };
   }, [f, e, t, r]);
-  const p = f ? s?.name ?? a : a || F(e), h = N(f ? s?.name ?? "" : e), u = l?.status === "gone", I = l?.staging === !0, _ = () => {
+  const p = f ? o?.name ?? a : a || F(e), h = N(f ? o?.name ?? "" : e), u = s?.status === "gone", I = s?.staging === !0, _ = () => {
     if (t !== void 0 && !f) {
       const m = t.refs().findIndex((k) => k.path === e);
       m >= 0 && t.removeRef(m);
@@ -244,12 +244,12 @@ function ne({ name: a, target: e, data: i, onRemove: d, port: t, host: r }) {
       r.toast({ kind: "error", text: c("card.preview-failed") });
     });
   };
-  if (f && s?.status === "error")
-    return /* @__PURE__ */ b("span", { className: "file-ref-card is-error", title: s.error ?? c("card.failed"), children: [
+  if (f && o?.status === "error")
+    return /* @__PURE__ */ b("span", { className: "file-ref-card is-error", title: o.error ?? c("card.failed"), children: [
       /* @__PURE__ */ n("span", { className: "file-ref-icon", children: /* @__PURE__ */ n(y, { kind: h, size: 12 }) }),
       /* @__PURE__ */ n("span", { className: "file-ref-name", children: p }),
       /* @__PURE__ */ n("span", { className: "file-ref-badge is-expired", children: c("card.failed") }),
-      s.retry !== void 0 && /* @__PURE__ */ n("button", { type: "button", className: "file-ref-action", onClick: s.retry, children: c("card.retry") }),
+      o.retry !== void 0 && /* @__PURE__ */ n("button", { type: "button", className: "file-ref-action", onClick: o.retry, children: c("card.retry") }),
       /* @__PURE__ */ n(
         "button",
         {
@@ -323,7 +323,7 @@ function K(a) {
   return M(() => a.theme.subscribe(i), [a]), e.lang;
 }
 function ae({ href: a, text: e, host: i }) {
-  const d = K(i), t = H(() => j(d), [d]), r = a.startsWith($) ? a.slice($.length) : a, [o, c] = w(null), [s, f] = w(void 0), l = N(r), g = e || F(r);
+  const d = K(i), t = H(() => j(d), [d]), r = a.startsWith($) ? a.slice($.length) : a, [l, c] = w(null), [o, f] = w(void 0), s = N(r), g = e || F(r);
   M(() => {
     let h = !0;
     return i.attachments.preview(r).then((u) => {
@@ -336,7 +336,7 @@ function ae({ href: a, text: e, host: i }) {
       h = !1;
     };
   }, [r, i]);
-  const v = o?.status === "gone", C = o?.staging === !0, p = () => {
+  const v = l?.status === "gone", C = l?.staging === !0, p = () => {
     navigator.clipboard.writeText(r).then(() => i.toast({ kind: "success", text: t("card.path-copied") })).catch(() => i.toast({ kind: "error", text: t("card.copy-path") }));
   };
   return /* @__PURE__ */ b(
@@ -348,7 +348,7 @@ function ae({ href: a, text: e, host: i }) {
       "aria-label": `${g} — ${t("card.copy-path")}`,
       onClick: p,
       children: [
-        s !== void 0 && !v ? /* @__PURE__ */ n("img", { className: "file-ref-thumb", src: s, alt: "", width: 36, height: 36 }) : /* @__PURE__ */ n("span", { className: "file-ref-icon", children: /* @__PURE__ */ n(y, { kind: l }) }),
+        o !== void 0 && !v ? /* @__PURE__ */ n("img", { className: "file-ref-thumb", src: o, alt: "", width: 36, height: 36 }) : /* @__PURE__ */ n("span", { className: "file-ref-icon", children: /* @__PURE__ */ n(y, { kind: s }) }),
         /* @__PURE__ */ n("span", { className: "file-ref-name", children: g }),
         v ? /* @__PURE__ */ n("span", { className: "file-ref-badge is-expired", children: t("card.expired") }) : C && /* @__PURE__ */ n("span", { className: "file-ref-badge is-temp", children: t("card.temporary") })
       ]

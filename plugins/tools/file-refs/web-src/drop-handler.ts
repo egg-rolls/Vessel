@@ -39,13 +39,18 @@ async function stageOne(
     bytes: number;
     sha256: string;
   }) => {
+    // A1 收口（file-ref-ux M4）：图片 ref **不携带 sha256**——stager 虽已落 blob
+    // 去重，但 ref 带 sha 会被 vision plan 直接内联，绕过 inline 闸（默认关形同虚设）。
+    // 默认路径-only；用户开「随消息发送图像」⇒ refs[].inline=true，发送时经 ingest
+    // 读暂存路径入池（TTL 内有效；过期诚实降级 not_ingested）。非图片 kind 的 sha
+    // 与视觉无关，保留作对账元信息。
     const added = port.addRef({
       kind: result.kind,
       path: result.path,
       name: result.name,
       ...(result.mime !== undefined ? { mime: result.mime } : {}),
       bytes: result.bytes,
-      sha256: result.sha256,
+      ...(result.kind !== 'image' ? { sha256: result.sha256 } : {}),
     });
     if (!added) {
       transient?.remove();
