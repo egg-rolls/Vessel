@@ -12,6 +12,7 @@
  */
 import { useContext, useEffect, useState } from 'react';
 import { ModalShell } from '../../components/Modal';
+import { Icon, useMessageCopy } from '../../components/ui';
 import { ConnectionContext } from '../../gateway/connection-context';
 import { t } from '../../i18n';
 import { imageBlobUrl } from './image-blob-cache';
@@ -141,16 +142,27 @@ export function ImageThumb({
 /**
  * 放大预览：复用 ModalShell（Esc / 焦点圈 / 滚动锁 / portal 全套既有 a11y），
  * 不另造 lightbox。图片按视口收敛（object-contain），不裁不拉伸。
+ *
+ * 可选 `path`（q-image-chip-inline）：完整绝对路径行（可选中）+ 复制键
+ * （既有 useMessageCopy：clipboard + toast）；`staging` = 暂存未入池「临时」
+ * badge。两者缺省时形态与旧版完全一致（ToolImageCard 等既有消费零回归）。
  */
 export function ImageLightbox({
   url,
   name,
   onClose,
+  path,
+  staging,
 }: {
   url: string;
   name: string;
   onClose: () => void;
+  /** 完整绝对路径（给了才渲染路径行 + 复制键）。 */
+  path?: string;
+  /** 暂存未入池（「临时」badge，与 composer chip 同一语义）。 */
+  staging?: boolean;
 }) {
+  const copy = useMessageCopy(t('chat.toolImage.pathCopied'));
   return (
     <ModalShell
       label={t('chat.toolImage.previewNamed', { name })}
@@ -163,7 +175,26 @@ export function ImageLightbox({
       <img src={url} alt={name} className="tool-image-lightbox-img" />
       <p className="m-0 w-full truncate text-center font-mono text-2xs text-faint" title={name}>
         {name}
+        {staging === true && (
+          <span className="tool-image-lightbox-staging">{t('chat.toolImage.staging')}</span>
+        )}
       </p>
+      {path !== undefined && (
+        <div className="tool-image-lightbox-path">
+          <code className="tool-image-lightbox-path-text" title={path}>
+            {path}
+          </code>
+          <button
+            type="button"
+            className="tool-image-lightbox-copy"
+            onClick={() => copy(path)}
+            aria-label={t('chat.toolImage.copyPath')}
+            title={t('chat.toolImage.copyPath')}
+          >
+            <Icon name="copy" size={13} />
+          </button>
+        </div>
+      )}
     </ModalShell>
   );
 }

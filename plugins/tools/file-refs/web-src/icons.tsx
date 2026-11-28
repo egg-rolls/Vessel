@@ -6,20 +6,19 @@
 
 export type RefKind = 'file' | 'image' | 'document';
 
-const common = {
-  width: 14,
-  height: 14,
-  viewBox: '0 0 20 20',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 1.5,
-  strokeLinecap: 'round' as const,
-  strokeLinejoin: 'round' as const,
-  'aria-hidden': true,
-  focusable: 'false' as const,
-};
-
-export function RefIcon({ kind }: { kind: RefKind }) {
+export function RefIcon({ kind, size = 14 }: { kind: RefKind; size?: number }) {
+  const common = {
+    width: size,
+    height: size,
+    viewBox: '0 0 20 20',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.5,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+    focusable: 'false' as const,
+  };
   if (kind === 'image') {
     return (
       <svg {...common}>
