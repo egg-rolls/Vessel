@@ -33,8 +33,6 @@ export interface SettingDef {
   category: string;
   /** 分类内子分组 id（q-msg-visibility：「消息显示」组；渲染侧出组头，i18n settings.group.<id>）。 */
   group?: string;
-  /** true → 进「常用」curated 视图。 */
-  common?: boolean;
   order?: number;
   /** enum 可选值。 */
   options?: readonly string[];
@@ -82,9 +80,6 @@ export const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
   { id: 'advancedConfig', titleKey: 'settings.category.advancedConfig', order: 60 },
   { id: 'extensions', titleKey: 'settings.category.extensions', order: 70 },
 ];
-
-/** 「常用」是 curated 过滤视图（common:true），不是独立分类。 */
-export const COMMON_CATEGORY_ID = 'common';
 
 /** 日志分组键前缀（日志分类；display-settings 兼容层原样 re-export）。 */
 export const LOG_SETTING_PREFIX = 'observability.log.';
@@ -361,15 +356,6 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   },
 ];
 
-/** 「常用」curated 清单（§6 + 裁定③：系统信息是默认视觉旗舰键；q-msg-visibility 起为 messageVisibility.system）。 */
-const CORE_COMMON: ReadonlySet<string> = new Set([
-  'ui.verbosity',
-  'ui.language',
-  'ui.askUser',
-  'ui.showReasoning',
-  'ui.messageVisibility.system',
-]);
-
 function coreCategory(key: string): string {
   if (key === 'ui.language' || key === 'ui.statusBars') return 'visual';
   // depth-color：与 local.theme / designLab 同视觉分类（depthColor 子分组）。
@@ -497,7 +483,6 @@ const CORE_SETTINGS_BASE: readonly SettingDef[] = CORE_SETTING_SPECS.map((spec) 
     descriptionKey: `settings.item.${shortId}.desc`,
     category: coreCategory(spec.key),
     ...(spec.group !== undefined ? { group: spec.group } : {}),
-    common: CORE_COMMON.has(spec.key) ? true : undefined,
     options: spec.options,
     min: spec.min,
     max: spec.max,
@@ -529,7 +514,6 @@ export const LOCAL_SETTINGS: readonly SettingDef[] = [
     titleKey: 'appearance.theme.title',
     descriptionKey: 'appearance.theme.desc',
     category: 'visual',
-    common: true,
     options: ['system', 'light', 'dark'],
     optionLabelKeys: {
       system: 'appearance.theme.system',

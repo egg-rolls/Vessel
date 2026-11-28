@@ -136,7 +136,6 @@ export const messages = {
 
   // Settings
   'settings.title': '设置',
-  'settings.category.common': '常用',
   'settings.category.visual': '视觉',
   'settings.category.display': '显示与可见性',
   'settings.category.runtime': '运行期',

@@ -136,7 +136,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
 
   // Settings
   'settings.title': 'Settings',
-  'settings.category.common': 'Commonly Used',
   'settings.category.visual': 'Visual',
   'settings.category.display': 'Display & Visibility',
   'settings.category.runtime': 'Runtime',
