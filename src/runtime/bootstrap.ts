@@ -13,7 +13,6 @@ import {
   type PoolTransport,
 } from '@vessel-agent/engine-client';
 import {
-  buildConfigSnapshot,
   getUserConfigDir,
   loadConfig,
   resolveEffectiveApiKey,
@@ -21,34 +20,22 @@ import {
 } from '../../packages/config/src/index';
 import {
   MemoryWorkingContext,
-  pruneTrace,
   Runtime,
-  rebuildMetrics,
   type TenantPaths,
   toolOutputRoot,
 } from '../../packages/core/src/index';
-import {
-  type ConfigSnapshotLike,
-  createGatewayEventHub,
-  createLocalRpcDispatcher,
-  type LocalRpcDispatcher,
-} from '../../packages/serve/src/index';
+import { createGatewayEventHub, type LocalRpcDispatcher } from '../../packages/serve/src/index';
 
 import { resolveAgentWiring } from '../agent/agent-wiring';
-import { createAskAnswerDelivery } from '../agent/ask-answer-delivery';
 import type { PeerNoticeRouter } from '../agent/peer-notices';
+import { collectFeatures } from '../assembly/collect';
+import type { AssemblyContext } from '../assembly/feature';
+import { ASSEMBLY_FEATURES } from '../assembly/features';
 import { formatConfigErrors } from '../config/config-error-format';
-import { sanitizeConfigForSnapshot } from '../config/config-snapshot';
 import { normalizeLegacyToolName } from '../config/legacy-tool-names';
 import { DEFAULT_NEVER_AUTO_APPROVE } from '../config/permission-defaults';
-import {
-  createConfigAttachmentPreviewer,
-  createConfigAttachmentStager,
-  type StagingGcRunner,
-} from '../data/attachment-staging';
-import { createConfigAttachmentLister } from '../data/attachments-list';
+import type { StagingGcRunner } from '../data/attachment-staging';
 import type { AutoPruneRunner } from '../data/auto-prune';
-import { withDataLock } from '../data/data-lock';
 import {
   resolveDataDir,
   resolveEffectiveTenantId,
@@ -62,7 +49,7 @@ import { resolveNodeIdentity } from '../node/node-identity';
 import { configureLoggingFromConfig, createCliLogger } from '../observability/logging';
 import { markStartup, timeStartup } from '../observability/startup-timing';
 import { pruneTenantTrace } from '../observability/trace-wiring';
-import { declarativePluginEntries, setPluginConfigValue } from '../plugin/plugin-config';
+import { declarativePluginEntries } from '../plugin/plugin-config';
 import {
   activateStartupPlugins,
   createPluginHostManager,
@@ -74,28 +61,14 @@ import { createPluginSurface } from '../plugin/plugin-surface';
 import { startPluginWatch } from '../plugin/plugin-watch';
 import { createLocalRpcClient } from '../rpc/index';
 import { createRunControl } from '../run/run-control';
-import { createContextCompositionSource } from '../session/context-composition';
-import { createContextUsageSource } from '../session/context-usage';
-import { createImageDeliverySource } from '../session/image-delivery';
-
-import { createSessionEventsSource } from '../session/session-events';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from '../session/session-lock';
-import { createSystemContextSource } from '../session/system-context';
-// 0.54 B1 末块：实时尾随端口（发布点扇出 → serve 的时间线 epoch）。
-// 只有双写开关开时才有 `timelineDualWrite`，此时才传；关闭路径与 0.53 逐字节相同。
-// 0.54 C：`events.list` 的按 run 读端口（同一模块，共用 timeline 的读面与路径口径）。
-import { createTimelineRunEventsPort, timelineTailPort } from '../session/timeline-dual-write';
-import { readPackageVersion } from '../shared/version';
 import type { McpEngineShell } from '../tools-engine/mcp-engine-wiring';
 import { createEngineSupervisor, type EngineSupervisor } from '../tools-engine/supervisor';
 import { assembleAgentWiring, finishAgentAssembly } from './agent-assembly';
-import {
-  bootstrapConnect,
-  resolveKanbanBoardPath,
-  withConnectCliOverrides,
-} from './bootstrap-connect';
+import { bootstrapConnect, withConnectCliOverrides } from './bootstrap-connect';
 import type { BootstrapOptions, BootstrapResult } from './bootstrap-types';
 import { createGcAssembly } from './gc-assembly';
+import { buildLocalRpcSurface } from './local-rpc-surface';
 import { hasBootRegistryKey } from './model-registry-wiring';
 import type { NodeHealthWatch } from './node-health-watch';
 import { createDurableResumeSurface, createNodeRestartSurface } from './node-restart';
@@ -748,10 +721,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
   });
 
-  // R-6：kanban deps（可变对象，同一引用进 localDispatcher opts.kanban 与 result.kanbanDeps）。
-  // 解析走共享 resolveKanbanBoardPath（cli 网络面同源）；热应用由 cli applyKanban 原地改。
-  const kanbanDeps: { boardPath: string } = { boardPath: resolveKanbanBoardPath(config.kanban) };
-
   // bootstrap P0（设计稿 §5）：本地面与 cli 网络面共用同一插件读面工厂。
   // 修复两处缺口：①原手写 plugins() 跳过 child（mode==='child' → continue）但本地面
   // 没有补 statuses 行 → marketplace/usage 等体验插件整行不可见；②opts 未传
@@ -769,191 +738,58 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     pendingInProcessRestart: () => reloadLocalPlugins.pendingInProcessRestart(),
   });
 
-  const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
-    hub: localEventHub,
-    session,
-    // 会话级上下文用量（additive `sessions.get.context_usage`）：从**时间线**尾窗派生
-    // （历史会话 / rotate 后 / 重启后都可用）。`contextWindowTokens` 与 runtime 算百分比的
-    // 分母同源（`config.context.maxTokens`，缺省走 DEFAULT_CONFIG）。
-    //
-    // 0.54 stop-write：读源是 `bundle.timelineLog`（只读口，没有 append）——
-    // `events.ndjson` 已停写，装配层也不再拼那条路径去 `stat`。
-    ...(timelineLog !== undefined
-      ? {
-          contextUsage: createContextUsageSource({
-            tail: timelineLog,
-            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
-            ...(config.context?.maxTokens !== undefined
-              ? { contextWindowTokens: config.context.maxTokens }
-              : {}),
-          }),
-          // 请求组成快照（additive `sessions.composition`，q-context-composition）：
-          // 同一个读口，取 `context.composition` 事实事件（每请求一条成分明细）。
-          composition: createContextCompositionSource({ tail: timelineLog }),
-          // 「模型这一轮看到了什么系统消息」（additive `sessions.get.system_context`）：
-          // 同一个读口，取的是另一类事件（`prompt.system_context`）。
-          // 事件不是 message ⇒ 回放窗口淘汰 / 进程重启后只有重新派生才能把卡找回来。
-          systemContext: createSystemContextSource({
-            tail: timelineLog,
-            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
-          }),
-          // 每张图的投递状态（additive `sessions.get.session.messages[].image_delivery`，0.56）：
-          // 同一个读口，取的是另一类事件（`image.sent` / `context.image_dropped`）。
-          // 从事件派生而不是写进 refs —— 后者会改写历史前缀且被 messageSignature 无视。
-          imageDelivery: createImageDeliverySource({
-            log: timelineLog,
-            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
-          }),
-          // `sessions.events` 回填 + `sessions.get.event_cursor`：与上面两个同一个读口，
-          // serve 只做游标/分页。
-          sessionEvents: createSessionEventsSource({
-            log: timelineLog,
-            watermark: (sessionId: string) => timelineLog.watermark(sessionId),
-          }),
-        }
-      : {}),
-    // 0.54 A：timeline 四字段（additive `sessions.get.event_cursor` 的 `timeline_head` /
-    // `wal_head` / `published_head` / `holes` / `tainted`）。双写开关关 / 该会话没有
-    // timeline ⇒ 一起缺省。
-    ...(bundle.timelineDualWrite !== undefined
-      ? {
-          timelineHeads: {
-            lookup: (sessionId: string) =>
-              bundle.timelineDualWrite?.heads(sessionId) ?? Promise.resolve(undefined),
-          },
-          // 0.54 B1：时间线 epoch 的两个端口。`readPage` 是历史页，`timelineTail` 是
-          // 发布点实时尾随（`pub-i2` 的 `onPublish` 扇出；serve 按连接的 session_id 过滤）。
-          timelineRead: {
-            readPage: (
-              sessionId: string,
-              options: { afterSeq: number; untilSeq?: number; limit?: number },
-            ) => bundle.timelineDualWrite?.readPage(sessionId, options) ?? Promise.resolve([]),
-          },
-          timelineTail: timelineTailPort(bundle.timelineDualWrite),
-        }
-      : {}),
-    pluginHostManager: localPluginHostManager,
-    pluginsReload: () => reloadLocalPlugins.reload(),
-    // S4：本地 RPC 同样注入插件设置写面（与 gateway 模式同一 asm 函数）。
-    pluginsConfigSet: (plugin: string, key: string, value: string | number | boolean) =>
-      setPluginConfigValue(plugin, key, value),
-    // 0.15: local RPC runs also take the session write lock.
-    runtime: bundle.runtime,
-    context,
-    pluginHost: finalPluginHost,
-    ...(localAuth.ok ? { auth: localAuth.auth } : {}),
-    version: readPackageVersion(),
+  // ── P2 声明式收集器（ADR-107）──────────────────────
+  // phase 硬闸的 dispatcher 调用点：晚于 agent 装配（startOwner 已在上方完成），
+  // 早于两表面 opts 构造。收集结果一份，本地面在此展开、网络面经 result.assembly
+  // 透传给 cli 展开——「忘接一路」（R-1/R-6）结构上不可能。脊柱不进收集器。
+  const assemblyContext: AssemblyContext = {
+    config,
+    liveConfig: liveConfigRef,
+    bundle,
+    tenantPaths,
+    dataDir,
+    tenantId,
     nodeId,
     nodeName,
-    defaultTenantId: tenantId,
-    config: {
-      snapshot: async (): Promise<ConfigSnapshotLike> =>
-        buildConfigSnapshot({
-          config: sanitizeConfigForSnapshot(config),
-          sources: loaded.sources,
-          paths: loaded.paths,
-          tenantId,
-        }) as unknown as ConfigSnapshotLike,
-    },
-    // bootstrap P0：与 cli 网络面同源（createPluginSurface）——child runtime 行 +
-    // 显式 disabled 补行 + 活配置口径由工厂统一提供；catalog 首次注入本地面。
-    plugins: pluginSurface.entries,
-    pluginCatalog: pluginSurface.catalog,
-    ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
-    metricsControl: {
-      ...(typeof (metrics as unknown as { reset?: unknown })?.reset === 'function'
-        ? { reset: () => (metrics as unknown as { reset: () => void }).reset() }
-        : {}),
-      rebuild: () => rebuildMetrics(tenantPaths.events_dir),
-    },
-    // 0.54 C：`events.list` 换源到时间线（`seq` = `timeline_seq`）。旧的
-    // `readEvents: (filter) => readTraceEvents(events_dir, filter)` 已删除：那条路读
-    // `data/events/<run_id>.jsonl` 的 per-run 序号，与登记在 CHANGELOG 的新语义同名不同义。
-    // timeline 的 run 索引是**会话内**的，所以 run → session 的解析也在端口实现里。
-    timelineRunEvents: createTimelineRunEventsPort({
-      sessionsDir: tenantPaths.sessions_dir,
-      logger,
-      // 快路径：durable 打开的安装能从 RunRecord 一次读到 `session_id`。
-      ...(bundle.runStore !== undefined
-        ? {
-            resolveSession: async (runId: string) => {
-              const record = await bundle.runStore?.load(runId);
-              return record?.session_id;
-            },
-          }
-        : {}),
-    }),
-    trace: {
-      prune: (params: Record<string, unknown>) => {
-        const pruneOptions = {
-          ...(typeof params.older_than_days === 'number'
-            ? { retentionDays: params.older_than_days }
-            : {}),
-          ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
-          ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
-        };
-        // 0.49 T5：data-dir 写意图锁（中性命名）；同进程重复加锁由 withDataLock 识别。
-        return withDataLock({ dataDir: tenantPaths.root }, () =>
-          pruneTrace(tenantPaths.events_dir, pruneOptions),
-        );
-      },
-    },
-    sessionData: {
-      deleteSessionData: (sessionId: string) =>
-        withDataLock({ dataDir: tenantPaths.root }, async () => {
-          // 0.34 Stage 3：sessionControl.delete 内部先 detach；冲突（active run /
-          // 活 SessionLease）直接抛 `conflict`，不做任何删除。
-          return sessionControl.delete(sessionId);
-        }),
-    },
-    redactor: bundle.redactor,
-    ...(runStore
-      ? {
-          durable: {
-            store: runStore,
-            ...(runs
-              ? {
-                  resume: async (runId: string) => {
-                    const handle = await runs.resume(runId);
-                    void handle?.done;
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
-    ...(mcpControl ? { mcp: { listServers: () => mcpControl.list() } } : {}),
-    ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
-    // 0.28 C3：本地裸跑与 `--serve` 共用同一套方法表——`agents.*` / `teams.*` /
-    // `runs.*` 必须注入同一批控制面，否则 TUI 里 `agents.create` 返回 not_found、
-    // `runs.start` 返回 forbidden。三者在 agent 未启用时保持缺省（方法进 manifest，
-    // handler 按既有语义报错），不新增实体。
-    ...(agentControl !== undefined
-      ? { agent: agentControl.control, teams: agentControl.team, runControl: localRunControl }
-      : {}),
-    // 0.52：async ask 的答案投放（本地 REPL / 本地 dispatcher 也要能起那一次新 run）。
-    // 与 `--serve` 同一份实现：答案作为 user 消息进成员 inbox 并起新 run。
-    ...(agentControl !== undefined
-      ? { askAnswerDelivery: createAskAnswerDelivery(agentControl.service) }
-      : {}),
-    // 0.52：attachments.list 的列举器（节点侧只读目录浏览）。与读文件工具同一份
-    // basic-tools 配置（allowed_roots / deny_paths）—— 面板列出来的路径必须与读侧判定同源。
-    listAttachments: createConfigAttachmentLister({ getConfig: () => config }),
-    // R-1（q-restart-tool）：vessel op=rpc 走的是本 localDispatcher（vesselRpcPort），
-    // gateway.restart 必须在这里同样注入，否则设计主入口 not_supported——
-    // cli.ts 的网络 gatewayOptions 只是另一路。惰性包装：gatewayRestart 定义在
-    // 装配后段，dispatch 发生时早已初始化（TDZ 无虞）。additive 只补 restart；
-    // selfRestart/shutdown/reload 的本地面缺口另议，不在本批扩面。
-    restart: async (input) => gatewayRestart(input),
-    // R-6（q-tooling-cosmetic，同 R-1 模式）：vessel op=rpc 走的是本 localDispatcher
-    // （vesselRpcPort），kanban.* 必须在这里同样注入 deps，否则设计主入口
-    // not_found「board path is not configured」——cli.ts 的网络 gatewayOptions 只是另一路。
-    // 可变对象：cli 的 applyKanban 热应用经 result.kanbanDeps 原地更新（handler 每次调用读）。
-    kanban: kanbanDeps,
-    // file-ref-ux（A2/A3/A4）：暂存上传 + 预览/过期探针。边界与入池同一份
-    // basic-tools 配置；暂存根已由 buildPathBoundary 追加进允许根。
-    stageAttachment: createConfigAttachmentStager({ getConfig: () => config }),
-    previewAttachment: createConfigAttachmentPreviewer({ getConfig: () => config }),
+    logger,
+    engineClient,
+    executionRuntime,
+    agent: { current: agentControl?.control },
+    notice: { current: noticeBus },
+    pluginManager: { current: localPluginHostManager },
+    gatewayRestart: { current: gatewayRestart },
+  };
+  const collectedFeatures = collectFeatures(ASSEMBLY_FEATURES, assemblyContext, 'dispatcher');
+
+  // P1 批9（纯移动 local-rpc-surface.ts）+ P2：opts = 共享底座 + feature 收集
+  // 结果展开（第一批四 feature：attachments/jobs/kanban/restart，两表面共消费）。
+  const localDispatcher: LocalRpcDispatcher = buildLocalRpcSurface({
+    localEventHub,
+    session,
+    timelineLog,
+    config,
+    bundle,
+    localPluginHostManager,
+    reloadLocalPlugins,
+    context,
+    finalPluginHost,
+    localAuth,
+    nodeId,
+    nodeName,
+    tenantId,
+    loaded,
+    pluginSurface,
+    metrics,
+    tenantPaths,
+    logger,
+    sessionControl,
+    runStore,
+    runs,
+    mcpControl,
+    feishuChannel,
+    agentControl,
+    localRunControl,
+    collectedDispatcher: collectedFeatures.dispatcher,
   });
   // vessel 元工具的 RPC 端口回填：与 gateway 同一方法表 / 同一权限语义（本地 principal）。
   vesselRpcPort = localDispatcher;
@@ -1096,8 +932,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(federationApply !== undefined ? { federationApply } : {}),
     // auto-gc P1 热应用：调度器活配置引用的原地更新入口（cli 的 applyAutoPrune 用）。
     ...(applyAutoPruneConfig !== undefined ? { applyAutoPruneConfig } : {}),
-    // R-6：localDispatcher 的 kanban deps 透传（cli applyKanban 热应用原地更新）。
-    kanbanDeps,
+    // P2 收集器（ADR-107）：result 透传字段统一展开（本批：kanbanDeps——与
+    // dispatcher.kanban 同一可变对象，cli applyKanban 热应用原地更新）。
+    ...collectedFeatures.result,
+    // dispatcher phase 收集结果透传——cli 网络面展开同一份 deps/hotApply
+    // （两表面同源；本批 attachments/jobs/kanban，restart 随后迁入）。
+    assembly: collectedFeatures,
     nodeId,
     nodeName,
     mcp: mcpControl,
