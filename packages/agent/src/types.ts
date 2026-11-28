@@ -2415,6 +2415,12 @@ export interface TeamAgentSendInput {
   origin_run_id?: string;
   /** 0.41：内部（非 wire、非持久）一次 messages 数组的 wake 边计数 key。 */
   batch_key?: string;
+  /**
+   * 块 P2 additive（内部透传，不扩 wire）：附件引用，与 `DispatchInput.refs` 同一形状
+   * （只有路径与元信息）。只支持本机成员投递路（主 dispatch + Team 日志 mention）；
+   * 地址 / human / 跨节点升级路无法携带 node-local 路径，显式拒绝（不静默丢）。
+   */
+  refs?: MessageRef[];
 }
 
 export interface TeamAgentSendResult {

@@ -21,7 +21,7 @@ import { RefCard } from './RefCard';
 import { SessionRefBlock } from './SessionRefBlock';
 import type { ParsedSessionRefEnvelope } from './session-ref';
 import { ToolImageCard } from './ToolImageCard';
-import { type VesselBlockTablePayload, vesselBlockMarkdown } from './vessel-block';
+import { type VesselBlockPayload, vesselBlockMarkdown } from './vessel-block';
 
 /** quote 块 payload = 既有信封解析结果（不另造形状）。 */
 export type QuoteBlockPayload = ParsedQuoteEnvelope;
@@ -121,7 +121,7 @@ function VesselBlockView({
   payload,
   render,
 }: {
-  payload: VesselBlockTablePayload;
+  payload: VesselBlockPayload;
   render: BlockRenderCtx;
 }) {
   return <Markdown text={vesselBlockMarkdown(payload)} className={render.className} />;
