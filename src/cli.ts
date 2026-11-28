@@ -164,7 +164,6 @@ import {
 import {
   buildPluginConfigMap,
   declarativePluginEntries,
-  pluginEntryEnabled,
   setPluginConfigValue,
 } from './plugin/plugin-config';
 import {
@@ -173,6 +172,7 @@ import {
   createPluginReloader,
   type PluginReloader,
   pluginSettingsFor,
+  syncInProcessRegistrationState,
 } from './plugin/plugin-host-assembly';
 import { FACTORY_PLUGINS } from './plugin/plugin-loader';
 import { createPluginSurface } from './plugin/plugin-surface';
@@ -1224,33 +1224,6 @@ async function runWithConfig(result: BootstrapResult) {
     // 赋值）。入站路由逐请求读它；config scope 的 applyFederation 原地更新。
     let liveFederationOptions: FederationRuntimeOptions | undefined;
 
-    /**
-     * q-plugin-lifecycle §6.2 R1 读写联动：按 liveConfig 同步已登记 in-process 插件的
-     * 登记态（enabled + RPC / 贡献面）。manager.enable/disable 是现成实现（此前零生产
-     * 调用方），这里接线 —— 热 disable → 翻 enabled + 注销 RPC + 贡献面收口；enable 反之。
-     * 读面（bundlePluginEntries）随后读 liveConfig 同口径，四面一致。child 的启停由
-     * manager.reload（enabled 进指纹）负责，不在此重复。
-     */
-    const syncInProcessRegistrationState = async (): Promise<string[]> => {
-      const manager = pluginHostManager;
-      if (manager === undefined) return [];
-      const lines: string[] = [];
-      const statusById = new Map(manager.statuses().map((status) => [status.id, status]));
-      for (const row of inProcessPluginRows) {
-        const desired = pluginEntryEnabled(liveConfig.plugins, row.name);
-        const current = statusById.get(row.name)?.enabled;
-        if (current === undefined || current === desired) continue;
-        if (desired) {
-          manager.enable(row.name);
-          lines.push(`plugins: ${row.name} enabled`);
-        } else {
-          await manager.disable(row.name);
-          lines.push(`plugins: ${row.name} disabled`);
-        }
-      }
-      return lines;
-    };
-
     const reloadAppliers: Record<string, GatewayReloadApplier> = {
       permission: createPermissionApplier(
         {
@@ -1320,8 +1293,13 @@ async function runWithConfig(result: BootstrapResult) {
           previousKey: toolsConfigKey,
         });
         // q-plugin-lifecycle §6.2 R1：工具差量之后同步 in-process 登记态（RPC / 贡献面
-        // 随 liveConfig 启停），读面与生效态同源。
-        const registrationLines = await syncInProcessRegistrationState();
+        // 随 liveConfig 启停），读面与生效态同源。共享单实现（plugin-host-assembly），
+        // bootstrap 本地面同款接线（顺手项②）。
+        const registrationLines = await syncInProcessRegistrationState({
+          manager: pluginHostManager,
+          rows: inProcessPluginRows,
+          getConfig: () => liveConfig,
+        });
         // q-plugin-lifecycle §6.2 R3：任何插件生效态变化 → 必有一次 plugin.changed。
         // tools applier 成功后广播（与 plugins.reload / plugins.config.set 同一出口），
         // node 专属 config / 项目 vessel.yaml 路径不再依赖 plugin-watch 间接补。

@@ -54,6 +54,8 @@ import {
   activateStartupPlugins,
   createPluginHostManager,
   createPluginReloader,
+  type PluginReloader,
+  syncInProcessRegistrationState,
 } from '../plugin/plugin-host-assembly';
 import { PluginLoader } from '../plugin/plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from '../plugin/plugin-selection';
@@ -695,6 +697,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const localPluginHostManager = createPluginHostManager({
     loader: bundle.pluginLoader,
     config,
+    // 顺手项①（设计稿 §5.3.5，与 cli 0.48 M4 对齐）：expose 授权随热应用变化——
+    // 读 liveConfigRef.current（cli 热应用时同步）。纯本地 REPL 下 ref 不热更新
+    // ⇒ 回退启动快照语义不变；serve 模式下本地 dispatcher 与网络面同一活配置。
+    // settingsFor 刻意不注入：child settings 启动钉死（本地语义）不在本批动。
+    getConfig: () => liveConfigRef.current,
     dataDir,
     logger,
   });
@@ -712,10 +719,29 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     manager: localPluginHostManager,
     getConfig: () => config,
   });
+  // 顺手项②（设计稿 §5.3.5）：本地面补 cli 同款读写联动——本地 reload（plugins.reload
+  // RPC / plugin-watch）之后按活配置同步 in-process 登记态（共享单实现
+  // syncInProcessRegistrationState，与 cli tools applier 同一函数）。纯本地 REPL 下
+  // liveConfigRef 不热更新 ⇒ sync 恒 no-op（行为与今天一致）；serve 模式下 cli 热应用
+  // 后本地 reload 对齐生效态，读面（pluginSurface）与生效态同源。child 启停仍由
+  // manager.reload 负责，不在此重复。
+  const localPluginReloader: PluginReloader = {
+    reload: async () => {
+      const result = await reloadLocalPlugins.reload();
+      const lines = await syncInProcessRegistrationState({
+        manager: localPluginHostManager,
+        rows: inProcessPluginRows,
+        getConfig: () => liveConfigRef.current,
+      });
+      if (lines.length > 0) logger.info('plugin.registration.synced', { lines });
+      return result;
+    },
+    pendingInProcessRestart: () => reloadLocalPlugins.pendingInProcessRestart(),
+  };
   // 0.43 E3：本地模式同样监听项目/用户插件目录与 config，变更即 rescan + reload。
   const localPluginWatch = startPluginWatch({
     onChange: ({ paths }) => {
-      void reloadLocalPlugins.reload().catch((error) => {
+      void localPluginReloader.reload().catch((error) => {
         logger.warn('plugin.reload.failed', {
           error: error instanceof Error ? error.message : String(error),
           paths,
@@ -738,7 +764,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     getConfig: () => liveConfigRef.current,
     startupConfig: bundle.config,
     surfaces: bundle.pluginSurfaces,
-    pendingInProcessRestart: () => reloadLocalPlugins.pendingInProcessRestart(),
+    pendingInProcessRestart: () => localPluginReloader.pendingInProcessRestart(),
   });
 
   // ── P2 声明式收集器（ADR-107）──────────────────────
@@ -773,7 +799,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     bundle,
     localPluginHostManager,
-    reloadLocalPlugins,
+    // 顺手项②：RPC plugins.reload 与 plugin-watch 走同一带 sync 的 reload 链路。
+    reloadLocalPlugins: localPluginReloader,
     context,
     finalPluginHost,
     localAuth,
