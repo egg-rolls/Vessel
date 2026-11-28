@@ -45,10 +45,21 @@ export async function serveStatic(
   return null;
 }
 
+/**
+ * 内容哈希文件名（Vite 产物 `name-HASH.ext`，HASH ≥8 位）。只有文件名自带
+ * 内容哈希的资产才配 immutable 一年缓存；publicDir 直拷的无哈希资产
+ * （/Vessel.svg、/favicon.ico、/apple-touch-icon.png 等）内容随版本变化，
+ * immutable 会让存量浏览器升级后永远拿旧 icon（q-icon-cache-hash），必须
+ * 降档为可再验证。字符类保守排除 `-`：apple-touch-icon 这类多连字符名不会
+ * 被跨段误判成哈希；真哈希含 `-` 时只会降档 no-cache（方向安全）。
+ */
+const HASHED_ASSET_PATTERN = /-[A-Za-z0-9_]{8,}\.[A-Za-z0-9]+$/;
+
 export function fileResponse(file: Bun.BunFile, path: string): Response {
   const isHtml = path.toLowerCase().endsWith('.html');
+  const immutable = !isHtml && HASHED_ASSET_PATTERN.test(path);
   const headers: Record<string, string> = {
-    'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
+    'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     'X-Content-Type-Options': 'nosniff',
   };
   return new Response(file, { headers });

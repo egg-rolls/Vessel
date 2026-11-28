@@ -36,7 +36,7 @@ export function BodyHistoryList({
                 {body.session_id}
               </span>
             </div>
-            <div className="team-body-history-meta flex flex-none flex-col items-end gap-0.5 text-xs text-muted tabular-nums">
+            <div className="team-body-history-meta flex flex-none flex-col gap-0.5 text-xs text-muted tabular-nums">
               <span>
                 {t('team.member.observedAt', { time: formatTimestamp(body.observed_at) })}
               </span>
@@ -67,7 +67,7 @@ export function BodyHistoryList({
               {body.session_id}
             </span>
           </div>
-          <div className="team-body-history-meta flex flex-none flex-col items-end gap-0.5 text-xs text-muted tabular-nums">
+          <div className="team-body-history-meta flex flex-none flex-col gap-0.5 text-xs text-muted tabular-nums">
             <span>{t('team.member.startedAt', { time: formatTimestamp(body.started_at) })}</span>
             <span>{t('team.member.retiredAt', { time: formatTimestamp(body.retired_at) })}</span>
           </div>
