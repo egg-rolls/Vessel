@@ -1,8 +1,8 @@
 /**
  * 投影卡（0.54）的**纯逻辑**：badge 词表 / 默认视角 / readback 请求与抽帧 / 汇总数字口径。
  *
- * 为什么单独一个 `.ts`（无 React、无 DOM）：`scripts/check-chat-visibility.ts` 直接 import
- * 这几个函数做 fixture（spec §7.1 第 4 条）。渲染层只负责把结果摆进 DOM。
+ * 为什么单独一个 `.ts`（无 React、无 DOM）：判定口径是纯函数，便于复用与评审核对
+ * （原 fixture 对拍脚本已按宪法删除）。渲染层只负责把结果摆进 DOM。
  *
  * 三条纪律写在这里、由门禁钉住，别在组件里各写一份：
  * 1. **合并按 `tool_call_id`**（见 `projectionIndexByCallId`），不按数组下标；
