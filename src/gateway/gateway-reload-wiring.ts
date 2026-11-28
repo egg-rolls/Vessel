@@ -258,10 +258,11 @@ export function createGatewayReloadRunner(
     const reloaded: string[] = [];
     const requiresRestart: string[] = [];
     const summaries: Record<string, string[]> = {};
-    // q-error-e3（D8）：三域报告收集器；仅当 inert 非空时随响应附 field_report。
+    // q-error-e3（D8）：三域报告收集器；有字段变化即随响应附 field_report（lead 裁定）。
     const appliedReport: Array<{ field: string; reason: string }> = [];
     const restartReport: Array<{ field: string; reason: string }> = [];
     const inertReport: Array<{ field: string; reason: string }> = [];
+    let sawFieldChange = false;
 
     for (const scope of requested) {
       // 未知 scope 是请求错误，不是执行失败：在隔离之外显式抛出（契约 §1：不静默忽略）。
@@ -396,12 +397,26 @@ export function createGatewayReloadRunner(
           for (const field of restartFields) {
             restartReport.push({ field, reason: 'no hot applier; takes effect after restart' });
           }
-          for (const field of diffInertFields(current, next)) {
+          const inertFields = diffInertFields(current, next);
+          for (const field of inertFields) {
             inertReport.push({
               field,
               reason:
                 'changed but neither hot-applied nor declared requires_restart (hardening gap); restart loads it from disk',
             });
+          }
+          // lead 红线⑤裁定：有字段变化即出现（三域全列）；空 diff 缺省响应省略。
+          if (
+            restartFields.length > 0 ||
+            providerChanged ||
+            modelsChanged ||
+            federationChanged ||
+            kanbanChanged ||
+            autoPruneChanged ||
+            allowedOriginsChanged(current, next) ||
+            inertFields.length > 0
+          ) {
+            sawFieldChange = true;
           }
           summaries.config = [
             ...restartFields.map((field) => `config: ${field} requires restart`),
@@ -425,11 +440,10 @@ export function createGatewayReloadRunner(
       }
     }
 
-    // q-error-e3（D8 + 红线⑤）：仅当存在 inert 域时附 field_report；缺省响应逐字节不变。
-    const fieldReport =
-      inertReport.length > 0
-        ? { applied: appliedReport, requires_restart: restartReport, inert: inertReport }
-        : undefined;
+    // q-error-e3（D8 + lead 红线⑤裁定）：有字段变化即附 field_report；空 diff 省略。
+    const fieldReport = sawFieldChange
+      ? { applied: appliedReport, requires_restart: restartReport, inert: inertReport }
+      : undefined;
     return {
       reloaded,
       requires_restart: requiresRestart,

@@ -91,6 +91,7 @@ export async function withArchiveLock<T>(sessionDir: string, task: () => Promise
         });
       }
       // 已有锁：可能是活着的持有者，也可能是崩溃遗留。
+      // benign: stale 判定探针——stat 失败不回收（保守等待/超时报错）。
       const info = await stat(path).catch(() => undefined);
       if (
         info !== undefined &&
@@ -98,6 +99,7 @@ export async function withArchiveLock<T>(sessionDir: string, task: () => Promise
         reclaims < ARCHIVE_LOCK_RECLAIM_LIMIT
       ) {
         reclaims += 1;
+        // benign: 回收崩溃遗留锁（次数有界 ARCHIVE_LOCK_RECLAIM_LIMIT），失败下轮再试。
         await unlink(path).catch(() => {});
         continue; // 立刻重试一次（不占等待预算）
       }
@@ -114,6 +116,7 @@ export async function withArchiveLock<T>(sessionDir: string, task: () => Promise
     try {
       return await task();
     } finally {
+      // benign: 释放锁尽力而为——残留由 stale 回收路径兜底（有界）。
       await handle.close().catch(() => {});
       await unlink(path).catch(() => {});
     }

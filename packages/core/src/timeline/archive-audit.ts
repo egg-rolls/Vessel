@@ -269,6 +269,7 @@ export async function auditArchiveDuplicates(
     if (result.unrecognized > 0) result.conclusive = false;
     return result;
   } finally {
+    // benign: 审计读句柄关闭，失败不掩盖审计结果。
     await handle.close().catch(() => {});
   }
 }

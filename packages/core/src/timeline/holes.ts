@@ -411,6 +411,7 @@ export class HoleRegistry {
   }
 
   async close(): Promise<void> {
+    // benign: 关闭路径尽力释放句柄，失败不抛（声明已 fsync）。
     await this.handle.close().catch(() => {});
   }
 

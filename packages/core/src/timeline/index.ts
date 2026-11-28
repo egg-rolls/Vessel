@@ -339,6 +339,7 @@ export async function loadIndexSnapshot(
   if (maxBytes !== undefined) {
     let total = 0;
     for (const path of [paths.session, paths.run, paths.type]) {
+      // benign: 大小探针——stat 失败按索引不可用处理（回落尾窗回扫）。
       const info = await stat(path).catch(() => undefined);
       if (info === undefined) return undefined;
       total += info.size;

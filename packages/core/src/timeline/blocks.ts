@@ -353,12 +353,14 @@ export class ChunkBlockStore {
     for (const name of names) maxNumber = Math.max(maxNumber, blockNumber(name));
     for (const name of decodedNames) {
       const path = join(blocksDir, name);
+      // benign: 恢复扫描探针——读不出的块跳过（坏块由 decode/invalid 路径处理）。
       const buffer = await readFile(path).catch(() => undefined);
       if (buffer === undefined) continue;
       // 空块文件（崩在「建文件」与「第一次落盘」之间）：一个字节的数据都没有，删掉它。
       // 留着会让块号序列出现一个「空档」，而且 `lastBlockSeq` 会读到 0（尾部看起来像没有
       // 任何数据）。删它不违反 append-only：里面从来没有过内容。
       if (buffer.length === 0) {
+        // benign: 清理从未有过内容的空块文件，失败仅留空档（恢复路径尽力而为）。
         await unlink(path).catch(() => {});
         continue;
       }
@@ -391,6 +393,7 @@ export class ChunkBlockStore {
     /** manifest 里出现过的**最大块号**（补记账的边界：只补它之后的连续尾部块）。 */
     let entryMaxNumber = 0;
     if (tailOnly) {
+      // benign: 存在性探针——manifest 缺失走扫描重建（目录是派生数据）。
       const exists = await stat(manifestPath).catch(() => undefined);
       const last = decodedNames[decodedNames.length - 1];
       if (exists !== undefined) {
@@ -432,7 +435,7 @@ export class ChunkBlockStore {
       const manifest = await readCrcNdjsonFile<WalManifestLine>(
         manifestPath,
         validateManifestLine,
-      ).catch(() => undefined);
+      ).catch(() => undefined); // benign: 读失败回落整份扫描（manifest 是派生目录，可重建）。
       // 崩在「manifest 追加中途」会留下半行；截掉它，否则下一次追加的行会接在半行后面
       // 变成一行坏 JSON —— 一条条目丢失就等于一条完整性证明丢失（目录是派生数据，可截）。
       if (manifest?.truncateTo !== undefined) {
@@ -663,6 +666,7 @@ export class ChunkBlockStore {
     const tail = await this.flushActive();
     const active = this.active;
     if (active === undefined) return tail;
+    // benign: 封块关闭句柄，失败不阻断封块（数据已 flush）。
     await active.handle.close().catch(() => {});
     this.active = undefined;
     this.nextBlockNumber += 1;
@@ -675,6 +679,8 @@ export class ChunkBlockStore {
       count: active.frames + active.markers,
       crc32: crc32Final(active.crc),
     };
+    // benign: manifest 追加 best-effort——它是目录不是数据，落后于块目录是设计允许的
+    // （见类注释；恢复可由扫描重建），失败不阻断封块。
     const manifestWrite = this.appendManifest(entry).catch(() => {});
     this.pendingManifests.add(manifestWrite);
     void manifestWrite.then(() => this.pendingManifests.delete(manifestWrite));
@@ -695,9 +701,11 @@ export class ChunkBlockStore {
     previousBytes: number,
   ): Promise<void> {
     if (active === undefined) return;
+    // benign: 回滚路径关闭句柄，失败不阻断回滚决策（放弃块由恢复截断兜底）。
     await active.handle.close().catch(() => {});
     const path = join(this.blocksDir, active.name);
     if (created) {
+      // benign: 回滚删除本次新建块，失败留撕裂尾帧由恢复截断（设计兜底）。
       await unlink(path).catch(() => {});
       return;
     }
@@ -708,6 +716,7 @@ export class ChunkBlockStore {
         try {
           await handle.truncate(previousBytes);
         } finally {
+          // benign: 回滚 truncate 句柄关闭，失败不掩盖回滚结果。
           await handle.close().catch(() => {});
         }
         this.active = {
@@ -742,6 +751,7 @@ export class ChunkBlockStore {
       if (start === undefined || end === undefined) continue; // 空块：没有可记的区间
       // crc 必须覆盖**整个块文件字节**（与封块时同一口径）。这里重读一次：尾部块只有
       // 一两个，字节数有界，不值得为了省这次读把全文缓冲留在内存里。
+      // benign: crc 重读探针——读不出跳过该尾部块记账（恢复尽力而为）。
       const bytes = await readFile(join(this.blocksDir, item.name)).catch(() => undefined);
       if (bytes === undefined) continue;
       const entry: TimelineBlockEntry = {
@@ -787,6 +797,7 @@ export class ChunkBlockStore {
   /** 关闭（不再写；未封的块由调用方先 `seal()` 或 `takePending()`）。 */
   close(): void {
     this.closed = true;
+    // benign: 关闭路径尽力释放句柄，失败不抛（调用方已先 seal/takePending）。
     void this.active?.handle.close().catch(() => {});
     this.active = undefined;
   }
@@ -805,6 +816,7 @@ export class ChunkBlockStore {
       this.options.beforeSync?.('manifest');
       await handle.sync();
     } finally {
+      // benign: manifest 句柄关闭，失败不掩盖写入结果。
       await handle.close().catch(() => {});
     }
   }
@@ -1021,6 +1033,7 @@ export async function locateRangeAnchor(
   const anchor = await locateManifestAnchor(manifestPath, sinceSeq);
   if (anchor !== undefined) {
     const index = names.indexOf(anchor.entry.block);
+    // benign: 大小探针——stat 失败按 0 处理（走慢路径/缺省判定）。
     const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
     if (index >= 0 && (await manifestNeighborhoodOk(manifestPath, anchor, size))) {
       return {
@@ -1276,7 +1289,7 @@ export async function lastBlockName(sessionDir: string): Promise<string | undefi
     manifestPath,
     MANIFEST_TAIL_WINDOW_BYTES,
     MANIFEST_TAIL_MAX_BYTES,
-  ).catch(() => undefined);
+  ).catch(() => undefined); // benign: 尾读失败回落 slow() 全量路径。
   if (tail === undefined) return slow();
   let lastEntry: WalManifestLine | undefined;
   for (let index = tail.lines.length - 1; index >= 0; index -= 1) {
@@ -1506,6 +1519,7 @@ async function locateManifestEntry(
   target: number,
   field: ManifestOrderField,
 ): Promise<ManifestAnchor | undefined> {
+  // benign: 大小探针——stat 失败按 0 处理（走慢路径/缺省判定）。
   const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
   if (size <= 0) return undefined;
   // 不变式（`lo` / `hi` 都是**行首**的字节偏移）：
@@ -1592,6 +1606,7 @@ export async function openManifestNameSource(args: {
 }): Promise<ManifestNameSourceResult> {
   const blocksDir = join(args.sessionDir, TIMELINE_LAYOUT.walBlocks);
   const manifestPath = join(args.sessionDir, TIMELINE_LAYOUT.walManifest);
+  // benign: 大小探针——stat 失败按 0 处理（走慢路径/缺省判定）。
   const size = (await stat(manifestPath).catch(() => undefined))?.size ?? 0;
   if (size <= 0) return { ok: false, reason: 'manifest_missing' };
   if (size / MANIFEST_LINE_MIN_BYTES < args.minBlocks) {

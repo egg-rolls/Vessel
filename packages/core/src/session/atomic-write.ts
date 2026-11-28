@@ -115,6 +115,7 @@ async function writeTemp(
     try {
       await writeFile(tmpPath, data, typeof data === 'string' ? encoding : undefined);
     } catch (error) {
+      // benign: 清理临时文件，失败不掩盖原始写入错误（原错重抛）。
       await unlink(tmpPath).catch(() => {});
       throw error;
     }
@@ -131,6 +132,7 @@ async function writeTemp(
     }
     await handle.sync();
   } catch (error) {
+    // benign: 错误路径关闭句柄/清理临时文件，失败不掩盖原始错误（AtomicWriteError 重抛）。
     await handle?.close().catch(() => {});
     await unlink(tmpPath).catch(() => {});
     throw new AtomicWriteError(targetPath, error);
@@ -139,6 +141,7 @@ async function writeTemp(
   try {
     await handle.close();
   } catch (error) {
+    // benign: 关闭失败后清理临时文件，失败不掩盖原始错误（AtomicWriteError 重抛）。
     await unlink(tmpPath).catch(() => {});
     throw new AtomicWriteError(targetPath, error);
   }
@@ -158,6 +161,7 @@ async function fsyncDirectory(dirPath: string): Promise<void> {
   } catch {
     // 目录 fsync 不可用：降级为 rename 已提供的可见性保证
   } finally {
+    // benign: 尽力关闭目录句柄，失败不影响写入结果（目录 fsync 本就 best-effort）。
     await handle?.close().catch(() => {});
   }
 }
@@ -180,6 +184,7 @@ async function writeAtomically(
     try {
       await chmod(tmpPath, options.mode);
     } catch (error) {
+      // benign: chmod 失败清理临时文件，失败不掩盖原始错误（AtomicWriteError 重抛）。
       await unlink(tmpPath).catch(() => {});
       throw new AtomicWriteError(filePath, error);
     }
@@ -201,6 +206,7 @@ async function writeAtomically(
     }
   }
 
+  // benign: 重试耗尽清理临时文件，失败不掩盖原始错误（AtomicWriteError 重抛）。
   await unlink(tmpPath).catch(() => {});
   throw new AtomicWriteError(filePath, lastError);
 }

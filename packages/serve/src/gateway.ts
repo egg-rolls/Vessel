@@ -1725,8 +1725,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         // 可选槽：当前 config 的 provider/model（未注入 config 时不填）。
         ...(configProvider !== undefined ? { provider: configProvider } : {}),
         ...(configModel !== undefined ? { model: configModel } : {}),
-        // q-error-e3（D9 + 红线⑤）：仅降级时标 stale；正常读取省略，缺省逐字节不变。
-        ...(configCapabilitiesStale ? { source: 'stale' as const } : {}),
+        // q-error-e3（D9 + lead 红线⑤裁定）：注入 config 时恒报 source——正常读
+        // 'config-layer'，读失败 'stale'（边沿触发降级事件保持）；'registry' 留 hardening。
+        ...(opts.config !== undefined
+          ? { source: configCapabilitiesStale ? ('stale' as const) : ('config-layer' as const) }
+          : {}),
         max_concurrency: 1,
         protocol: PROTOCOL_VERSION,
       },

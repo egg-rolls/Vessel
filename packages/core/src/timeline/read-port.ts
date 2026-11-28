@@ -341,6 +341,7 @@ export class TimelineEventLog {
   async readLatestOfType(sessionId: string, type: string): Promise<SessionEventRecord | undefined> {
     await this.settled(sessionId);
     const dir = this.sessionDir(sessionId);
+    // benign: 索引读探针——失败降级 undefined（方法注释纪律 3：调用方退回尾窗回扫）。
     const snapshot = await loadTypeIndexSnapshot(dir).catch(() => undefined);
     if (snapshot === undefined) return undefined;
     const seqs = snapshot.types.get(type);
@@ -393,6 +394,7 @@ export class TimelineEventLog {
    */
   async watermark(sessionId: string): Promise<string | undefined> {
     const dir = this.sessionDir(sessionId);
+    // benign: 存在性探针——wal 缺失按「会话还没有事件」处理（语义见方法注释）。
     const wal = await stat(join(dir, TIMELINE_LAYOUT.walLog)).catch(() => undefined);
     // 0.56：只要「最后一块是谁」，不值得为它 readdir 整个块目录（见 `lastBlockName`）。
     const lastBlock = await lastBlockName(dir);

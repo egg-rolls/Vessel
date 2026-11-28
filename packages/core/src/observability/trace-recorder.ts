@@ -266,6 +266,7 @@ export class FileTraceRecorder implements TraceRecorder {
     if (event.type.startsWith('trace.') || event.type.startsWith('replay.')) return;
     this.append(event);
     if (this.flushOnTerminal && TERMINAL_EVENTS.has(event.type)) {
+      // benign:  fire-and-forget 防未处理拒绝；写失败已在 flush 内 emitWriteFailure 可见。
       void this.flush(event.run_id).catch(() => {});
     }
   }
