@@ -19,7 +19,7 @@ const SCHEME_PREFIX = 'vessel-ref:';
 
 function HostVesselRefLink({ href, text }: { href: string; text: string }) {
   const path = href.startsWith(SCHEME_PREFIX) ? href.slice(SCHEME_PREFIX.length) : '';
-  // 空 path 不成 chip（与 InlineText / liftFileTokens 同口径）：原文可见。
+  // 空 path 不成 chip（与 InlineText / scanFileTokens 同口径）：原文可见。
   if (path.length === 0) return <>{text}</>;
   return <InlineRefChip card={{ name: text.trim() || pathBasename(path), path }} />;
 }

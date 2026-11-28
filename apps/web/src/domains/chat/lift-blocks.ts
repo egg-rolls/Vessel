@@ -67,7 +67,7 @@ export function liftBlocks(message: Message, ctx: LiftCtx = {}): LiftBlocksResul
       if (block.type === 'file') {
         const payload = block.payload as FileBlockPayload;
         inline = {
-          cards: payload.tokens ?? [],
+          cards: payload.cards ?? [],
           refs: payload.refs,
           ...(payload.imageDelivery !== undefined ? { imageDelivery: payload.imageDelivery } : {}),
         };
@@ -187,7 +187,7 @@ registerBlockType({
         payload: {
           refs: match.refs,
           ...(match.imageDelivery !== undefined ? { imageDelivery: match.imageDelivery } : {}),
-          ...(match.cards.length > 0 ? { tokens: match.cards } : {}),
+          ...(match.cards.length > 0 ? { cards: match.cards } : {}),
         },
       },
     ];

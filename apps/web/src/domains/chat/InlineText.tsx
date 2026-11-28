@@ -65,7 +65,7 @@ export function InlineText({ text, match }: { text: string; match?: FileTokenMat
       if (segment.scheme !== HOST_SCHEME) {
         return <PluginInlineSegment key={key} segment={segment} />;
       }
-      // 空 path token 不成 chip（镜像 liftFileTokens：原文保留）。
+      // 空 path token 不成 chip（镜像 scanFileTokens：原文保留）。
       if (segment.target.length === 0) return <span key={key}>{segment.token}</span>;
       const cardIndex = cards.findIndex(
         (card, i) => !consumed.has(i) && card.path === segment.target,

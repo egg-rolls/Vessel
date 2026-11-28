@@ -1,17 +1,18 @@
 /**
- * 用户正文 vessel-ref token 提升（q-block-cardshell-unify，用户新 UI 方向①）。
+ * 用户正文 vessel-ref token 解析（图片内嵌气泡精炼：token 留 body 原位，
+ * InlineText 内联成 chip；剥离式 liftFileTokens 已退役）。
  *
  * token 形状唯一：`[name](<vessel-ref:path>)`（RichComposer buildAtomicToken 与
  * file-refs 插件 drop-handler 同形的 canonical 尖括号形）。用户气泡正文是**纯文本**
- * 渲染（MessageFold，不经 Markdown / link-enhancers），token 原文露出是可见性对等
- * 缺口 —— 这里把正文里的完整 token 提升成文件卡，剥出正文。
+ * 渲染（不经 Markdown 解释），token 原文露出是可见性对等缺口 —— 这里扫出正文里
+ * 的完整 token 供 occurrence 匹配，渲染位置在气泡内（token 原位 chip）。
  *
  * 硬约束（与 lift-blocks 管线同口径）：
  * - 只认**完整** token（正则不命中半截形状 ⇒ 原文保留，流式逐字不闪）；
  * - 历史只读：只解析投影，不回填不改写 `Message.content`；
  * - 与结构化 refs 的去重**镜像 composer**（ComposerChrome#refsToAttachmentsFiltered）：
- *   token occurrence 按 path 计数消费 ref —— 被消费的 ref 不再出 chip（卡即其视图），
- *   剩余 refs 照旧 chip。每个 ref occurrence 恰好渲染一次（卡或 chip），不重复。
+ *   token occurrence 按 path 计数消费 ref —— 被消费的 ref 不再出 chip（chip 即其
+ *   视图），剩余 refs 进气泡尾部 chip 行。每个 ref occurrence 恰渲一次，不重复。
  */
 import type { ImageDelivery, MessageRef, MessageRefKind } from '../../gateway/types';
 
@@ -74,41 +75,9 @@ export function refKindForPath(target: string): MessageRefKind {
 }
 
 /**
- * 正文 → token 列表 + 剥掉 token 的剩余正文。无完整 token ⇒ null（正文原样）。
- *
- * 剥法：token 就地移除；**整行只有 token**（移除后空白）的行整行去掉，避免留下
- * 空行；行内其余文字逐字节保留（不塌缩空格、不动未命中部分）。token 不跨行
- * （正则排除 \n），逐行处理安全。
- */
-export function liftFileTokens(body: string): { tokens: FileToken[]; body: string } | null {
-  const tokens: FileToken[] = [];
-  const lines = body.split('\n');
-  const kept: string[] = [];
-  for (const line of lines) {
-    TOKEN_RE.lastIndex = 0;
-    if (!TOKEN_RE.test(line)) {
-      kept.push(line);
-      continue;
-    }
-    TOKEN_RE.lastIndex = 0;
-    const stripped = line.replace(TOKEN_RE, (match, name: string, path: string) => {
-      if (path.length === 0) return match;
-      tokens.push({ name: name.trim() || pathBasename(path), path });
-      return '';
-    });
-    // 整行只有 token ⇒ 不留空行；行内还有文字 ⇒ 保留剩余（逐字节）。
-    if (stripped.trim().length > 0) kept.push(stripped);
-    TOKEN_RE.lastIndex = 0;
-  }
-  if (tokens.length === 0) return null;
-  return { tokens, body: kept.join('\n') };
-}
-
-/**
- * 正文 → token 列表（**不剥正文**，图片内嵌气泡精炼：token 留 body 原位由
- * InlineText 内联成 chip）。与 liftFileTokens 同一 TOKEN_RE / 同一命中口径
- * （空 path 不算、半截不命中），occurrence 顺序一致 —— matchFileTokens 的
- * 消费语义不变，只是卡的渲染位置从块区移进气泡。
+ * 正文 → token 列表（**不剥正文**：token 留 body 原位由 InlineText 内联成
+ * chip）。只认完整 token（空 path 不算、半截不命中），occurrence 顺序 =
+ * 正文出现序 —— matchFileTokens 按同序消费 refs。
  */
 export function scanFileTokens(body: string): FileToken[] {
   const tokens: FileToken[] = [];

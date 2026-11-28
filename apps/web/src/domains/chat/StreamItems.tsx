@@ -204,7 +204,7 @@ export function UserBubble({
   ts?: number;
   /** 本帧才追加进来的项：入场只播一次（判定见 `useEnteringItemKeys`）。 */
   entering?: boolean;
-  /** 附件引用（只有路径）：气泡上方一行 chip，与落盘后的历史气泡同一组件。 */
+  /** 附件引用（只有路径）：与正文 token 去重后剩余项进气泡尾部 chip 行。 */
   refs?: readonly MessageRef[];
   /** 引用块点击跳转原消息（q-message-quote）；缺省引用块纯展示。 */
   onJumpQuote?: (messageId: string) => void;
