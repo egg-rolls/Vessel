@@ -744,7 +744,10 @@ function openSessionStore(
   };
   if (backend === 'sqlite' && dryRun) {
     try {
-      return { store: createSessionStore(ctx.config.session, { ...opts, readonly: true }), notReadonly: false };
+      return {
+        store: createSessionStore(ctx.config.session, { ...opts, readonly: true }),
+        notReadonly: false,
+      };
     } catch {
       // 只读连接打不开（库不存在 / 无权限）：回到「枚举不出就不敢删」的保守路径
       return { notReadonly: true };
