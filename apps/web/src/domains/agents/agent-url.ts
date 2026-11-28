@@ -58,6 +58,14 @@ export function agentBodyHash(nodeKey: string, agentId: string, sessionId: strin
   return `${agentDetailHash(nodeKey, agentId)}?${new URLSearchParams({ body: sessionId }).toString()}`;
 }
 
+/** AgentHashTarget → 规范 hash（面包屑末段点击导航自身；保留 edit / body 语义）。 */
+export function agentTargetHash(target: AgentHashTarget): string {
+  if (target.bodyId) return agentBodyHash(target.nodeKey, target.agentId, target.bodyId);
+  return target.mode === 'edit'
+    ? agentEditHash(target.nodeKey, target.agentId)
+    : agentDetailHash(target.nodeKey, target.agentId);
+}
+
 /** 顶栏面包屑回列表：保留深链携带的列表过滤 query，去掉 body 参数。 */
 export function agentsListHash(hash: string): string {
   const [, query = ''] = withoutHash(hash).split('?', 2);
