@@ -201,6 +201,9 @@ export const messages = {
   'settings.item.showArchived.title': '显示已归档 / 已停用（待移除）',
   'settings.item.showArchived.desc':
     '默认隐藏已归档 Team 与已停用 agent（它们都在等待被清理）；打开后它们回到 Team 列表、Agent 列表与成员侧栏，并带「已归档 · 待移除 / 已停用 · 待移除」标记。直接链接不受此开关影响，始终可打开。',
+  'settings.item.showRetiredSessions.title': '显示退休会话',
+  'settings.item.showRetiredSessions.desc':
+    '默认不在会话卡片列表显示退休会话（rotate 之前的旧身体，子标题灰色）；打开后它们回到列表，样式不变。隐藏不是删除：搜索与直接链接始终可打开。',
   'settings.item.errorLevel.title': '错误层级',
   'settings.item.showProcessErrors.title': '显示 process 错误',
   'settings.item.askUser.title': '允许 ask',

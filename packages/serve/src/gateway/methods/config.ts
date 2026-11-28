@@ -47,6 +47,8 @@ const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
   'ui.messageVisibility.system',
   // 0.51：Web「可见性」分组的开关，与 ui.showInternalEvents 同一写路径。
   'ui.showArchived',
+  // q-retired-session-toggle：会话卡片列表是否显示退休会话（缺省 false = 隐藏）。
+  'ui.showRetiredSessions',
   'ui.askUser',
   'ui.expandCards',
   'observability.showProcessErrors',

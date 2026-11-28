@@ -44,6 +44,7 @@ ui:
   ask_user: true               # 入口默认；显式 false 关闭 ask 工具
   expand_cards: false          # Web 时间线卡片默认展开；可操作卡片始终展开
   show_archived: false         # 列表展示已归档 Team / 已停用 agent
+  show_retired_sessions: false # 会话卡片列表展示退休会话（默认隐藏；搜索/直链仍可访问）
   message_visibility:          # 五类消息独立 toggle（缺省 = 现行默认）
     reasoning: true            # 思考过程；minimal 档仍隐藏
     tools: true                # 工具卡；关闭后失败卡仍显（失败永不静默）
@@ -59,6 +60,9 @@ observability:
   消费方不各自读旧键）；旧键保留给存量配置与脚本写路径。
 - `show_archived`：**隐藏不是删除**——直接 URL 始终能打开归档对象（带待移除提示）；会话列表不受
   此键影响（用户历史永不隐藏），只给归属已停用 agent 的会话加标记。
+- `show_retired_sessions`（默认 false）：会话卡片列表是否显示退休会话（子标题灰色）。默认隐藏；
+  搜索态绕过此过滤（退休会话仍搜得到），直接 URL/命令面板照常。判据与灰色子标题同源
+  （`session.agent.primary===false` + roster 回落，`primary===true` 现役护栏）。Web `state/retired-visibility.ts`。
 - `ui.ask_user`（键名未随工具改名，工具现名 `ask`）：交互 REPL（TTY）或 gateway/serve 才注册；
   headless/管道不注册，显式 true 也不能让无客户端入口注册。提问卡默认无限等待（见
   [config-permission](config-permission.md)）。

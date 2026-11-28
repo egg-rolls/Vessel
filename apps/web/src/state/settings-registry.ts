@@ -187,6 +187,16 @@ const CORE_SETTING_SPECS: readonly CoreSettingSpec[] = [
   // 0.51：已归档 Team / 已停用 agent 的默认隐藏开关。与 showInternalEvents 同一层
   // （同一个 ui 块、同一条 config.set 写路径），入口也在同一个「显示与可见性」分组。
   { key: 'ui.showArchived', type: 'boolean', default: 'false' },
+  // q-retired-session-toggle（用户裁定）：退休会话（rotate 之前的旧身体）默认不显示在
+  // 会话卡片列表。与 showArchived 同一层（同一个 ui 块、同一条 config.set 写路径）；
+  // 隐藏不是删除：搜索与直接链接仍可打开，打开开关后灰色子标题现状保留。
+  {
+    key: 'ui.showRetiredSessions',
+    type: 'boolean',
+    default: 'false',
+    fallback: 'false',
+    keywords: ['退休', '退役', '旧身体', 'retired', 'rotate', '会话列表', 'session list'],
+  },
   { key: 'ui.errorLevel', type: 'enum', options: ['user', 'all'], default: 'user' },
   { key: 'observability.showProcessErrors', type: 'boolean', default: 'false' },
   { key: 'ui.askUser', type: 'boolean', default: 'true' },
