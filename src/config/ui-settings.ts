@@ -17,6 +17,8 @@
  */
 
 import {
+  DEFAULT_ENV_CADENCE,
+  type EnvScopeWord,
   getUserConfigPath,
   PINNED_REQUEST_SCOPES,
   readUserConfigRoot,
@@ -186,40 +188,11 @@ export type SettableConfigKey =
   | 'ui.depthColor.lightnessDark'
   | 'ui.depthColor.chromaDark'
   // q-env-granularity（P2 §4.3）：环境信息粒度两轴（YAML `env_injection`）。
-  // default + scopes.<16 词> + channels.<16 词>（D5 完整交付）；三层键先例 observability.log.*。
+  // default + scopes/channels 全词表（R-10 单源：词联合派生自 config `EnvScopeWord`
+  // = DEFAULT_ENV_CADENCE 同一张表，含 health）；三层键先例 observability.log.*。
   | 'envInjection.default'
-  | 'envInjection.scopes.restart'
-  | 'envInjection.scopes.identity'
-  | 'envInjection.scopes.fields'
-  | 'envInjection.scopes.model'
-  | 'envInjection.scopes.tools'
-  | 'envInjection.scopes.lock'
-  | 'envInjection.scopes.conflict'
-  | 'envInjection.scopes.files'
-  | 'envInjection.scopes.context'
-  | 'envInjection.scopes.trim'
-  | 'envInjection.scopes.pii'
-  | 'envInjection.scopes.config'
-  | 'envInjection.scopes.permission'
-  | 'envInjection.scopes.mcp'
-  | 'envInjection.scopes.update'
-  | 'envInjection.scopes.peer'
-  | 'envInjection.channels.restart'
-  | 'envInjection.channels.identity'
-  | 'envInjection.channels.fields'
-  | 'envInjection.channels.model'
-  | 'envInjection.channels.tools'
-  | 'envInjection.channels.lock'
-  | 'envInjection.channels.conflict'
-  | 'envInjection.channels.files'
-  | 'envInjection.channels.context'
-  | 'envInjection.channels.trim'
-  | 'envInjection.channels.pii'
-  | 'envInjection.channels.config'
-  | 'envInjection.channels.permission'
-  | 'envInjection.channels.mcp'
-  | 'envInjection.channels.update'
-  | 'envInjection.channels.peer';
+  | `envInjection.scopes.${EnvScopeWord}`
+  | `envInjection.channels.${EnvScopeWord}`;
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -231,27 +204,12 @@ interface ConfigSetTarget {
 }
 
 /**
- * q-env-granularity（P2 §4.3）：env_injection 的 16 个 scope 词（与 DEFAULT_ENV_CADENCE 对拍）。
- * scopes / channels 两子块各 16 键，三层键（block=env_injection, subBlock=scopes|channels）。
+ * q-env-granularity（P2 §4.3）：env_injection 的 scope 词表。
+ * R-10 单源：派生自 config `DEFAULT_ENV_CADENCE`（17 词含 health），与 serve
+ * SETTABLE_KEYS / Web settings-registry 同一张表，漂移结构上不可能。
+ * scopes / channels 两子块各全词表键，三层键（block=env_injection, subBlock=scopes|channels）。
  */
-const ENV_GRANULARITY_SCOPES = [
-  'restart',
-  'identity',
-  'fields',
-  'model',
-  'tools',
-  'lock',
-  'conflict',
-  'files',
-  'context',
-  'trim',
-  'pii',
-  'config',
-  'permission',
-  'mcp',
-  'update',
-  'peer',
-] as const;
+const ENV_GRANULARITY_SCOPES: readonly string[] = Object.keys(DEFAULT_ENV_CADENCE);
 
 const ENV_INJECTION_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = Object.fromEntries([
   ['envInjection.default', { block: 'env_injection', yamlKey: 'default' }],
@@ -325,7 +283,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = {
     yamlKey: 'lightness_dark',
   },
   'ui.depthColor.chromaDark': { block: 'ui', subBlock: 'depth_color', yamlKey: 'chroma_dark' },
-  // q-env-granularity：env_injection default + scopes/channels 各 16 词（生成表展开）。
+  // q-env-granularity：env_injection default + scopes/channels 全词表（单源派生展开）。
   ...ENV_INJECTION_SET_TARGETS,
 };
 

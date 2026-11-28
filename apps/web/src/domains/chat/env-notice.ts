@@ -33,50 +33,42 @@ import {
   type AddressStyle,
   formatAddress,
 } from '@vessel-agent/agent/address-display';
+// R-10 单源：env 词表按源码消费 config 叶模块（type-only import 运行时零依赖，
+// 与上面 address-display 同一 paths + vite alias 先例）。
+import { DEFAULT_ENV_CADENCE } from '@vessel-agent/config/env-injection';
 
 /**
  * 「环境信息」的作用域词表。
  *
  * 用户裁定（0.52）：模型上下文里只有**一类卡** —— 环境信息（首行的 scope 词只决定卡头标签
- * 与折叠分组）。词表的生产侧真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`），
- * 这里额外保留三类：
- * - `config` / `permission` / `mcp` / `update` / `peer`：`runtime-notice-hook` 老词，历史消息里
- *   全都在用；
+ * 与折叠分组）。词表的生产侧真相是 `packages/agent/src/env-info-scope.ts`（`ENV_INFO_SCOPES`）；
+ * 核心词表派生 config `DEFAULT_ENV_CADENCE`（含 `config` / `permission` / `mcp` / `update` /
+ * `peer` 这些 `runtime-notice-hook` bus 老词，历史消息里全都在用），这里额外保留两个
+ * 不在节奏表里的历史词：
  * - `selfcard`：0.52 之前 `self-card-delta` 的首词（改名 / 换 model / 换 prompt 都叫它），
  *   落盘消息里有存量 —— 删掉它等于让老消息的卡头静默退化成「上下文」；
- * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更）；
  * - `inbox`：0.53 补的词 —— 收件箱提醒（别人发给这个 agent 的消息）在模型侧是一条
  *   `[inbox] N unread` 的 `vessel:notice` 尾消息（发点在 `packages/agent/src/inbox.ts` 的
  *   `noticeContent`，事件侧见 `packages/agent/src/runtime.ts`）。它过去既不在 `ENV_INFO_SCOPES`
  *   里、也没有卡头标签 ⇒ 只能落进兜底「上下文」，用户在杂项里扫不到。
+ * - `context`：兜底（解析不出 scope 的行）现在也是一个**正式**种类（系统提示词 / 自卡变更），
+ *   在 `EnvNoticeScope` 类型里补充，不进解析词表。
  *
- * 词表联动为**人工核对**（旧 C3/parity 脚本已按宪法删除，不重建）：生产者加词时同步
- * agent `ENV_INFO_SCOPES` + 本数组 + i18n 标签（`chat.env.scope.*`）+ config
- * `DEFAULT_ENV_CADENCE` + 插件字面量副本。这里漏了词，卡头静默退化成「上下文」；
- * 登记了词却没有标签 / 解析器认不出，标签就是死代码。
+ * R-10 单源：核心词表派生 config `DEFAULT_ENV_CADENCE`（`Object.keys`，17 词含 health），
+ * 只额外保留两个不在节奏表里的历史词（inbox / selfcard，见上）。生产者加词时同步
+ * agent `ENV_INFO_SCOPES` + config `DEFAULT_ENV_CADENCE` + i18n 标签（`chat.env.scope.*`）
+ * + 插件字面量副本；本数组与 Web settings-registry 词表自动跟随，不再人工对拍。
+ * 这里漏了词，卡头静默退化成「上下文」；登记了词却没有标签 / 解析器认不出，标签就是死代码。
  */
-export const ENV_NOTICE_SCOPES = [
-  'config',
-  'permission',
-  'tools',
-  'mcp',
-  'update',
-  'peer',
+export const ENV_NOTICE_SCOPES: readonly string[] = [
+  ...Object.keys(DEFAULT_ENV_CADENCE),
+  // 历史词（不在 DEFAULT_ENV_CADENCE）：inbox = 0.53 收件箱提醒；selfcard = 0.52 前存量首词。
   'inbox',
-  'restart',
-  'model',
-  'identity',
-  'fields',
-  'lock',
-  'conflict',
-  'files',
-  'health',
-  'context',
-  'trim',
   'selfcard',
-  'pii',
-] as const;
+];
 
+// R-10 单源后词表是运行时派生的开放词集（string）：scope 的合法性由 SCOPE_TOKEN 解析
+// 门禁（不在词表 ⇒ 兜底 'context'），类型层不再枚举字面量。
 export type EnvNoticeScope = (typeof ENV_NOTICE_SCOPES)[number] | 'context' | 'source';
 // `source` 不在 ENV_NOTICE_SCOPES 里：那份词表是 vessel:notice **行首 scope 词**的解析
 // 词表，来源卡的 scope 只由 sourceNoticeCard 装配（vessel:source 是另一种线格式
@@ -185,8 +177,10 @@ const DETAIL_MARK = /^·\s*/;
 /**
  * 行首 scope 词：`config:` / `permission: ...` / `update ...`（不剥正文，只取 scope）。
  *
- * 由 `ENV_NOTICE_SCOPES` 生成而不是另写一份字面量：加 scope 时唯一的改动点就在那份数组，
- * 漏改这里会让新 scope 静默退化成 `context`（卡头标签变错，正文却看着正常，最难发现）。
+ * 由 `ENV_NOTICE_SCOPES` 生成而不是另写一份字面量：加 scope 时唯一的改动点在
+ * config `DEFAULT_ENV_CADENCE`（R-10 单源，词表自动派生），漏改那里会让新 scope
+ * 静默退化成 `context`（卡头标签变错，正文却看着正常，最难发现）。
+ * 词间无前缀包含关系且裸词形式带 `\b` 边界，alternation 顺序不影响匹配。
  *
  * 两种线格式都要认：裸词（`tools: 12 → 14`）和方括号形式（`[inbox] 3 unread`，即 inbox
  * 生产者的正文 —— `noticeContent` 写的就是方括号）。方括号只用于**取 scope**，一个字符都不从

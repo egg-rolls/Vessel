@@ -108,8 +108,9 @@ const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
 
 /**
  * q-env-config-set：env_injection 三层键（与 src/config/ui-settings 白名单同口径）。
- * default + scopes.<16 词> + channels.<16 词>；scope 词表取自 DEFAULT_ENV_CADENCE
- * （单一事实源，与 ui-settings ENV_GRANULARITY_SCOPES 人工对拍同一张表）。
+ * default + scopes/channels 全词表；scope 词表取自 DEFAULT_ENV_CADENCE
+ * （R-10 单源：本表与 ui-settings ENV_GRANULARITY_SCOPES / SettableConfigKey、
+ * Web settings-registry 均 Object.keys 派生同一张表，漂移结构上不可能）。
  * 节奏轴 ∈ request|run|off（pinned trim/model 拒 request，off 允许）；
  * 通道轴 ∈ model+ui|ui-only。值校验与 config validator / setUserConfigValue 同界。
  */

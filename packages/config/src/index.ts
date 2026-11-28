@@ -90,6 +90,7 @@ export {
 } from './env-file.js';
 export {
   DEFAULT_ENV_CADENCE,
+  type EnvScopeWord,
   finestCadence,
   PINNED_REQUEST_SCOPES,
   resolveEnvCadence,
