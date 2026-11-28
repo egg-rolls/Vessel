@@ -1132,10 +1132,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'inbox.asyncJob.running': 'Running',
   'inbox.asyncJob.done': 'Done',
   'inbox.asyncJob.failed': 'Failed',
-  'inbox.asyncJob.logShow': 'View log',
-  'inbox.asyncJob.logHide': 'Hide log',
-  'inbox.asyncJob.logLoading': 'Loading log…',
-  'inbox.asyncJob.logEmpty': '(log is empty)',
+  'inbox.asyncJob.input': 'Input',
+  'inbox.asyncJob.output': 'Output',
 
   // Teams (cross-node)
   'teams.title': 'Teams',

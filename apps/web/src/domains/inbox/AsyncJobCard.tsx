@@ -5,15 +5,17 @@
  * 原位更新同一条目**（done/failed + 填结果正文）—— 不是另插一条。本组件只读
  * `entry.async_job` 元数据 + 那次 `agents.inbox` 读到的正文，不发轮询：
  * - 已耗时是**客户端计时器**（running 每秒跳一下，零 RPC）；done/failed 用 ended_at-started_at。
- * - 渲染层**按 kind 分派**专属卡：`bash`→科技蓝命令卡 + log tail（按需 jobs.log）；
- *   `ask`→未来问题卡；其余 kind→通用状态卡。inbox 核心通用，kind 细节只在渲染层。
+ * - 渲染层**按 kind 分派**专属卡体：`bash`→输入（命令）/输出（结果）两块；
+ *   其余 kind→通用输出块兜底。inbox 核心通用，kind 细节只在渲染层。
+ *
+ * q-bash-card-blocks：展开体借工具卡家族 tool-section 分块（输入/输出），
+ * **不再重复 JobHeader 首行**（状态/jobId/耗时/exit 收缩条已有），log tail 点读移除。
  *
  * 身份 / 状态 / 归属全部来自服务端那一次读；写操作（消费）由模型 inbox read 完成，
  * 本卡不给「取消 / 我已处理」（running 占位不可消费；done/failed 结果由模型读走）。
  */
-import { useEffect, useState } from 'react';
-import { Badge, Button } from '../../components/ui';
-import type { GatewayClient } from '../../gateway/client';
+import { type ReactNode, useEffect, useState } from 'react';
+import { CopyButton } from '../../components/CopyButton';
 import { t } from '../../i18n';
 import { shortSenderId } from '../chat/pending-strip';
 import { StreamCard } from '../chat/StreamCard';
@@ -47,13 +49,6 @@ const DOT_CLASS: Record<ReturnType<typeof toneOf>, string> = {
   danger: 'bg-danger',
 };
 
-/** 状态文案（kind 无关）。 */
-function statusLabel(status: AsyncJobMeta['status']): string {
-  if (status === 'running') return t('inbox.asyncJob.running');
-  if (status === 'done') return t('inbox.asyncJob.done');
-  return t('inbox.asyncJob.failed');
-}
-
 /** 毫秒 → 紧凑时长（`12s` / `3m05s` / `1h02m`）。 */
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -79,32 +74,29 @@ function useLiveElapsed(startedAt: number, running: boolean): number {
   return now - startedAt;
 }
 
-/** 状态点 + 状态文案 + 短 jobId + 已耗时 + 归属会话（kind 无关公共头部）。 */
-function JobHeader({ job, elapsed }: { job: AsyncJobMeta; elapsed: number }) {
-  const running = job.status === 'running';
+/**
+ * 展开体内容块（借工具卡家族 tool-section 样式，与 ToolCard 输入/输出分区同形）：
+ * 小标 + 可选复制键 + 块体。不做二级折叠 —— 卡本身已是折叠壳，展开即见全文。
+ */
+function JobSection({
+  label,
+  copyText,
+  children,
+}: {
+  label: string;
+  copyText?: string;
+  children: ReactNode;
+}) {
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Badge tone={toneOf(job.status)}>
-        <span className="inline-flex items-center gap-1.5">
-          <span
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              running ? 'animate-pulse bg-info' : job.status === 'done' ? 'bg-success' : 'bg-danger'
-            }`}
-          />
-          {statusLabel(job.status)}
-        </span>
-      </Badge>
-      <span className="font-mono text-xs text-faint" title={`${job.kind}:${job.job_id}`}>
-        {shortSenderId(job.job_id)}
-      </span>
-      <span className="text-xs text-faint tabular-nums">{formatElapsed(elapsed)}</span>
-      <span className="flex-1" />
-      {job.session_id !== undefined && (
-        <span className="font-mono text-xs text-faint" title={job.session_id}>
-          {shortSenderId(job.session_id)}
-        </span>
-      )}
-    </div>
+    <section className="tool-section">
+      <div className="tool-section-head">
+        <span className="tool-section-label">{label}</span>
+        {copyText !== undefined && copyText !== '' && (
+          <CopyButton text={copyText} className="tool-section-copy" />
+        )}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -118,21 +110,17 @@ function ResultBody({ summary }: { summary?: string }) {
   );
 }
 
+/** running 态输出块的占位文案（结果未回，跳秒在收缩条上）。 */
+function RunningHint() {
+  return <span className="text-xs text-faint">{t('inbox.asyncJob.running')}…</span>;
+}
+
 /**
- * bash 专属卡体（首个消费者）：科技蓝命令片段 + exit code + log tail（按需 jobs.log，
- * 点一次读一次，不轮询）。kind 专属字段从 payload 读（机制层不解释）。
+ * bash 专属卡体（首个消费者）：输入块 = 完整命令（等宽 + 复制）；
+ * 输出块 = exit code + 结果摘要（ResultBody 现有逻辑）。kind 专属字段从 payload 读
+ * （机制层不解释）。状态/jobId/耗时/exit 收缩条已有，展开不再重复头部。
  */
-function BashJobBody({
-  job,
-  entry,
-  client,
-  elapsed,
-}: {
-  job: AsyncJobMeta;
-  entry: AsyncJobCardEntry;
-  client: GatewayClient;
-  elapsed: number;
-}) {
+function BashJobBody({ job, entry }: { job: AsyncJobMeta; entry: AsyncJobCardEntry }) {
   const running = job.status === 'running';
   const payload = job.payload ?? {};
   const command = typeof payload.command === 'string' ? payload.command : undefined;
@@ -141,106 +129,52 @@ function BashJobBody({
       ? (payload.exit_code as number | null)
       : undefined;
 
-  const [logOpen, setLogOpen] = useState(false);
-  const [logTail, setLogTail] = useState<string | null>(null);
-  const [logLoading, setLogLoading] = useState(false);
-  const [logError, setLogError] = useState<string | null>(null);
-
-  const toggleLog = () => {
-    const opening = !logOpen;
-    setLogOpen(opening);
-    if (!opening || logTail !== null || logLoading) return;
-    setLogLoading(true);
-    setLogError(null);
-    void (async () => {
-      try {
-        const body = await client.rpc<{ job_id: string; tail: string }>('jobs.log', {
-          job_id: job.job_id,
-          max_bytes: 8192,
-        });
-        setLogTail(typeof body?.tail === 'string' ? body.tail : '');
-      } catch (error) {
-        setLogError(error instanceof Error ? error.message : String(error));
-      } finally {
-        setLogLoading(false);
-      }
-    })();
-  };
-
   return (
-    <>
-      <JobHeader job={job} elapsed={elapsed} />
-      {exitCode !== undefined && exitCode !== null && (
-        <span className="font-mono text-xs text-faint">exit {exitCode}</span>
-      )}
+    <div className="flex flex-col gap-2">
       {command !== undefined && (
-        <p className="m-0 truncate font-mono text-xs leading-relaxed text-muted" title={command}>
-          $ {command}
-        </p>
+        <JobSection label={t('inbox.asyncJob.input')} copyText={command}>
+          <pre className="tool-section-body">{command}</pre>
+        </JobSection>
       )}
-      {!running && <ResultBody summary={entry.summary} />}
-      {logOpen && (
-        <div className="rounded-sm bg-sunken px-3 py-2">
-          {logLoading ? (
-            <p className="m-0 text-xs text-faint">{t('inbox.asyncJob.logLoading')}</p>
-          ) : logError !== null ? (
-            <p className="m-0 text-xs text-danger">{logError}</p>
-          ) : logTail !== null ? (
-            <pre className="m-0 max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-muted">
-              {logTail === '' ? t('inbox.asyncJob.logEmpty') : logTail}
-            </pre>
-          ) : null}
+      <JobSection label={t('inbox.asyncJob.output')} copyText={entry.summary}>
+        <div className="tool-section-body flex flex-col gap-1">
+          {exitCode !== undefined && exitCode !== null && (
+            <span className="font-mono text-xs text-faint">exit {exitCode}</span>
+          )}
+          {running ? <RunningHint /> : <ResultBody summary={entry.summary} />}
         </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button variant="link" className="text-xs" aria-expanded={logOpen} onClick={toggleLog}>
-          {logOpen ? t('inbox.asyncJob.logHide') : t('inbox.asyncJob.logShow')}
-        </Button>
-      </div>
-    </>
+      </JobSection>
+    </div>
   );
 }
 
 /**
- * 通用卡体（未知 / 未来 kind 的兜底，如 ask 问题卡尚未实现时）：状态头部 + 结果正文。
- * 新 kind 落地时在此按 kind 增专属卡体（扩展点），inbox 核心无需改动。
+ * 通用卡体（未知 / 未来 kind 的兜底，如 ask 问题卡尚未实现时）：输出块 = 结果摘要，
+ * 与 bash 卡同口径（无输入块）。新 kind 落地时在此按 kind 增专属卡体（扩展点），
+ * inbox 核心无需改动。
  */
-function GenericJobBody({
-  job,
-  entry,
-  elapsed,
-}: {
-  job: AsyncJobMeta;
-  entry: AsyncJobCardEntry;
-  elapsed: number;
-}) {
+function GenericJobBody({ job, entry }: { job: AsyncJobMeta; entry: AsyncJobCardEntry }) {
   return (
-    <>
-      <JobHeader job={job} elapsed={elapsed} />
-      <span className="font-mono text-xs text-faint">{job.kind}</span>
-      {job.status !== 'running' && <ResultBody summary={entry.summary} />}
-    </>
+    <JobSection label={t('inbox.asyncJob.output')} copyText={entry.summary}>
+      <div className="tool-section-body">
+        {job.status === 'running' ? <RunningHint /> : <ResultBody summary={entry.summary} />}
+      </div>
+    </JobSection>
   );
 }
 
 /**
- * 通用异步作业卡入口：按 `async_job.kind` 分派专属卡体。bash→命令卡（BashJobBody）；
- * 其余 kind→通用卡（GenericJobBody，ask 问题卡未来在此接入）。
+ * 通用异步作业卡入口：按 `async_job.kind` 分派专属卡体。bash→输入/输出两块（BashJobBody）；
+ * 其余 kind→通用输出块（GenericJobBody，ask 问题卡未来在此接入）。
  *
  * 表面 = StreamCard 折叠壳（与 agent 排队黄条 QueuedNotice 同一基座，同形同高）：
  * **默认收缩**（running/done/failed 皆然），卡头单行 = 状态点（running 脉冲）+ kind
  * 身份槽 + 短 jobId + 耗时（running 跳秒零 RPC）+ exit code + 命令预览 ellipsis + chevron；
- * 展开才显完整 JobHeader / 命令 / ResultBody / log tail（原有卡体整体进 children，逻辑不动）。
+ * 展开直接进输入/输出内容块（q-bash-card-blocks：头部信息与收缩条重合，不再重复）。
  * 色调走 notice-block 家族中性档（照 agent 条口径 tone neutral），状态色只留在状态点上；
  * 家族身份圆点不叠（状态点已画在 title 槽，见 chat.css `.stream-card-job`）。
  */
-export function AsyncJobCard({
-  entry,
-  client,
-}: {
-  entry: AsyncJobCardEntry;
-  client: GatewayClient;
-}) {
+export function AsyncJobCard({ entry }: { entry: AsyncJobCardEntry }) {
   const job = entry.async_job as AsyncJobMeta;
   const running = job.status === 'running';
   const liveElapsed = useLiveElapsed(job.started_at, running);
@@ -259,7 +193,7 @@ export function AsyncJobCard({
       className="notice-block stream-card-job w-full min-w-0 max-w-full"
       defaultOpen={false}
       ariaLabel={`${job.kind} ${shortSenderId(job.job_id)}`}
-      // 状态点 + kind 身份槽：点色复用 toneOf，running 加脉冲（与 JobHeader 同一口径）。
+      // 状态点 + kind 身份槽：点色复用 toneOf，running 加脉冲（与收缩条同一口径）。
       title={
         <>
           <span
@@ -289,9 +223,9 @@ export function AsyncJobCard({
       }
     >
       {job.kind === 'bash' ? (
-        <BashJobBody job={job} entry={entry} client={client} elapsed={elapsed} />
+        <BashJobBody job={job} entry={entry} />
       ) : (
-        <GenericJobBody job={job} entry={entry} elapsed={elapsed} />
+        <GenericJobBody job={job} entry={entry} />
       )}
     </StreamCard>
   );
