@@ -5655,6 +5655,27 @@ function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    // q-error-e3 canary 接线修：--connect targeting。registry errors 条目已消费全局
+    // connectArg/connectTokenArg/caArg（零新解析实体）；最小集 = 这三旗标——
+    // --node/--instance 未被 errorsCommand 消费，不加（最小 diff）。
+    if (a === '--connect-token') {
+      // token 可能以 `-` 开头：与 attention 先例一样只要求非空。
+      const next = rest[i + 1];
+      if (next === undefined || next.trim() === '') {
+        return { ok: false, error: 'Missing value for --connect-token' };
+      }
+      args.connectTokenArg = next;
+      i++;
+      continue;
+    }
+    if (a === '--connect' || a === '--ca') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--connect') args.connectArg = value.value;
+      else args.caArg = value.value;
+      i = value.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for errors: ${a}` };
   }
   if (args.help) return { ok: true, args };

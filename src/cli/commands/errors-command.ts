@@ -1,5 +1,5 @@
 /**
- * `vessel errors [--json] [--limit N] [--id <error_id> | --run <run_id>]`
+ * `vessel errors [--connect <url>] [--json] [--limit N] [--id <error_id> | --run <run_id>]`
  * （0.14 DECISION-025 §1.5；q-error-e3 §3.9 下钻）。
  *
  * 最近错误摘要：默认只含 run/tool 级错误；`ui.errorLevel: all` 或

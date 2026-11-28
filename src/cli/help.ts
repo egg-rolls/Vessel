@@ -326,7 +326,10 @@ export function renderGlobalHelp(): string {
       t('help.cmd.federationTeamInfo'),
     ],
     ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
-    ['vessel errors [--json] [--id <error_id> | --run <run_id>]', t('help.cmd.errors')],
+    [
+      'vessel errors [--connect <url>] [--json] [--id <error_id> | --run <run_id>]',
+      t('help.cmd.errors'),
+    ],
     [
       'vessel gateway start [--foreground] [--instance <name>] [--data-dir <path>]',
       t('help.cmd.gatewayStart'),
