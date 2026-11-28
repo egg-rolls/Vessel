@@ -154,6 +154,7 @@ export function Composer({
     onAddRef,
     onRemoveRef,
     onUpdateRef,
+    listClient: client,
   });
 
   /** OS 文件（drop / 截图粘贴）→ 插件 drop 处理器（上传暂存 + 指针位置插卡）。 */

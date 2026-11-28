@@ -122,6 +122,7 @@ export function TeamComposer({
     onAddRef,
     onRemoveRef,
     onUpdateRef,
+    listClient: client,
   });
   const dispatchFiles = (files: File[], offset: number | null) => {
     if (port === undefined || dropHandlers.length === 0) return;

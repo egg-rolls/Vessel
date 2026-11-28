@@ -230,3 +230,289 @@
     border-radius: 6px;
   }
 }
+
+/* 「引用文件」弹层（S2b 插件自持；宿主 design tokens，焦点圈 / 滚动锁在组件内）。 */
+@layer plugin.file-refs {
+  .fr-attach-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: var(--scrim, rgb(0 0 0 / 0.45));
+    overflow-y: auto;
+  }
+
+  .fr-attach-sheet {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: 100%;
+    max-width: 760px;
+    max-height: min(86dvh, 720px);
+    padding: 20px;
+    border-radius: 10px;
+    background: var(--surface-raised, var(--raised));
+    color: var(--ink);
+    box-shadow: var(--elev-4, 0 12px 40px rgb(0 0 0 / 0.3));
+    overflow: hidden;
+  }
+
+  .fr-attach-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .fr-attach-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .fr-attach-tabs {
+    display: flex;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .fr-attach-tab {
+    padding: 4px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .fr-attach-tab.is-active {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+  }
+
+  .fr-attach-tab:focus-visible,
+  .fr-attach-plain:focus-visible,
+  .fr-attach-primary:focus-visible,
+  .fr-attach-crumb:focus-visible,
+  .fr-attach-row:focus-visible,
+  .fr-attach-close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .fr-attach-upload,
+  .fr-attach-paste,
+  .fr-attach-browse {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  .fr-attach-note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .fr-attach-error {
+    color: var(--danger);
+  }
+
+  .fr-attach-ok {
+    color: var(--accent);
+  }
+
+  .fr-attach-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .fr-attach-textarea {
+    width: 100%;
+    resize: none;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface-sunken, var(--sunken));
+    color: var(--ink);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+  }
+
+  .fr-attach-textarea[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+
+  .fr-attach-issues {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    color: var(--danger);
+    word-break: break-all;
+  }
+
+  .fr-attach-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .fr-attach-hidden {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .fr-attach-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    font-size: 12px;
+  }
+
+  .fr-attach-crumb-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .fr-attach-crumb-sep {
+    color: var(--muted);
+  }
+
+  .fr-attach-crumb {
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .fr-attach-crumb:hover {
+    background: var(--surface-sunken, var(--sunken));
+  }
+
+  .fr-attach-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .fr-attach-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 5px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .fr-attach-row:hover {
+    background: var(--surface-sunken, var(--sunken));
+  }
+
+  .fr-attach-row-icon {
+    display: inline-flex;
+    color: var(--muted);
+  }
+
+  .fr-attach-row-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .fr-attach-row-meta {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .fr-attach-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .fr-attach-count {
+    margin-right: auto;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .fr-attach-plain {
+    padding: 5px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .fr-attach-primary {
+    padding: 5px 12px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--accent);
+    color: var(--on-accent, #fff);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .fr-attach-primary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .fr-attach-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .fr-attach-close:hover {
+    background: var(--surface-sunken, var(--sunken));
+    color: var(--ink);
+  }
+}

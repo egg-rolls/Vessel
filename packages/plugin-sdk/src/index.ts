@@ -271,6 +271,35 @@ export interface ComposerPreviewResult {
   dataUrl?: string;
 }
 
+/** 目录浏览参数（宿主 attachments.list 同形；file-ref P3 additive）。 */
+export interface ComposerListParams {
+  /** 绝对路径；省略 = 只取 roots。 */
+  dir?: string;
+  /** 列出点开头 / 隐藏项（缺省 false）。 */
+  include_hidden?: boolean;
+  /** 条数上限（宿主缺省 200、上限 500）。 */
+  limit?: number;
+}
+
+/** 目录条目（只有 file / dir 两类；path 是 node 上真实路径）。 */
+export interface ComposerListEntry {
+  name: string;
+  path: string;
+  kind: 'file' | 'dir';
+  bytes?: number;
+  mtime_ms?: number;
+}
+
+/** 目录浏览结果（宿主 attachments.list 同形）。 */
+export interface ComposerListResult {
+  roots: string[];
+  dir?: string;
+  parent?: string;
+  entries: ComposerListEntry[];
+  truncated: boolean;
+  reason?: 'refs_invalid' | 'refs_denied' | 'refs_outside_roots';
+}
+
 /**
  * 输入框编辑端口（宿主通用能力，任何 composer 贡献插件可用）：
  * 读 / 增 / 删草稿引用、插入文本 / 原子节点 / 瞬态节点、取光标、
@@ -293,6 +322,12 @@ export interface ComposerEditorPort {
   caretOffsetFromPoint(x: number, y: number): number | null;
   stage(files: readonly File[]): Promise<StagedAttachment[]>;
   preview(path: string): Promise<ComposerPreviewResult>;
+  /**
+   * 目录浏览（宿主 attachments.list 包一层；file-ref P3 additive）。
+   * 数据源是页面所在节点（会话页 = 当前节点；团队页 = 团队所在节点）。
+   * additive：旧宿主无此方法，插件须能力探测（缺省 ⇒ 浏览降级提示）。
+   */
+  listAttachments?(params?: ComposerListParams): Promise<ComposerListResult>;
 }
 
 /** drop 槽处理器：OS 文件（drop / 截图粘贴）→ 插件自行上传 + 插卡。 */

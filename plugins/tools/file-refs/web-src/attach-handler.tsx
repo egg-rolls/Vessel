@@ -1,17 +1,19 @@
 /**
- * toolbar `action` 档处理器（G9/G10，file-ref P3）：原生选择框上传入口。
+ * toolbar `action` 档处理器（G9/G10，file-ref P3）：插件自持「引用文件」弹层。
  *
- * 插件自持点击动作（宿主零功能名）：用户点 toolbar「引用文件」按钮 → 浏览器
- * 原生文件选择（showOpenFilePicker，能力探测；非 Chromium / 非安全上下文降级
- * input[type=file]）→ 复用 drop 槽同一条上传链路（瞬态占位卡 → port.stage →
- * addRef → token 落定），插入位 = 当前光标位（与 drop 同口径）。
+ * 用户点 toolbar「引用文件」按钮 → AttachSheet（上传 / 粘贴 / 浏览三入口，S2b）：
+ * - 上传：浏览器原生文件选择（showOpenFilePicker 能力探测；非 Chromium / 非安全
+ *   上下文降级 input[type=file]）→ 共享暂存链路（瞬态占位卡 → port.stage →
+ *   addRef → token 落定），插入位 = 当前光标位（与 drop 同口径）；
+ * - 粘贴 / 浏览：addRef + insertAtomic（token 同形，节点路径引用模式）。
  *
  * 用户取消（AbortError / 空选择）⇒ 静默返回，不留占位卡。
  * embed 运行宿主同上下文（非 iframe），直调浏览器 API，无需宿主开放新能力。
  */
 
 import type { ComposerToolbarActionHandler } from '@vessel-agent/plugin-sdk';
-import { stageFiles } from './staging';
+import { createRoot } from 'react-dom/client';
+import { AttachSheet } from './AttachSheet';
 
 /** File System Access API 最小结构类型（不依赖 lib.dom 是否收录该 API）。 */
 interface FilePickerHandle {
@@ -36,7 +38,8 @@ interface PickerInput {
 interface PickerDom {
   document: {
     createElement(tag: 'input'): PickerInput;
-    body: { appendChild(node: PickerInput): void };
+    createElement(tag: 'div'): { remove(): void };
+    body: { appendChild(node: PickerInput | { remove(): void }): void };
   };
   setTimeout(callback: () => void, ms: number): number;
   addEventListener(type: 'focus', listener: () => void, options?: { once?: boolean }): void;
@@ -89,10 +92,25 @@ async function pickFiles(): Promise<File[]> {
   return pickViaInput();
 }
 
-/** embed 具名导出（contributes.toolbar[].action）。 */
-export const onAttachClick: ComposerToolbarActionHandler = async (port, _host) => {
-  const files = await pickFiles();
-  if (files.length === 0) return;
-  // 与 drop 完全同形（共享 staging 链路）：逐文件瞬态占位卡 → stage → addRef → token 落定。
-  stageFiles(files, port, { offset: port.getCaretOffset() });
+/** 单例守卫：同一时刻只开一个弹层（重复点击不叠第二层）。 */
+let sheetOpen = false;
+
+/**
+ * embed 具名导出（contributes.toolbar[].action）：开插件自持弹层
+ * （上传 / 粘贴 / 浏览三入口，S2b）。上传档 = 原生选择框 → 共享暂存链路；
+ * 粘贴 / 浏览 = addRef + insertAtomic（token 同形）。焦点圈 / Esc / 归还焦点
+ * 在 AttachSheet 内重建（宿主 ModalShell 不可 import）。
+ */
+export const onAttachClick: ComposerToolbarActionHandler = (port, host) => {
+  if (sheetOpen) return;
+  sheetOpen = true;
+  const container = dom.document.createElement('div');
+  dom.document.body.appendChild(container);
+  const root = createRoot(container as unknown as Element);
+  const close = () => {
+    root.unmount();
+    container.remove();
+    sheetOpen = false;
+  };
+  root.render(<AttachSheet port={port} host={host} onClose={close} pickFiles={pickFiles} />);
 };
