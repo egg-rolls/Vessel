@@ -12,7 +12,7 @@
 import { isLoopbackHostname } from '../gateway/auth.js';
 
 /** 守卫文档位置（错误信息里直接给出）。 */
-export const PLATFORM_LISTEN_GUARD_DOC = 'docs/operations/REVERSE-PROXY.md';
+export const PLATFORM_LISTEN_GUARD_DOC = 'docs/operations/exposure-hardening.md';
 
 /** 监听地址是否只在本机可达。空 / 未定义按非回环处理（fail-closed）。 */
 export function isLoopbackListen(hostname: string | undefined): boolean {

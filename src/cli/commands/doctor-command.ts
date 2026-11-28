@@ -439,7 +439,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     status: exposure.length > 0 ? 'info' : 'ok',
     message:
       exposure.length > 0
-        ? `${exposure.join('; ')}（详见 docs/operations/REVERSE-PROXY.md §8）`
+        ? `${exposure.join('; ')}（详见 docs/operations/exposure-hardening.md）`
         : 'loopback listeners have an explicit token or proxy secret',
   });
 
