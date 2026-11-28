@@ -31,19 +31,26 @@
  *
  * 卡外没有别的东西（「助手」发言人名已按用户要求移除：它不提供信息）。
  *
- * 卡片自己只有一个动作：卡头（`<summary>`）**左侧**、紧跟标题文字的**「复制思考」小按钮**，
- * 复制的是本卡的思考原文（不是整条消息）。**卡上不挂消息工具栏**（复制正文 / 重试
- * 那一组在正文下方一行，见 chat.css 的工具栏说明）—— 用户明确要求「去掉思考过程加的那个
- * 工具栏」，所以这个按钮不是工具栏，只是卡自己的一个小控件：跟着时间和它同一个容器
- * hover 显现，键盘仍然可达（聚焦即显）。
+ * 卡头近端动作组（q-tool-card-slot P1a，裁示③）：复用 `MessageActions`（与正文下方
+ * 远端工具栏同一组件）——**单复制 + 动作菜单**（有正文可复制时点复制开菜单「复制思考 /
+ * 复制正文」，ActionMenu 复用既有行级菜单形态）+ 调用方上移的 quote / retry。
+ * 有思考卡的消息，正文下方远端 `MessageActions` **整组不渲染**（判据在调用方
+ * Transcript）；无卡消息逐字不变。live 侧 P1b 跟进（缺省 actions/onCopyBody = 只有
+ * 复制思考，旧行为）。时间仍在近端动作组右侧，同一容器 hover 显现，键盘可达。
  *
- * 点击细节：它在 `<summary>` 里，而点 summary 默认会开合卡片 —— 复制按钮必须
- * `preventDefault()` + `stopPropagation()` 把这次点击吃掉，否则「复制」会顺手把卡
- * 收起来。键盘 Enter / Space 触发的 click 走同一条处理，所以键盘也安全。
+ * 点击细节：动作组在 `<summary>` 里，而点 summary 默认会开合卡片 —— 近端容器统一
+ * `preventDefault()` + `stopPropagation()` 把点击吃掉（菜单项 onSelect 在自己的
+ * onClick 里已执行），否则「复制」会顺手把卡收起来。键盘 Enter / Space 触发的 click
+ * 走同一条处理，所以键盘也安全。
  */
 import { useEffect, useState } from 'react';
-import { IconButton } from '../../components/Tooltip';
-import { Button, Icon, useMessageCopy, useTypewriterText } from '../../components/ui';
+import {
+  Button,
+  type MessageAction,
+  MessageActions,
+  useMessageCopy,
+  useTypewriterText,
+} from '../../components/ui';
 import { formatClock } from '../../format';
 import { t } from '../../i18n';
 
@@ -67,6 +74,8 @@ export function ReasoningBlock({
   streaming,
   entering = false,
   time,
+  actions,
+  onCopyBody,
 }: {
   text: string;
   streaming: boolean;
@@ -82,6 +91,17 @@ export function ReasoningBlock({
    * 排序依据，只读），历史给该消息的 `timestamp`。缺省 / 非法时间不渲染时钟。
    */
   time?: number;
+  /**
+   * 近端附加动作（q-tool-card-slot P1a 裁示③）：quote / retry 从正文下方远端工具栏
+   * 上移到卡头近端，与复制同组（复用 MessageActions）。有思考卡的消息远端整组不渲染
+   * （判据在调用方 Transcript）；live 侧 P1b 跟进，缺省 = 只有复制（旧行为）。
+   */
+  actions?: readonly MessageAction[];
+  /**
+   * 复制正文（单复制 + 动作菜单，裁示③）：给了它，复制按钮点开菜单
+   * 「复制思考 / 复制正文」；缺省 = 直接复制思考（live 流式 / 无正文消息）。
+   */
+  onCopyBody?: () => void;
 }) {
   const [open, setOpen] = useState(streaming);
   const [userToggled, setUserToggled] = useState(false);
@@ -101,6 +121,29 @@ export function ReasoningBlock({
   const clampedVisible = !showAll && lines.length > PREVIEW_LINES;
   const copyable = hasReasoningCard(text);
   const clock = formatClock(time);
+  // 近端动作组（裁示③）：单复制（有正文 ⇒ 菜单「复制思考 / 复制正文」）+ quote / retry
+  // （调用方上移）。复用 MessageActions —— 与远端工具栏同一组件 / 同一显隐语言。
+  const nearActions: MessageAction[] = [];
+  if (copyable) {
+    nearActions.push(
+      onCopyBody !== undefined
+        ? {
+            id: 'copy',
+            label: t('chat.message.copy'),
+            onSelect: () => copy(text),
+            menu: [
+              {
+                id: 'copy-reasoning',
+                label: t('chat.reasoning.copy'),
+                onSelect: () => copy(text),
+              },
+              { id: 'copy-body', label: t('chat.reasoning.copyBody'), onSelect: onCopyBody },
+            ],
+          }
+        : { id: 'copy', label: t('chat.reasoning.copy'), onSelect: () => copy(text) },
+    );
+  }
+  if (actions !== undefined) nearActions.push(...actions);
 
   return (
     <details
@@ -131,23 +174,20 @@ export function ReasoningBlock({
             hover 卡头（`summary` 上的 `group`）/ 键盘 `focus-within` / 触屏常显
             （`pointer-coarse`）。过渡时长在 chat.css 用 `--motion-fast` 给。
             间距：容器 `ml-1` 与标题隔开，容器内 `gap-1` 隔开复制与时间。 */}
-        {(copyable || clock !== '') && (
-          <span className="reasoning-actions ml-1 inline-flex items-center gap-1 align-middle opacity-0 group-hover:opacity-100 group-has-[button:focus-visible]:opacity-100 pointer-coarse:opacity-100">
-            {copyable && (
-              <IconButton
-                className="size-5"
-                label={t('chat.reasoning.copy')}
-                onClick={(event) => {
-                  // 卡头是 `<summary>`：点击默认会开合卡片。复制必须自己吃掉这次点击，
-                  // 否则按一下复制就把卡收起来了（键盘 Enter / Space 也走这条路径）。
-                  event.preventDefault();
-                  event.stopPropagation();
-                  copy(text);
-                }}
-              >
-                <Icon name="copy" size={13} />
-              </IconButton>
-            )}
+        {(nearActions.length > 0 || clock !== '') && (
+          // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 容器不是交互面：交互全在内部按钮（自带键盘可达）；这里的 onClick 只取消 <summary> 默认开合（preventDefault），不产生新交互，键盘激活按钮派发的 click 同路取消。
+          <span
+            className="reasoning-actions ml-1 inline-flex items-center gap-1 align-middle opacity-0 group-hover:opacity-100 group-has-[button:focus-visible]:opacity-100 pointer-coarse:opacity-100"
+            onClick={(event) => {
+              // 卡头是 `<summary>`：点击默认会开合卡片。近端动作组（复制菜单 /
+              // quote / retry）必须自己吃掉这次点击，否则按一下就把卡收起来了
+              // （键盘 Enter / Space 触发的 click 也走这条路径）。菜单项的 onSelect
+              // 在自己的 onClick 里已执行，preventDefault 只取消 summary 开合。
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            {nearActions.length > 0 && <MessageActions actions={nearActions} />}
             {clock !== '' && (
               // hover 工具栏那套（正文下方）不再重复这一段的时刻：有思考卡时时间只在这里。
               // `tabular-nums` 让数字等宽（流式时时间会从 14:02 走到 14:03，不跳宽）。

@@ -1,5 +1,6 @@
 import { type ReactNode, useCallback } from 'react';
 import { t } from '../../i18n';
+import { ActionMenu, type ActionMenuItem } from '../ActionMenu';
 import { useOptionalToast } from '../ToastProvider';
 import { IconButton } from '../Tooltip';
 import { copyText } from './clipboard';
@@ -21,6 +22,12 @@ export interface MessageAction {
   label: string;
   disabled?: boolean;
   onSelect: () => void;
+  /**
+   * 动作菜单（q-tool-card-slot 裁示③）：给了它，本动作的按钮点开菜单而不是直接
+   * 执行 onSelect —— 单按钮多语义（如「复制」→ 复制思考 / 复制正文），不重复按钮。
+   * 菜单形态复用既有 ActionMenu（FilterPopover 同族），触发器图标 = 本动作 id。
+   */
+  menu?: readonly ActionMenuItem[];
 }
 
 export interface MessageActionsProps {
@@ -96,16 +103,26 @@ export function MessageActions({
         // 时间不抢焦点、不进 tab 序列：`<time>` 本身不可聚焦，读屏随正文一起读到。
         <span className="mr-0.5 shrink-0 font-mono text-2xs tabular-nums text-faint">{meta}</span>
       )}
-      {actions.map((action) => (
-        <IconButton
-          key={action.id}
-          label={action.label}
-          disabled={action.disabled}
-          onClick={action.onSelect}
-        >
-          <Icon name={action.id} />
-        </IconButton>
-      ))}
+      {actions.map((action) =>
+        action.menu !== undefined ? (
+          <ActionMenu
+            key={action.id}
+            label={action.label}
+            items={action.menu}
+            disabled={action.disabled}
+            trigger={<Icon name={action.id} />}
+          />
+        ) : (
+          <IconButton
+            key={action.id}
+            label={action.label}
+            disabled={action.disabled}
+            onClick={action.onSelect}
+          >
+            <Icon name={action.id} />
+          </IconButton>
+        ),
+      )}
     </div>
   );
   if (placement === 'bottom') return row;
