@@ -183,7 +183,8 @@ export function ComposerUsageMeter({ usage }: { usage?: ComposerContextUsage }) 
  *   不是「整块半透明」，形状与底色始终可辨；`enabled:hover:` 也保证它不假装可点。
  * - hover（仅可用态）：主题响应 —— 底转 `accent-soft`、图标转 `accent-ink`；press 仍由
  *   `Button` 的 tint 叠色承担，与其它按钮同一套 hover / press 语言。
- * - 可访问名走 `aria-label` + `title`（图标本身 `aria-hidden`），焦点环沿用
+ * - 可访问名走 `aria-label`，悬浮说明走应用内共享 `Tooltip`（样式 / 定位 / a11y
+ *   与其它悬浮层同一份，不再用浏览器默认 `title`）；焦点环沿用
  *   `Button` 的 `focus-visible:ring-*`，键盘可达性与其它按钮一致。
  *
  * 形状层 + 三态判定只有一份（`composerIconControlClass`），工具栏的回形针
@@ -204,16 +205,17 @@ export function ComposerSendButton({
   onClick: () => void;
 }) {
   return (
-    <Button
-      variant="plain"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className={composerSendClass}
-    >
-      <Icon name="send" />
-    </Button>
+    <Tooltip label={label}>
+      <Button
+        variant="plain"
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        className={composerSendClass}
+      >
+        <Icon name="send" />
+      </Button>
+    </Tooltip>
   );
 }
 
@@ -258,6 +260,10 @@ export function ComposerToolbarBar({
       label={composerToolbarLabel()}
       actions={hostToolbarActions}
       trailingActions={menuActions}
+      // 工具栏按钮（插件动作 + 思考强度菜单 pill）的悬浮说明统一走应用内共享
+      // Tooltip：plugin-ui 不 import web 组件，经 wrapAction 注入；注入后插件侧
+      // 内置 title 不再渲染，不会叠出浏览器默认 tooltip。
+      wrapAction={(action, node) => <Tooltip label={action.label}>{node}</Tooltip>}
       meta={<ComposerUsageMeter usage={contextUsage} />}
       primary={primary}
       className={cn('composer-toolbar mt-0', className)}
