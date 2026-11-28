@@ -50,12 +50,17 @@ export async function writeUserConfigRoot(
   configPath: string,
   root: Record<string, unknown>,
 ): Promise<void> {
-  await mkdir(path.dirname(configPath), { recursive: true });
+  // 绝对路径化（D-3）：UI project 层经 config.set scope=project 传入相对路径
+  // （loadConfig 缺省 'vessel.yaml'），dirname 得 '.'，Windows 上 mkdir('.')
+  // 即使 recursive 也恒抛 EEXIST。resolve 基于 cwd，与读侧 loadRawConfig 及
+  // withConfigLock（path.resolve(lockPath)）同口径；绝对路径入参逐字不变。
+  const target = path.resolve(configPath);
+  await mkdir(path.dirname(target), { recursive: true });
   const body = stringifyYaml(root, { lineWidth: 0 });
-  const tmp = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+  const tmp = `${target}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tmp, body, { encoding: 'utf-8', mode: 0o600 });
   try {
-    await rename(tmp, configPath);
+    await rename(tmp, target);
   } catch (error) {
     // Windows 上目标被占用时 rename 可能失败：清理临时文件后显式替换。
     try {
@@ -64,13 +69,13 @@ export async function writeUserConfigRoot(
       // 忽略清理失败
     }
     try {
-      await writeFile(configPath, body, { encoding: 'utf-8', mode: 0o600 });
+      await writeFile(target, body, { encoding: 'utf-8', mode: 0o600 });
     } catch {
-      throw new Error(`ui_settings_write_failed: ${configPath}: ${messageOf(error)}`);
+      throw new Error(`ui_settings_write_failed: ${target}: ${messageOf(error)}`);
     }
   }
   // POSIX：rename 后保持 0600；Windows 上 best-effort。
-  await chmod(configPath, 0o600).catch(() => {
+  await chmod(target, 0o600).catch(() => {
     // 平台不保证 mode：忽略
   });
 }
