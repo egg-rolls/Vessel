@@ -49,6 +49,9 @@ const SUPPORTED_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', '
 /** `ui.errorLevel` 允许值（0.14） */
 const SUPPORTED_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
 
+/** `ui.addressStyle` 允许值（q-addr-display；与 config validator / serve ENUM_KEYS 一致） */
+const SUPPORTED_ADDRESS_STYLES: ReadonlySet<string> = new Set(['name', 'compact', 'full']);
+
 /**
  * `observability.log.*` 允许值（日志中枢；与 config validator / serve ENUM_KEYS 一致）。
  * CLI / RPC / Web 共用这一份枚举，避免三处各写一套漂移。
@@ -157,6 +160,9 @@ export type SettableConfigKey =
   // q-retired-session-toggle：会话卡片列表是否显示退休会话（YAML ui.show_retired_sessions）。
   | 'ui.showRetiredSessions'
   | 'ui.errorLevel'
+  // q-addr-display：地址显示三档（YAML ui.address_style）。serve ENUM_KEYS / Web
+  // settings-registry 早已登记，asm 写面漏登记 ⇒ config.set 在写回层被拒（白名单缺口）。
+  | 'ui.addressStyle'
   | 'ui.askUser'
   | 'ui.expandCards'
   | 'observability.showProcessErrors'
@@ -248,6 +254,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<string, ConfigSetTarget>> = {
   'ui.showArchived': { block: 'ui', yamlKey: 'show_archived' },
   'ui.showRetiredSessions': { block: 'ui', yamlKey: 'show_retired_sessions' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
+  'ui.addressStyle': { block: 'ui', yamlKey: 'address_style' },
   'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
   'ui.expandCards': { block: 'ui', yamlKey: 'expand_cards' },
   'observability.showProcessErrors': {
@@ -336,6 +343,13 @@ export async function setUserConfigValue(
   }
   if (key === 'ui.errorLevel' && !isUiErrorLevel(value)) {
     throw new Error(`invalid_error_level: ${JSON.stringify(value)}`);
+  }
+  // q-addr-display：与 config validator / serve config.set 同枚举（name|compact|full）。
+  if (
+    key === 'ui.addressStyle' &&
+    (typeof value !== 'string' || !SUPPORTED_ADDRESS_STYLES.has(value))
+  ) {
+    throw new Error(`invalid_address_style: ${JSON.stringify(value)}`);
   }
   if (key === 'ui.askUser' && typeof value !== 'boolean') {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
