@@ -138,6 +138,7 @@ bun run scripts/version.ts --bump minor --dry-run
 bun run scripts/release.ts --bump patch              # 增量·轻收口（修复批）
 bun run scripts/release.ts --bump minor --auto-tag   # 全量·重收口（功能批）
 bun run scripts/release.ts <version> --dry-run       # 显式版本：幂等重跑/漂移修复
+bun run scripts/release.ts --suggest-bump            # 只推导 bump 建议（conventional commits），不收口
 ```
 
 规则：
@@ -153,6 +154,9 @@ bun run scripts/release.ts <version> --dry-run       # 显式版本：幂等重�
   - 收口末尾必过 `--check` 门禁；`--auto-tag` 打 annotated tag `v<version>`，**不 push**
     （push main + tag 由 main 执行，tag push 触发 release.yml）。
   - bump 类型准则：批次含新功能→minor / 纯修复→patch / breaking→major（§1）。
+  - bump 推导辅助（q-semver-auto-bump）：`--suggest-bump` 从上个 `v*` tag 以来的 conventional
+    commits 推导（`BREAKING CHANGE`/`!`→major / feat→minor / fix→patch；无信号不臆造），
+    只打印建议+证据；正常收口也打印同一推导作 advisory（与 `--bump` 不一致时告警，**不强制**）。
   - git 不可用时（L-057：WSL worktree）写模式拒跑，收口在主 checkout 执行；`--dry-run` 降级预演。
 
 ## 4. 发布步骤

@@ -2,7 +2,7 @@
 title: CLI 入口与装配 wiring
 kind: current
 triggers: [bootstrap, cli, args, wiring, repl, headless, resume, update, eval, feishu, factory, ReplContext, 装配, 启动, 命令行, 参数, 无头, 恢复会话, 退出码, 工厂]
-paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-spec.ts, src/cli/commands/cli-update.ts, src/runtime/bootstrap.ts, src/cli/headless-runner.ts, src/cli/commands/resume-command.ts, src/tools-engine/tools-list.ts, src/cli/commands/**, src/update/**, src/session/session-factory.ts, src/run/run-record-store-factory.ts, src/gateway/transport-factory.ts, src/plugin/mcp-wiring.ts, src/run/durable-wiring.ts, src/gateway/serve-config.ts, src/runtime/tenant-runtime-factory.ts, src/agent/local-run-adapter.ts, src/cli/commands/eval-command.ts, src/plugin/eval-wiring.ts, src/cli/feishu-command.ts, src/plugin/plugin-surface.ts, src/plugin/plugin-host-assembly.ts, src/assembly/**, src/runtime/local-rpc-surface.ts]
+paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-spec.ts, src/cli/help-search.ts, src/cli/commands/cli-update.ts, src/runtime/bootstrap.ts, src/cli/headless-runner.ts, src/cli/commands/resume-command.ts, src/tools-engine/tools-list.ts, src/cli/commands/**, src/update/**, src/session/session-factory.ts, src/run/run-record-store-factory.ts, src/gateway/transport-factory.ts, src/plugin/mcp-wiring.ts, src/run/durable-wiring.ts, src/gateway/serve-config.ts, src/runtime/tenant-runtime-factory.ts, src/agent/local-run-adapter.ts, src/cli/commands/eval-command.ts, src/plugin/eval-wiring.ts, src/cli/feishu-command.ts, src/plugin/plugin-surface.ts, src/plugin/plugin-host-assembly.ts, src/assembly/**, src/runtime/local-rpc-surface.ts]
 ---
 
 # CLI 入口与装配 wiring（`src/`）
@@ -14,6 +14,7 @@ paths: [src/cli.ts, src/cli/args.ts, src/config/cli-overrides.ts, src/cli/help-s
 - headless 退出码：只记录退出码，不提前 `process.exit`，统一走 gateway / Node API / transport / shutdown 清理后再落 `process.exitCode`（`headless-runner.ts`）。
 - `cli-args.ts` 纯参数解析（语法与互斥），无副作用：`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；解析 `eval` 子命令与 `--feishu` 附加开关；`--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`）。
 - `cli-help-spec.ts` 是 CLI 按位置 help 的声明式数据（用法 / flag / 摘要），一份数据同时喂命令页、子命令列表与用法错误提示，避免帮助文案与错误提示两份漂移。
+- `help --search <query>`（`cli/help-search.ts`，q-cli-rpc-search）：命令面轻量搜索，统一 CLI 命令（静态 help-spec）与 RPC 方法（live `capabilities.list`，与 `vessel rpc list` 同源）；substring/subsequence 打分 + ranking + did-you-mean（编辑距离 ≤2），`--json` 纯数据。这是 help 家族唯一的 live 分支：控制面不可达时降级为纯 CLI 搜索（附说明），普通 help 仍纯静态零 IO。
 - `cli-overrides.ts` 把**显式** CLI flag 组装成 `Partial<VesselConfig>`（serve / connect / TLS / allowed-origins），作为 loader 的最高优先级层，未给出的字段不写入；bootstrap 接受 `cliOverrides` 并传给 loader（合并层语义见 [config.md](config.md#config-model)）。
 
 ## eval / --feishu 入口
