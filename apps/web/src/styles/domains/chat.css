@@ -562,6 +562,95 @@ button.tool-image-thumb:focus-visible {
   margin-left: auto;
 }
 
+/* ── 气泡内内联文件 chip（图片内嵌气泡精炼 D2）─────────────────────────
+   形态照 composer FileRefCard 落定态（q-image-chip-inline 行高融合口径）：
+   chip 总高 ≈ 20.8px < 气泡文字行盒，行内混排不撑行；缩略图 / ICON 1em。
+   宿主自有类（插件禁用时 chip 仍在，不依赖插件 CSS）。 */
+.inline-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-raised, var(--raised));
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  vertical-align: middle;
+}
+
+.inline-ref-chip.is-expired {
+  opacity: 0.6;
+}
+
+.inline-ref-chip-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inline-ref-chip-body:hover .inline-ref-name {
+  color: var(--accent);
+}
+
+.inline-ref-chip-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.inline-ref-thumb {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  object-fit: cover;
+}
+
+.inline-ref-thumb-loading {
+  display: inline-block;
+}
+
+.inline-ref-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.inline-ref-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+
+.inline-ref-chip .ref-card-badge {
+  font-size: 10.5px;
+}
+
+/* 尾部剩余 refs chip 行（气泡内尾部内联，裁示①）：与正文留一行距。 */
+.inline-ref-tail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 /* 放大预览（ModalShell 基座）：图按视口收敛，不裁不拉伸。 */
 .tool-image-lightbox-img {
   display: block;
