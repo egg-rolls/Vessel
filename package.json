@@ -1,6 +1,6 @@
 {
   "name": "vessel-agent",
-  "version": "2.2.6",
+  "version": "2.2.7",
   "description": "Vessel — an embeddable, provider-agnostic multi-agent runtime and CLI harness",
   "license": "MIT",
   "type": "module",
