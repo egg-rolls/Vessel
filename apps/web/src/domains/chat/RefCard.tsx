@@ -12,11 +12,14 @@
  * - 放大 = ImageLightbox（ModalShell 既有 a11y）；
  * - 图标 = RefIcon（宿主唯一实现）；投递 chip = MessageRefs 同一份文案 / 配色。
  *
- * 形态照 FileRefLinkCard（单 button 行：缩略图 / 图标 + 名称 + 徽标），表面换成
- * CardShell —— 插件 bundle 零改动，宿主侧静态卡统一视觉。
+ * `RefCardRow` 是共享的「ICON 槽 + 一行文字槽」行（ToolImageCard 的图条目
+ * 收敛到同一行形）；`RefCard` = CardShell + RefCardRow + Lightbox 接线。
+ * 形态照 FileRefLinkCard（单 button 行），表面统一 CardShell —— 插件 bundle
+ * 零改动。
  */
-import { useState } from 'react';
+import { type ReactNode, useState } from 'react';
 import { CardShell, useMessageCopy } from '../../components/ui';
+import type { MessageRefKind } from '../../gateway/types';
 import { t } from '../../i18n';
 import { useSessionStore } from '../../stores/sessionStore';
 import type { FileTokenCard } from './file-token';
@@ -24,6 +27,57 @@ import { refKindForPath } from './file-token';
 import { ImageLightbox, useAttachmentPreview, useImageBlob } from './image-preview';
 import { deliveryClass, imageDeliveryLabel, refDisplayName } from './MessageRefs';
 import { RefIcon } from './RefIcon';
+
+/**
+ * 共享行：左 ICON 槽（缩略图 / 加载骨架 / 种类图标）+ 右一行文件名 + 尾部
+ * 徽标 / chip 槽。单 button（整行可点）；缩略图是裸 img（不嵌套 button）。
+ */
+export function RefCardRow({
+  url,
+  loading = false,
+  kind,
+  name,
+  title,
+  ariaLabel,
+  onClick,
+  trailing,
+}: {
+  /** 缩略图 data URL（ready 时有；缺省画图标 / 骨架）。 */
+  url?: string;
+  loading?: boolean;
+  kind: MessageRefKind;
+  name: string;
+  /** hover 全路径（+ 元信息）。 */
+  title: string;
+  ariaLabel: string;
+  onClick: () => void;
+  /** 尾部槽：过期 / 临时徽标、投递 chip 等（调用方组织）。 */
+  trailing?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="ref-card-row"
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+    >
+      {url !== undefined ? (
+        <img className="ref-card-thumb" src={url} alt="" loading="lazy" decoding="async" />
+      ) : loading ? (
+        <span className="ref-card-thumb ref-card-thumb-loading animate-pulse" aria-busy="true">
+          <span className="sr-only">{t('chat.toolImage.loading')}</span>
+        </span>
+      ) : (
+        <span className="ref-card-icon" aria-hidden="true">
+          <RefIcon kind={kind} size={18} />
+        </span>
+      )}
+      <span className="ref-card-name">{name}</span>
+      {trailing}
+    </button>
+  );
+}
 
 export function RefCard({ card }: { card: FileTokenCard }) {
   const kind = card.ref?.kind ?? refKindForPath(card.path);
@@ -51,37 +105,34 @@ export function RefCard({ card }: { card: FileTokenCard }) {
 
   return (
     <CardShell className="ref-card" ariaLabel={name}>
-      <button
-        type="button"
-        className="ref-card-row"
+      <RefCardRow
+        url={url}
+        loading={loading}
+        kind={kind}
+        name={name}
         title={card.path}
-        aria-label={
+        ariaLabel={
           url !== undefined
             ? t('chat.toolImage.previewNamed', { name })
             : `${name} — ${t('chat.refCard.copyPath')}`
         }
         onClick={onClick}
-      >
-        {url !== undefined ? (
-          <img className="ref-card-thumb" src={url} alt="" loading="lazy" decoding="async" />
-        ) : loading ? (
-          <span className="ref-card-thumb ref-card-thumb-loading animate-pulse" aria-busy="true">
-            <span className="sr-only">{t('chat.toolImage.loading')}</span>
-          </span>
-        ) : (
-          <span className="ref-card-icon" aria-hidden="true">
-            <RefIcon kind={kind} size={18} />
-          </span>
-        )}
-        <span className="ref-card-name">{name}</span>
-        {expired && <span className="ref-card-badge is-expired">{t('chat.refCard.expired')}</span>}
-        {staging && <span className="ref-card-badge is-temp">{t('chat.refCard.temporary')}</span>}
-        {deliveryText !== undefined && (
-          <span className={deliveryClass(card.delivery)} title={deliveryText}>
-            {deliveryText}
-          </span>
-        )}
-      </button>
+        trailing={
+          <>
+            {expired && (
+              <span className="ref-card-badge is-expired">{t('chat.refCard.expired')}</span>
+            )}
+            {staging && (
+              <span className="ref-card-badge is-temp">{t('chat.refCard.temporary')}</span>
+            )}
+            {deliveryText !== undefined && (
+              <span className={deliveryClass(card.delivery)} title={deliveryText}>
+                {deliveryText}
+              </span>
+            )}
+          </>
+        }
+      />
       {lightbox && url !== undefined && (
         <ImageLightbox url={url} name={name} onClose={() => setLightbox(false)} />
       )}

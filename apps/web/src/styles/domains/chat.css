@@ -425,25 +425,16 @@
 }
 
 /* ── 工具图片卡（q-media-image-card）──
-   表面走 CardShell（与异步作业卡同一基座）；这里只管卡内布局：
-   缩略图 + 元数据行 + 投递 chip（复用 msg-ref-delivery 配色）+ 原始注记折叠区。 */
+   表面走 CardShell（与异步作业卡同一基座）；图条目行形统一 RefCardRow
+   （ref-card-row：ICON 槽 + 一行文字 + 投递 chip）；这里只管组卡头 /
+   缩略图取值件（ImageThumb 保留供未来消费者）/ 原始注记折叠区。 */
 
 .tool-image-card {
   max-width: 100%;
 }
 
-.tool-image-entry {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  min-width: 0;
-}
-
-/* chip 在卡内独立成行：去掉 chip 行里那条竖直分隔（那是「名字 | 状态」同行用的）。 */
-.tool-image-entry .msg-ref-delivery {
-  border-left: 0;
-  padding-left: 0;
-}
+/* 图条目行形已收敛到 RefCardRow（ref-card-row，q-block-cardshell-unify）：
+   ICON 槽 + 一行文件名 + 投递 chip；尺寸 / 字节在 hover 元信息。 */
 
 .tool-image-thumb {
   flex: none;
